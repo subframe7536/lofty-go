@@ -22,11 +22,7 @@ func (myFileResolver) Guess(buf []byte) bool { return len(buf) >= 6 && string(bu
 func (myFileResolver) ReadFrom(reader io.ReadSeeker, options ParseOptions) (*TaggedFile, error) {
 	tag := NewTag(TagTypeID3v2)
 	tag.SetArtist("All is well!")
-	return &TaggedFile{
-		fileType:   FileTypeCustom("MyFile"),
-		properties: FileProperties{},
-		tags:       []*Tag{tag},
-	}, nil
+	return NewTaggedFile(FileTypeCustom("MyFile"), []*Tag{tag}, FileProperties{}), nil
 }
 
 func TestCustomResolver(t *testing.T) {

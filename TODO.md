@@ -6,31 +6,20 @@ library). Reference source lives in `lofty-rs/`; test assets are reused from
 
 ## Layout
 
-Single package `lofty` at the module root (Go requires same-package files in
-one directory; format code relies on shared unexported helpers). Files are
-grouped by prefix:
+`image`-style package tree: a root facade plus public format packages over
+internal shared layers. The public API is unchanged — `lofty.X` resolves
+through generated aliases (see `AGENTS.md` for the dependency rule).
 
-| Prefix / file        | Rust counterpart                          | Contents                                         |
-|----------------------|--------------------------------------------|--------------------------------------------------|
-| `config.go`          | `config/`                                  | ParseOptions, WriteOptions, GlobalOptions        |
-| `errors.go`          | `error.rs`                                 | LoftyError, FileParse/FileEncoding/Tag errors    |
-| `option.go`          | —                                          | `Option[T]` (Rust `Option`)                      |
-| `util_*.go`          | `util/{alloc,io,text}.rs`                  | alloc limits, FileLike/Splice, text encodings    |
-| `picture.go`         | `picture.rs`                               | Picture, MimeType, PictureInformation            |
-| `properties.go`      | `properties/mod.rs`                        | FileProperties, ChannelMask                      |
-| `timestamp.go`       | `tag/items/timestamp.rs`                   | Timestamp (partial ISO-8601)                     |
-| `popularimeter.go`   | `tag/items/popularimeter.rs`               | POPM/star ratings                                |
-| `tag_core.go`        | `tag/mod.rs`                               | Tag, accessors                                   |
-| `tag_item.go`        | `tag/item.rs`                              | TagItem, ItemValue, Lang                         |
-| `tag_itemkey.go`     | `tag/item.rs` + format key maps            | ItemKey + all format key mappings                |
-| `tag_support.go`     | `tag/tag_type.rs`                          | TagType, TagSupport matrix                       |
-| `tag_write.go`       | `tag/utils.rs`                             | write/dump/remove dispatch + format writers      |
-| `tag_id3v1.go`       | `id3/v1/`                                  | ID3v1 tag + genres                               |
-| `tag_id3v2.go`       | `id3/v2/`                                  | ID3v2 via `bogem/id3v2`                          |
-| `tag_lyrics3.go`     | `id3/lyrics3/`                             | Lyrics3 v1/v2                                    |
-| `file_*.go`          | `file/`, `probe.rs`, `resolve.rs`          | FileType, Probe, TaggedFile, resolvers           |
-| `format_*.go`        | `<format>/`                                | Per-format file readers/writers                  |
-| `files_test.go`      | `lofty/tests/files/*.rs`                   | Ported tests (reuses Rust assets)                |
+| Path                     | Rust counterpart                          | Contents |
+|--------------------------|--------------------------------------------|----------|
+| `internal/util`          | `util/{alloc,io,text}.rs`, `config/`       | `Option[T]`, options, errors, alloc, FileLike/Splice, text codecs |
+| `internal/meta`          | `tag/`, `file/`, `probe.rs`, `resolve.rs`  | `Tag`/`TagItem`/`ItemKey`, `TaggedFile`, `FileType`, `Probe`, registries, read/write dispatch |
+| `internal/tagpos`        | —                                          | ID3v1 tail locator (breaks id3v1↔lyrics3 cycle) |
+| `internal/testutil`      | —                                          | fixture path + shared test helpers |
+| `id3v1`,`id3v2`,`vorbis`,`lyrics3` | `id3/v1`, `id3/v2`, `ogg/tag`, `id3/lyrics3` | tag implementations |
+| `ape`,`ogg`,`flac`,`mp4`,`iff`,`mpeg`,`dsf`,`wavpack`,`mpc`,`aac` | `<format>/` | file readers/writers; `mp4` includes `Ilst`/`Atom` |
+| root (`package lofty`)   | —                                          | pure facade: `facade_gen.go` (regen: `go run ./scripts/facadegen`) + `shim_util.go` |
+| `*_test.go`              | Rust `tests/` + `src/**/tests.rs`          | ported tests, distributed to owning package |
 
 ## Format status
 

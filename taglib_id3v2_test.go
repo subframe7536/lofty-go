@@ -34,7 +34,7 @@ func rawId3v2Tag(version byte, frames ...[2]string) []byte {
 func parseRawId3v2(t *testing.T, data []byte) *Tag {
 	t.Helper()
 	r := bytes.NewReader(data)
-	header, err := parseId3v2Header(r)
+	header, err := ParseId3v2HeaderRaw(r)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,109 @@
+package util
+
+import (
+	"bytes"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// --- small helpers ---
+
+func DurationFromSeconds(s float64) time.Duration {
+	return time.Duration(s * float64(time.Second))
+}
+
+func Itoa(n int) string { return strconv.Itoa(n) }
+
+func Atoi(s string) (int, error) { return strconv.Atoi(s) }
+
+func IndexOfStr(s []string, v string) int {
+	for i, x := range s {
+		if x == v {
+			return i
+		}
+	}
+	return -1
+}
+
+func Latin1EncodeMust(s string) []byte {
+	b, err := Latin1Encode(s, true)
+	if err != nil {
+		out := make([]byte, len(s))
+		for i := 0; i < len(s); i++ {
+			if s[i] < 0x80 {
+				out[i] = s[i]
+			} else {
+				out[i] = '?'
+			}
+		}
+		return out
+	}
+	return b
+}
+
+func OptionFromPtr[T any](p *T) Option[*T] {
+	if p == nil {
+		return None[*T]()
+	}
+	return Some(p)
+}
+
+// U32FromString parses a u32 from a string.
+func U32FromString(s string) (uint32, bool) {
+	n, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return uint32(n), true
+}
+
+// FlagItem normalizes a flag item value ("0"/"1"/"true"/"false"), -1 if invalid.
+func FlagItem(s string) int {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "true":
+		return 1
+	case "0", "false":
+		return 0
+	}
+	return -1
+}
+
+// AdvisoryRatingFromU8 normalizes a raw rtng byte per Rust's
+// `AdvisoryRating::try_from(u8)` + `as_u8` (0->0, 1|4->1, 2->2; invalid -> !ok).
+func AdvisoryRatingFromU8(v uint8) (uint8, bool) {
+	switch v {
+	case 0:
+		return 0, true
+	case 1, 4:
+		return 1, true
+	case 2:
+		return 2, true
+	default:
+		return 0, false
+	}
+}
+
+func SplitNulls(s string) []string {
+	var parts []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == 0 {
+			parts = append(parts, s[start:i])
+			start = i + 1
+		}
+	}
+	parts = append(parts, s[start:])
+	return parts
+}
+
+func JoinNulls(parts []string) string {
+	var b bytes.Buffer
+	for i, p := range parts {
+		if i > 0 {
+			b.WriteByte(0)
+		}
+		b.WriteString(p)
+	}
+	return b.String()
+}

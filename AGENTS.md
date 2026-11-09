@@ -26,21 +26,27 @@ govulncheck ./...
 No codegen, no cgo. Module: `github.com/subframe7536/lofty-go` (Go 1.27+).
 Progress is tracked in `TODO.md` — update it when you finish a module.
 
-## Layout (intentional)
+## Layout
 
-Everything is one package `lofty` at the repo root. Format code shares many
-unexported helpers, so files stay grouped by name prefix, not directories:
+The repo follows the Go-idiomatic `image`-style layout: a root facade plus
+public format packages over internal shared layers. The public API is
+unchanged — `lofty.X` resolves through generated aliases.
 
-| Prefix | Rust counterpart | Contents |
+| Path | Rust counterpart | Contents |
 |---|---|---|
-| `config.go`, `errors.go`, `option.go` | `config/`, `error.rs` | ParseOptions/WriteOptions/GlobalOptions, error types, `Option[T]` |
-| `util_*.go` | `util/{alloc,io,text}.rs` | alloc limits, FileLike/Splice, text codecs (UTF-8/16, Latin-1) |
-| `picture.go`, `properties.go`, `timestamp.go`, `popularimeter.go` | same-named items | shared models |
-| `tag_*.go` | `tag/`, `id3/`, `ape/tag`, `ogg/tag`, `iff/*/tag` | generic `Tag`/`TagItem`/`ItemKey` model + format tag impls |
-| `ilst.go` | `mp4/ilst/` | first-class `Ilst`/`Atom`/`AtomData` model |
-| `file_*.go` | `file/`, `probe.rs`, `resolve.rs` | FileType, Probe, TaggedFile, resolvers |
-| `format_*.go` | `<format>/` | per-format file readers/writers |
-| `*_test.go` | Rust `tests/` + `src/**/tests.rs` | ported test cases |
+| `internal/util` | `util/{alloc,io,text}.rs`, `config/` | `Option[T]`, Global/Parse/WriteOptions, error types, alloc limits, FileLike/Splice, text codecs, synchsafe/frame-sync helpers |
+| `internal/meta` | `tag/`, `file/`, `probe.rs`, `resolve.rs` | `Tag`/`TagItem`/`ItemKey`, `TaggedFile`, `FileType`, `Probe`, format/tag registries, read/write dispatch, `verifiedFile` |
+| `internal/tagpos` | — | ID3v1 tail-locator shared by `id3v1`/`lyrics3`/`mpeg` (breaks the id3v1↔lyrics3 cycle) |
+| `internal/testutil` | — | fixture path resolution + shared test helpers; tests live in the package whose internals they exercise |
+| `id3v1`, `id3v2`, `vorbis`, `lyrics3` | `id3/v1`, `id3/v2`, `ogg/tag`, `id3/lyrics3` | tag implementations (`id3v2` owns the bogem integration + `genericTagToBogem`) |
+| `ape`, `ogg`, `flac`, `mp4`, `iff`, `mpeg`, `dsf`, `wavpack`, `mpc`, `aac` | `<format>/` | file readers/writers; `mp4` includes `Ilst`/`Atom`/`AtomData` |
+| root (`package lofty`) | — | **pure facade**: `facade_gen.go` re-exports every moved public symbol (regenerate with `go run ./scripts/facadegen`); `shim_util.go` holds internal bridges for root tests |
+| `*_test.go` | Rust `tests/` + `src/**/tests.rs` | ported test cases, distributed to their owning package |
+
+Dependency rule: `internal/util` ← `internal/meta` ← format packages ← root
+facade. Format packages never import the root; they register themselves in
+`init()` via `meta.RegisterFormatReader`/`RegisterFormatWriter`/
+`RegisterTagDumper`, so `import lofty` activates every format.
 
 ## Dependencies (deliberate — reuse over reimplement)
 

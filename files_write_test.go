@@ -36,7 +36,7 @@ func removeTagTest(t *testing.T, assetPath string, tagType TagType) {
 	if _, err := f.Seek(0, 0); err != nil {
 		t.Fatal(err)
 	}
-	verified, err := newVerifiedFile(NewOSFile(f), noProps)
+	verified, err := NewVerifiedFile(NewOSFile(f), noProps)
 	if err != nil {
 		t.Fatalf("verify failed: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestWavGrowingTrailingId3v2UpdatesStreamSize(t *testing.T) {
 	f := tempFile(t, testAsset("minimal", "wav_format_pcm.wav"))
 	defer f.Close()
 
-	vf, err := newVerifiedFile(NewOSFile(f), NewParseOptions())
+	vf, err := NewVerifiedFile(NewOSFile(f), NewParseOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +378,7 @@ func oggRemoveTest(t *testing.T, assetPath string) {
 	if _, err := f.Seek(0, 0); err != nil {
 		t.Fatal(err)
 	}
-	verified, err := newVerifiedFile(NewOSFile(f), noProps)
+	verified, err := NewVerifiedFile(NewOSFile(f), noProps)
 	if err != nil {
 		t.Fatalf("verify failed: %v", err)
 	}
@@ -917,14 +917,14 @@ func TestLyrics3v2Write(t *testing.T) {
 	f := tempFile(t, testAsset("minimal", "full_test.mp3"))
 	defer f.Close()
 
-	vf, err := newVerifiedFile(NewOSFile(f), NewParseOptions())
+	vf, err := NewVerifiedFile(NewOSFile(f), NewParseOptions())
 	if err != nil {
 		t.Fatalf("verify failed: %v", err)
 	}
 	tag := NewTag(TagTypeLyrics3v2)
 	tag.InsertText(ItemKeyLyrics, "la la la")
 	tag.InsertText(ItemKeyTrackTitle, "title test")
-	if err := lyrics3v2WriteTo(vf.File(), Lyrics3v2TagFromTag(tag), NewWriteOptions()); err != nil {
+	if err := Lyrics3v2WriteTo(vf.File(), Lyrics3v2TagFromTag(tag), NewWriteOptions()); err != nil {
 		t.Fatalf("write failed: %v", err)
 	}
 
@@ -948,24 +948,24 @@ func TestLyrics3v2Remove(t *testing.T) {
 	f := tempFile(t, testAsset("minimal", "full_test.mp3"))
 	defer f.Close()
 
-	vf, err := newVerifiedFile(NewOSFile(f), NewParseOptions())
+	vf, err := NewVerifiedFile(NewOSFile(f), NewParseOptions())
 	if err != nil {
 		t.Fatalf("verify failed: %v", err)
 	}
 	tag := NewTag(TagTypeLyrics3v2)
 	tag.InsertText(ItemKeyLyrics, "la la la")
-	if err := lyrics3v2WriteTo(vf.File(), Lyrics3v2TagFromTag(tag), NewWriteOptions()); err != nil {
+	if err := Lyrics3v2WriteTo(vf.File(), Lyrics3v2TagFromTag(tag), NewWriteOptions()); err != nil {
 		t.Fatalf("write failed: %v", err)
 	}
 	// Remove by writing an empty tag
 	if _, err := f.Seek(0, 0); err != nil {
 		t.Fatal(err)
 	}
-	vf2, err := newVerifiedFile(NewOSFile(f), NewParseOptions())
+	vf2, err := NewVerifiedFile(NewOSFile(f), NewParseOptions())
 	if err != nil {
 		t.Fatalf("verify failed: %v", err)
 	}
-	if err := lyrics3v2WriteTo(vf2.File(), &Lyrics3v2Tag{}, NewWriteOptions()); err != nil {
+	if err := Lyrics3v2WriteTo(vf2.File(), &Lyrics3v2Tag{}, NewWriteOptions()); err != nil {
 		t.Fatalf("remove failed: %v", err)
 	}
 	if _, err := f.Seek(-128, io.SeekEnd); err != nil {
@@ -1025,7 +1025,7 @@ func tagResizeTest(t *testing.T, assetPath string, tagType TagType) {
 		if _, err := f.Seek(0, 0); err != nil {
 			t.Fatal(err)
 		}
-		verified, err := newVerifiedFile(NewOSFile(f), noProps)
+		verified, err := NewVerifiedFile(NewOSFile(f), noProps)
 		if err != nil {
 			t.Fatalf("verify failed: %v", err)
 		}
@@ -1038,7 +1038,7 @@ func tagResizeTest(t *testing.T, assetPath string, tagType TagType) {
 		if _, err := f.Seek(0, 0); err != nil {
 			t.Fatal(err)
 		}
-		verified, err := newVerifiedFile(NewOSFile(f), noProps)
+		verified, err := NewVerifiedFile(NewOSFile(f), noProps)
 		if err != nil {
 			t.Fatalf("verify failed: %v", err)
 		}
@@ -1097,7 +1097,7 @@ func oggCommentsLen(t *testing.T, f *os.File) int {
 	if _, err := f.Seek(0, 0); err != nil {
 		t.Fatal(err)
 	}
-	packets, _, _, err := oggReadCountPackets(f, 3)
+	packets, _, _, err := OggReadCountPackets(f, 3)
 	if err != nil || len(packets) < 2 {
 		t.Fatalf("failed to read comment packet: %v", err)
 	}
@@ -1126,7 +1126,7 @@ func TestVorbisCommentsPaddingRounds(t *testing.T) {
 	if _, err := f.Seek(0, 0); err != nil {
 		t.Fatal(err)
 	}
-	verified, err := newVerifiedFile(NewOSFile(f), noProps)
+	verified, err := NewVerifiedFile(NewOSFile(f), noProps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1167,7 +1167,7 @@ func TestVorbisCommentsDisabledPadding(t *testing.T) {
 	if _, err := f.Seek(0, 0); err != nil {
 		t.Fatal(err)
 	}
-	verified, err := newVerifiedFile(NewOSFile(f), noProps)
+	verified, err := NewVerifiedFile(NewOSFile(f), noProps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1194,7 +1194,7 @@ func TestWavPackApeDiscKey(t *testing.T) {
 	tag.PushUnchecked(NewTagItem(ItemKeyDiscNumber, ItemValueText("3")))
 	tag.PushUnchecked(NewTagItem(ItemKeyDiscTotal, ItemValueText("5")))
 
-	verified, err := newVerifiedFile(NewOSFile(f), noProps)
+	verified, err := NewVerifiedFile(NewOSFile(f), noProps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1245,12 +1245,12 @@ func TestFlacPictureIsLast(t *testing.T) {
 	wo := NewWriteOptions()
 	wo.PreferredPadding = 0
 	tag := NewTag(TagTypeVorbisComments)
-	tag.PushPicture(Picture{picType: PictureTypeCoverFront, data: []byte{}})
+	tag.PushPicture(PictureUnchecked([]byte{}).PicType(PictureTypeCoverFront).Build())
 
 	if _, err := f.Seek(0, 0); err != nil {
 		t.Fatal(err)
 	}
-	verified, err := newVerifiedFile(NewOSFile(f), noProps)
+	verified, err := NewVerifiedFile(NewOSFile(f), noProps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1324,7 +1324,7 @@ func TestLyrics3RequiresId3v1(t *testing.T) {
 	lyrics := &Lyrics3Tag{Lyrics: "[00:00]Serial-ATA was here"}
 
 	// Has an ID3v1 tag, should work
-	if err := lyrics3v1WriteTo(vf, lyrics, NewWriteOptions()); err != nil {
+	if err := Lyrics3v1WriteTo(vf, lyrics, NewWriteOptions()); err != nil {
 		t.Fatalf("save with ID3v1 present: %v", err)
 	}
 
@@ -1332,7 +1332,7 @@ func TestLyrics3RequiresId3v1(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := lyrics3v1WriteTo(vf, lyrics, NewWriteOptions())
+	err := Lyrics3v1WriteTo(vf, lyrics, NewWriteOptions())
 	var l3err *Lyrics3ParseError
 	if !errors.As(err, &l3err) || l3err.Message != "the destination file must contain an ID3v1 tag" {
 		t.Fatalf("expected ID3v1-required error, got %v", err)
@@ -1508,13 +1508,13 @@ func TestStrippingId3v1RemovesLyrics3v2(t *testing.T) {
 	defer f.Close()
 
 	// Write a Lyrics3v2 tag (requires the existing ID3v1)
-	vf, err := newVerifiedFile(NewOSFile(f), NewParseOptions())
+	vf, err := NewVerifiedFile(NewOSFile(f), NewParseOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
 	tag := NewTag(TagTypeLyrics3v2)
 	tag.InsertText(ItemKeyLyrics, "[00:00]Serial-ATA was here")
-	if err := lyrics3v2WriteTo(vf.File(), Lyrics3v2TagFromTag(tag), NewWriteOptions()); err != nil {
+	if err := Lyrics3v2WriteTo(vf.File(), Lyrics3v2TagFromTag(tag), NewWriteOptions()); err != nil {
 		t.Fatalf("lyrics3 write failed: %v", err)
 	}
 
@@ -1522,7 +1522,7 @@ func TestStrippingId3v1RemovesLyrics3v2(t *testing.T) {
 	if _, err := f.Seek(0, 0); err != nil {
 		t.Fatal(err)
 	}
-	vf, err = newVerifiedFile(NewOSFile(f), NewParseOptions())
+	vf, err = NewVerifiedFile(NewOSFile(f), NewParseOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1551,20 +1551,20 @@ func TestStrippingId3v1RemovesLyrics3(t *testing.T) {
 	defer f.Close()
 
 	// Lyrics3 is an extension of ID3v1 and cannot exist alone
-	vf, err := newVerifiedFile(NewOSFile(f), NewParseOptions())
+	vf, err := NewVerifiedFile(NewOSFile(f), NewParseOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
 	tag := NewTag(TagTypeLyrics3)
 	tag.InsertText(ItemKeyLyrics, "[00:00]Serial-ATA was here")
-	if err := lyrics3v1WriteTo(vf.File(), Lyrics3TagFromTag(tag), NewWriteOptions()); err != nil {
+	if err := Lyrics3v1WriteTo(vf.File(), Lyrics3TagFromTag(tag), NewWriteOptions()); err != nil {
 		t.Fatalf("lyrics3 write failed: %v", err)
 	}
 
 	if _, err := f.Seek(0, 0); err != nil {
 		t.Fatal(err)
 	}
-	vf, err = newVerifiedFile(NewOSFile(f), NewParseOptions())
+	vf, err = NewVerifiedFile(NewOSFile(f), NewParseOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1649,7 +1649,7 @@ func TestLyrics3v2RequiresId3v1(t *testing.T) {
 	defer f.Close()
 
 	// Strip ID3v1 (which also removes any Lyrics3)
-	vf, err := newVerifiedFile(NewOSFile(f), NewParseOptions())
+	vf, err := NewVerifiedFile(NewOSFile(f), NewParseOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1660,13 +1660,13 @@ func TestLyrics3v2RequiresId3v1(t *testing.T) {
 	if _, err := f.Seek(0, 0); err != nil {
 		t.Fatal(err)
 	}
-	vf, err = newVerifiedFile(NewOSFile(f), NewParseOptions())
+	vf, err = NewVerifiedFile(NewOSFile(f), NewParseOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
 	tag := NewTag(TagTypeLyrics3v2)
 	tag.InsertText(ItemKeyLyrics, "[00:00]Serial-ATA was here")
-	err = lyrics3v2WriteTo(vf.File(), Lyrics3v2TagFromTag(tag), NewWriteOptions())
+	err = Lyrics3v2WriteTo(vf.File(), Lyrics3v2TagFromTag(tag), NewWriteOptions())
 	if err == nil {
 		t.Fatal("expected an error writing lyrics3v2 without id3v1")
 	}
@@ -1741,7 +1741,7 @@ func TestMp4ExtendedAtoms(t *testing.T) {
 	}
 	wo := NewWriteOptions()
 	wo.PreferredPadding = 0
-	vf, err := newVerifiedFile(NewOSFile(f), noProps)
+	vf, err := NewVerifiedFile(NewOSFile(f), noProps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1832,7 +1832,7 @@ func TestMp4ChunkOffsetUpdate(t *testing.T) {
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
 			t.Fatal(err)
 		}
-		vf, err := newVerifiedFile(NewOSFile(f), noProps)
+		vf, err := NewVerifiedFile(NewOSFile(f), noProps)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1943,7 +1943,7 @@ func TestMpegTip1Frame(t *testing.T) {
 	if _, err := f.Seek(0, 0); err != nil {
 		t.Fatal(err)
 	}
-	vf, err := newVerifiedFile(NewOSFile(f), NewParseOptions())
+	vf, err := NewVerifiedFile(NewOSFile(f), NewParseOptions())
 	if err != nil {
 		t.Fatal(err)
 	}

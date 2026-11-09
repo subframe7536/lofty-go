@@ -218,7 +218,7 @@ func TestTaglibWavGarbageAppended(t *testing.T) {
 
 	f.Seek(0, 0)
 	{
-		vf, err := newVerifiedFile(NewOSFile(f), NewWriteOptions().ParseOptions)
+		vf, err := NewVerifiedFile(NewOSFile(f), NewWriteOptions().ParseOptions)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1166,7 +1166,7 @@ func TestTaglibOggPageChecksum(t *testing.T) {
 		if _, err := f.Seek(0, 0); err != nil {
 			t.Fatal(err)
 		}
-		vf2, err := newVerifiedFile(NewOSFile(f), NewParseOptions())
+		vf2, err := NewVerifiedFile(NewOSFile(f), NewParseOptions())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1189,7 +1189,7 @@ func TestTaglibOggPageChecksum(t *testing.T) {
 			page := data[pos : pos+total]
 			stored := binary.LittleEndian.Uint32(page[22:26])
 			page[22], page[23], page[24], page[25] = 0, 0, 0, 0
-			if got := oggCrc32(page); got != stored {
+			if got := OggCrc32(page); got != stored {
 				t.Fatalf("[%d] page @%#x crc = %#x, want %#x", i, pos, got, stored)
 			}
 			pos += total
@@ -1236,7 +1236,7 @@ func TestTaglibOggPageGranulePosition(t *testing.T) {
 		if _, err := f.Seek(0, 0); err != nil {
 			t.Fatal(err)
 		}
-		vf2, err := newVerifiedFile(NewOSFile(f), NewParseOptions())
+		vf2, err := NewVerifiedFile(NewOSFile(f), NewParseOptions())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1822,11 +1822,11 @@ func TestTaglibApeTagInvalidKeys(t *testing.T) {
 // --- tests/taglib/test_id3v1.rs ---
 
 func TestTaglibId3v1Genres(t *testing.T) {
-	if id3v1Genres[50] != "Darkwave" {
-		t.Fatalf("GENRES[50] = %q", id3v1Genres[50])
+	if Id3v1Genres[50] != "Darkwave" {
+		t.Fatalf("GENRES[50] = %q", Id3v1Genres[50])
 	}
 	humour, hardRock, heavyMetal := -1, -1, false
-	for i, g := range id3v1Genres {
+	for i, g := range Id3v1Genres {
 		if g == "Humour" {
 			humour = i
 		}
@@ -2266,7 +2266,7 @@ func TestTaglibWavInfoTag(t *testing.T) {
 func TestTaglibWavStripTags(t *testing.T) {
 	f := taglibTempFile(t, "empty.wav")
 	defer f.Close()
-	vf := &verifiedFile{format: FileTypeWav, file: NewOSFile(f)}
+	vf := NewVerifiedFileOf(FileTypeWav, NewOSFile(f))
 	{
 		wf, err := WavFileReadFrom(f, NewParseOptions())
 		if err != nil {
@@ -2680,7 +2680,7 @@ func mp4Freeform(ilst *Ilst, mean, name string) (string, bool) {
 }
 
 func mp4InsertFreeform(ilst *Ilst, mean, name, value string) {
-	ilst.Insert(Atom{FreeformIdent(mean, name), []AtomData{{Kind: AtomDataUTF8, Text: value}}})
+	ilst.Insert(Atom{Ident: FreeformIdent(mean, name), Data: []AtomData{{Kind: AtomDataUTF8, Text: value}}})
 }
 
 func TestTaglibMp4Freeform(t *testing.T) {
@@ -2947,7 +2947,7 @@ func TestTaglibMp4ZeroLengthAtom(t *testing.T) {
 func TestTaglibMp4RemoveMetadata(t *testing.T) {
 	f := taglibTempFile(t, "no-tags.m4a")
 	defer f.Close()
-	vf := &verifiedFile{format: FileTypeMp4, file: NewOSFile(f)}
+	vf := NewVerifiedFileOf(FileTypeMp4, NewOSFile(f))
 	{
 		mf, err := Mp4FileReadFrom(f, NewParseOptions())
 		if err != nil {
@@ -3550,7 +3550,7 @@ func TestTaglibSynchdata(t *testing.T) {
 		{[]byte{0xFF, 0xFF, 0x00}, []byte{0xFF, 0xFF}},
 		{[]byte{0xFF, 0xFF, 0xFF}, []byte{0xFF, 0xFF, 0xFF}},
 	} {
-		if got := id3v2Deunsync(tc.in); !bytes.Equal(got, tc.want) {
+		if got := Id3v2Deunsync(tc.in); !bytes.Equal(got, tc.want) {
 			t.Fatalf("deunsync(%x) = %x, want %x", tc.in, got, tc.want)
 		}
 	}

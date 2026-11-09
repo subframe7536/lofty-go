@@ -208,8 +208,8 @@ func TestRiffInfoSupportedItemsConsistent(t *testing.T) {
 		func(tag *Tag) map[string]bool {
 			concrete = RiffInfoTagFromTag(tag)
 			keys := map[string]bool{}
-			for _, item := range concrete.items {
-				keys[item.key] = true
+			for _, k := range concrete.Keys() {
+				keys[k] = true
 			}
 			return keys
 		},
@@ -222,10 +222,10 @@ func TestVorbisCommentsSupportedItemsConsistent(t *testing.T) {
 	var concrete *VorbisCommentsTag
 	verifyRoundTrip(t, TagTypeVorbisComments,
 		func(tag *Tag) map[string]bool {
-			concrete = vorbisCommentsTagForWrite(tag, "")
+			concrete = VorbisCommentsTagForWrite(tag, "")
 			keys := map[string]bool{}
 			for _, item := range concrete.Items() {
-				if k, ok := item.key.MapKey(TagTypeVorbisComments); ok {
+				if k, ok := item.Key().MapKey(TagTypeVorbisComments); ok {
 					keys[k] = true
 				}
 			}
@@ -267,7 +267,7 @@ func TestOggIssue37Write(t *testing.T) {
 	if _, err := f.Seek(0, 0); err != nil {
 		t.Fatal(err)
 	}
-	verified, err := newVerifiedFile(NewOSFile(f), noProps)
+	verified, err := NewVerifiedFile(NewOSFile(f), noProps)
 	if err != nil {
 		t.Fatalf("verify failed: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestId3v2SupportedItemsConsistent(t *testing.T) {
 	tag, supported := setupConsistencyTag(TagTypeID3v2)
 
 	btag := genericTagToBogem(tag, false)
-	roundTripped := id3v2TagToGeneric(btag, NewParseOptions())
+	roundTripped := Id3v2TagToGeneric(btag, NewParseOptions())
 
 	// Duplicate keys that map to the same frame as another key
 	dupes := map[ItemKey]bool{
@@ -323,12 +323,12 @@ func TestId3v2SupportedItemsConsistent(t *testing.T) {
 func TestIlstSupportedItemsConsistent(t *testing.T) {
 	tag, supported := setupConsistencyTag(TagTypeMp4Ilst)
 
-	data, err := encodeMp4Ilst(tag)
+	data, err := EncodeMp4Ilst(tag)
 	if err != nil {
 		t.Fatalf("encode failed: %v", err)
 	}
 	// The ilst payload is parsed after the atom header
-	parsedIlst, err := parseIlst(bytes.NewReader(data[8:]), int64(len(data)-8), NewParseOptions())
+	parsedIlst, err := ParseIlst(bytes.NewReader(data[8:]), int64(len(data)-8), NewParseOptions())
 	if err != nil {
 		t.Fatalf("re-parse failed: %v", err)
 	}
@@ -382,14 +382,14 @@ func TestPopmConversions(t *testing.T) {
 	}{
 		{TagTypeID3v2, func(tag *Tag) *Tag {
 			btag := genericTagToBogem(tag, false)
-			return id3v2TagToGeneric(btag, NewParseOptions())
+			return Id3v2TagToGeneric(btag, NewParseOptions())
 		}, true},
 		{TagTypeMp4Ilst, func(tag *Tag) *Tag {
-			data, err := encodeMp4Ilst(tag)
+			data, err := EncodeMp4Ilst(tag)
 			if err != nil {
 				t.Fatal(err)
 			}
-			gotIlst, err := parseIlst(bytes.NewReader(data[8:]), int64(len(data)-8), NewParseOptions())
+			gotIlst, err := ParseIlst(bytes.NewReader(data[8:]), int64(len(data)-8), NewParseOptions())
 			if err != nil {
 				t.Fatal(err)
 			}

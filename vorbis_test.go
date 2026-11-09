@@ -17,7 +17,7 @@ func readVCTest(t *testing.T, name string, po ParseOptions) *VorbisCommentsTag {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tag, err := parseVorbisComments(data, po)
+	tag, err := ParseVorbisComments(data, po)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func vcItemMap(t *VorbisCommentsTag) map[string][]string {
 				key = mk
 			}
 		}
-		if s, ok := item.value.IntoString(); ok {
+		if s, ok := item.Value().IntoString(); ok {
 			out[key] = append(out[key], s)
 		}
 	}
@@ -65,11 +65,11 @@ func TestVorbisCommentsReRead(t *testing.T) {
 	tag := readVCTest(t, "test.vorbis", NewParseOptions())
 	// Create a zero-size vendor for comparison
 	tag.Vendor = ""
-	data, err := encodeVorbisComments(tag)
+	data, err := EncodeVorbisComments(tag)
 	if err != nil {
 		t.Fatal(err)
 	}
-	re, err := parseVorbisComments(data, NewParseOptions())
+	re, err := ParseVorbisComments(data, NewParseOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,14 +239,14 @@ func TestVorbisCommentsSkipCoverArt(t *testing.T) {
 	tag.PushPicture(pic)
 	tag.SetArtist("Foo artist")
 
-	data, err := encodeVorbisComments(VorbisCommentsTagFromTag(tag, ""))
+	data, err := EncodeVorbisComments(VorbisCommentsTagFromTag(tag, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
 	po := NewParseOptions()
 	po.ParsingMode = ParsingModeStrict
 	po.ReadCoverArt = false
-	got, err := parseVorbisComments(data, po)
+	got, err := ParseVorbisComments(data, po)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func TestVorbisCommentsSkipCoverArt(t *testing.T) {
 func TestVorbisCommentsIssue540ImplicitOff(t *testing.T) {
 	vc := NewVorbisCommentsTag()
 	vc.InsertKV("TRACKNUMBER", "01/05")
-	data, err := encodeVorbisComments(vc)
+	data, err := EncodeVorbisComments(vc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +269,7 @@ func TestVorbisCommentsIssue540ImplicitOff(t *testing.T) {
 	po.ParsingMode = ParsingModeStrict
 	po.ImplicitConversions = false
 	po.ReadCoverArt = false
-	tag, err := parseVorbisComments(data, po)
+	tag, err := ParseVorbisComments(data, po)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +288,7 @@ func TestVorbisCommentsIssue540Leading0(t *testing.T) {
 	vc := NewVorbisCommentsTag()
 	vc.InsertKV("TRACKNUMBER", "01")
 	vc.InsertKV("TRACKTOTAL", "05")
-	data, err := encodeVorbisComments(vc)
+	data, err := EncodeVorbisComments(vc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +296,7 @@ func TestVorbisCommentsIssue540Leading0(t *testing.T) {
 	po.ParsingMode = ParsingModeStrict
 	po.ImplicitConversions = false
 	po.ReadCoverArt = false
-	tag, err := parseVorbisComments(data, po)
+	tag, err := ParseVorbisComments(data, po)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,11 +311,11 @@ func TestVorbisCommentsIssue540Leading0(t *testing.T) {
 func TestVorbisCommentsIssue543(t *testing.T) {
 	vc := NewVorbisCommentsTag()
 	vc.InsertKV("DISCNUMBER", "01/05")
-	data, err := encodeVorbisComments(vc)
+	data, err := EncodeVorbisComments(vc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tag, err := parseVorbisComments(data, NewParseOptions())
+	tag, err := ParseVorbisComments(data, NewParseOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +330,7 @@ func TestVorbisCommentsIssue543(t *testing.T) {
 func TestVorbisCommentsDiscImplicitOff(t *testing.T) {
 	vc := NewVorbisCommentsTag()
 	vc.InsertKV("DISCNUMBER", "01/05")
-	data, err := encodeVorbisComments(vc)
+	data, err := EncodeVorbisComments(vc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +338,7 @@ func TestVorbisCommentsDiscImplicitOff(t *testing.T) {
 	po.ParsingMode = ParsingModeStrict
 	po.ImplicitConversions = false
 	po.ReadCoverArt = false
-	tag, err := parseVorbisComments(data, po)
+	tag, err := ParseVorbisComments(data, po)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,7 +357,7 @@ func TestVorbisCommentsDiscLeading0(t *testing.T) {
 	vc := NewVorbisCommentsTag()
 	vc.InsertKV("DISCNUMBER", "01")
 	vc.InsertKV("DISCTOTAL", "05")
-	data, err := encodeVorbisComments(vc)
+	data, err := EncodeVorbisComments(vc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +365,7 @@ func TestVorbisCommentsDiscLeading0(t *testing.T) {
 	po.ParsingMode = ParsingModeStrict
 	po.ImplicitConversions = false
 	po.ReadCoverArt = false
-	tag, err := parseVorbisComments(data, po)
+	tag, err := ParseVorbisComments(data, po)
 	if err != nil {
 		t.Fatal(err)
 	}
