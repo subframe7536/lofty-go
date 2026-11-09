@@ -7,6 +7,43 @@ Supports the same generic tag model as Lofty: a format-agnostic
 `Tag`/`TagItem`/`ItemKey` layer over format-specific tags, with unknown
 metadata preserved through *companion tags* on conversion.
 
+**Requires Go 1.27+**
+
+```bash
+go get github.com/subframe7536/lofty-go
+```
+
+## Quick start
+
+```go
+import "github.com/subframe7536/lofty-go"
+
+// Read: one call gives you file type, properties, and all tags.
+f, err := lofty.ReadFromPath("song.mp3", lofty.NewParseOptions())
+if err != nil {
+	log.Fatal(err)
+}
+fmt.Println(f.FileType())                // e.g. FileTypeMpeg
+fmt.Println(f.Properties().Duration())   // audio properties
+
+tag := f.PrimaryTag()                  // may be nil if the file has no tag
+if tag != nil {
+	title, _ := tag.Title()            // accessors return (value, ok)
+	artist, _ := tag.Artist()
+	fmt.Println(title, artist)
+
+	// Write: mutate the generic tag, save back to the same file.
+	tag.InsertText(lofty.ItemKeyTrackArtist, "New Artist")
+	if err := tag.SaveToPath("song.mp3", lofty.NewWriteOptions()); err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+Everything lives under `lofty.` — format packages exist for advanced use
+(e.g. `id3v2.Tag`, `mp4.Ilst`), but the root facade re-exports the whole
+public API and activates all format registrations on import.
+
 ## Supported formats
 
 | Format | Tags | Read | Write |
@@ -14,49 +51,72 @@ metadata preserved through *companion tags* on conversion.
 | MP3 (MPEG) | ID3v1, ID3v2 (2.2/2.3/2.4), Lyrics3 v1/v2, APEv2 | ✅ | ✅ |
 | FLAC | Vorbis comments, pictures, ID3v2 | ✅ | ✅ |
 | Ogg Vorbis / Opus / Speex | Vorbis comments | ✅ | ✅ |
-| MP4 / M4A / AAC-in-MP4 | `ilst` atoms (incl. freeform `----`) | ✅ | ✅ |
+| MP4 / M4A | `ilst` atoms (incl. freeform `----`) | ✅ | ✅ |
 | WAV (RIFF) | RIFF INFO, ID3v2 chunk | ✅ | ✅ |
 | AIFF | text chunks, COMT comments, ID3v2 | ✅ | ✅ |
 | APE | APEv2, ID3v1 | ✅ | ✅ |
 | ADTS/AAC | ID3v2 | ✅ | ✅ |
 | DSF | ID3v2 | ✅ | ✅ |
-| Musepack (SV4–SV8) | APEv2 | ✅ | ✅ |
+| Musepack (SV7–SV8) | APEv2 | ✅ | ✅ |
 | WavPack | APEv2 | ✅ | read |
 
 Audio properties (duration, bitrate, sample rate, channels, bit depth,
 codec details) are parsed per format.
 
-## Example
+## Core API
 
-```go
-f, err := lofty.ReadFromPath("song.mp3", lofty.NewParseOptions())
-if err != nil { log.Fatal(err) }
+| Entry point | Purpose |
+|---|---|
+| `lofty.ReadFromPath(path, opts)` / `ReadFrom(r, opts)` | probe + parse a file → `*TaggedFile` |
+| `lofty.NewProbe(r).GuessFileType()` / `FileTypeFromPath(p)` | sniff file type without full parse |
+| `TaggedFile.PrimaryTag() / Tag(tagType) / Tags()` | access tags by precedence or type |
+| `Tag.InsertText(key, s)` / `GetString(key)` / `Items()` | generic item access via `ItemKey*` |
+| `Tag.SaveToPath(path, opts)` | write one tag back to a file |
+| `lofty.BoundTaggedFileFrom(file, opts)` → `btf.Save(opts)` | bound write (file + tags together) |
+| `lofty.SaveToPath(path, f, tagType, opts)` / `RemoveTagFromPath` | AudioFile-level write/remove |
+| `lofty.NewParseOptions() / NewWriteOptions()` | strict/relaxed parsing, padding, etc. |
 
-tag := f.PrimaryTag()
-fmt.Println(tag.Title(), tag.Artist(), tag.Album())
-fmt.Println(f.Properties().Duration())
+`Option[T]` mirrors Rust's `Option` (`Some`/`None`/`IsSome`/`IsNone`);
+`Timestamp`, `Popularimeter`, `Picture`, `ChannelMask`, `Lang` mirror the
+corresponding Rust item types.
 
-tag.InsertText(lofty.ItemKeyTrackArtist, "New Artist")
-if err := f.SaveFile(lofty.NewWriteOptions()); err != nil { log.Fatal(err) }
+## Package layout
+
+`image`-style tree — a root facade over public format packages and
+internal shared layers:
+
+```
+lofty-go (package lofty)   facade: re-exports the full public API
+├── internal/util          Option[T], options, errors, text codecs, IO
+├── internal/meta          Tag/TagItem/TaggedFile/FileType/Probe + dispatch
+├── internal/tagpos        shared ID3v1 tail locator
+├── id3v1 id3v2 vorbis lyrics3        tag implementations
+└── ape ogg flac mp4 iff mpeg dsf wavpack mpc aac   format readers/writers
 ```
 
-## Design notes
+Format packages self-register in `init()`; importing `lofty` activates
+them all. `facade_gen.go` is generated — regenerate after adding exported
+symbols to a subpackage with `go run ./scripts/facadegen`.
 
-- Single package `lofty` at the module root; files are grouped by name
-  prefix (format readers share unexported helpers).
-- Mature libraries are used where they match Lofty semantics
-  (`bogem/id3v2`, `go-flac`, `abema/go-mp4`, `mccoyst/ogg`); Lofty-specific
-  behavior (companion tags, merge/dedup rules, strict vs. relaxed parsing,
-  padding) is implemented on top.
-- `Option[T]` mirrors Rust's `Option`; `Timestamp`, `Popularimeter`,
-  `Picture`, `ChannelMask`, `Lang` mirror Rust's item types.
+## Dependencies
+
+Only two, both deliberate (`go.mod`):
+
+- `github.com/bogem/id3v2/v2` — ID3v2 frame parse/write
+- `github.com/go-flac/go-flac/v2` — FLAC metadata blocks
+
+MP4 atom traversal, Ogg page read/write, and Latin-1/UTF-16 codecs are
+hand-rolled where Lofty semantics diverge from off-the-shelf libraries
+(companion tags, merge/dedup rules, strict vs. relaxed parsing, padding).
 
 ## Status
 
 Feature-complete port of readers/writers and the generic tag API, with
-~400 ported Rust test cases passing. Progress, coverage, and the handful
-of known parity gaps are tracked in [TODO.md](TODO.md). Agent/developer
-notes live in [AGENTS.md](AGENTS.md).
+~400 ported Rust test cases passing. Progress, coverage, and known parity
+notes are tracked in [TODO.md](TODO.md). Agent/developer notes — build
+commands, layout rules, port-parity gotchas — live in
+[AGENTS.md](AGENTS.md).
 
-Upstream: https://github.com/Serial-ATA/lofty-rs (vendored reference copy
-in `lofty-rs/`).
+Upstream: <https://github.com/Serial-ATA/lofty-rs> (vendored reference
+copy in `lofty-rs/`; test fixtures are reused from that tree, never
+copied).
