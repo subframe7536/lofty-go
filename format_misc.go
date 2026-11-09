@@ -253,15 +253,11 @@ func dsfWriteId3v2(file FileLike, tag *Tag, writeOptions WriteOptions) error {
 	metadataPtr := binary.LittleEndian.Uint64(dsd[20:])
 	var encoded []byte
 	if !tag.IsEmpty() {
-		btag, err := genericTagToBogem(tag, writeOptions.UseID3v23)
+		var err error
+		encoded, err = id3v2Serialize(tag, writeOptions)
 		if err != nil {
 			return &FileEncodingError{Source: &TagEncodingError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
 		}
-		var buf bytes.Buffer
-		if _, err := btag.WriteTo(&buf); err != nil {
-			return &FileEncodingError{Source: &TagEncodingError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
-		}
-		encoded = buf.Bytes()
 	}
 	if metadataPtr > 0 {
 		end, err := file.Seek(0, io.SeekEnd)
@@ -905,13 +901,14 @@ func (f *MusepackFile) ContainsTagType(t TagType) bool {
 	return false
 }
 
-// TaggedFile converts to a [TaggedFile].
+// TaggedFile converts to a [TaggedFile]. Tag order follows the Rust struct
+// declaration order: ID3v2, ID3v1, Ape.
 func (f *MusepackFile) TaggedFile() *TaggedFile {
 	var tags []*Tag
-	if t, ok := f.ID3v1.Get(); ok {
+	if t, ok := f.ID3v2.Get(); ok {
 		tags = append(tags, t)
 	}
-	if t, ok := f.ID3v2.Get(); ok {
+	if t, ok := f.ID3v1.Get(); ok {
 		tags = append(tags, t)
 	}
 	if t, ok := f.Ape.Get(); ok {
@@ -1151,10 +1148,10 @@ func (f *AacFile) ContainsTagType(t TagType) bool {
 // TaggedFile converts to a [TaggedFile].
 func (f *AacFile) TaggedFile() *TaggedFile {
 	var tags []*Tag
-	if t, ok := f.ID3v1.Get(); ok {
+	if t, ok := f.ID3v2.Get(); ok {
 		tags = append(tags, t)
 	}
-	if t, ok := f.ID3v2.Get(); ok {
+	if t, ok := f.ID3v1.Get(); ok {
 		tags = append(tags, t)
 	}
 	return NewTaggedFile(FileTypeAac, tags, *f.GetProperties())

@@ -898,20 +898,16 @@ func wavWriteId3v2(file FileLike, tag *Tag, writeOptions WriteOptions) error {
 	}
 	var encoded bytes.Buffer
 	if !tag.IsEmpty() {
-		btag, err := genericTagToBogem(tag, writeOptions.UseID3v23)
+		body, err := id3v2Serialize(tag, writeOptions)
 		if err != nil {
 			return &FileEncodingError{Source: &TagEncodingError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
 		}
-		var body bytes.Buffer
-		if _, err := btag.WriteTo(&body); err != nil {
-			return &FileEncodingError{Source: &TagEncodingError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
-		}
-		size := uint32(body.Len())
+		size := uint32(len(body))
 		encoded.WriteString("id3 ")
 		var szb [4]byte
 		binary.LittleEndian.PutUint32(szb[:], size)
 		encoded.Write(szb[:])
-		encoded.Write(body.Bytes())
+		encoded.Write(body)
 		if size&1 == 1 {
 			encoded.WriteByte(0)
 		}
@@ -1398,20 +1394,16 @@ func aiffWriteId3v2(file FileLike, tag *Tag, writeOptions WriteOptions) error {
 	}
 	var encoded bytes.Buffer
 	if !tag.IsEmpty() {
-		btag, err := genericTagToBogem(tag, writeOptions.UseID3v23)
+		body, err := id3v2Serialize(tag, writeOptions)
 		if err != nil {
 			return &FileEncodingError{Source: &TagEncodingError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
 		}
-		var body bytes.Buffer
-		if _, err := btag.WriteTo(&body); err != nil {
-			return &FileEncodingError{Source: &TagEncodingError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
-		}
-		size := uint32(body.Len())
+		size := uint32(len(body))
 		encoded.WriteString("ID3 ")
 		var szb [4]byte
 		binary.BigEndian.PutUint32(szb[:], size)
 		encoded.Write(szb[:])
-		encoded.Write(body.Bytes())
+		encoded.Write(body)
 		if size&1 == 1 {
 			encoded.WriteByte(0)
 		}

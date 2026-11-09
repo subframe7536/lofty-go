@@ -792,14 +792,12 @@ func (f *MpegFile) ContainsTagType(tagType TagType) bool {
 	return false
 }
 
-// TaggedFile converts to a [TaggedFile].
+// TaggedFile converts to a [TaggedFile]. Tag order follows the Rust struct
+// declaration order: ID3v2, ID3v1, Lyrics3, Lyrics3v2, Ape.
 func (f *MpegFile) TaggedFile() *TaggedFile {
 	var tags []*Tag
 	if t, ok := f.ID3v2.Get(); ok {
 		tags = append(tags, t)
-	}
-	if t, ok := f.APE.Get(); ok {
-		tags = append(tags, t.Tag())
 	}
 	if t, ok := f.ID3v1.Get(); ok {
 		tags = append(tags, t.Tag())
@@ -808,6 +806,9 @@ func (f *MpegFile) TaggedFile() *TaggedFile {
 		tags = append(tags, t.Tag())
 	}
 	if t, ok := f.Lyrics3v2.Get(); ok {
+		tags = append(tags, t.Tag())
+	}
+	if t, ok := f.APE.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
 

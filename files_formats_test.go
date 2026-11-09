@@ -1,6 +1,7 @@
 package lofty
 
 import (
+	"os"
 	"testing"
 )
 
@@ -191,6 +192,48 @@ func TestWavReadTagged(t *testing.T) {
 	}
 }
 
+// Ported from mpc.rs::read_sv5 — an MPC file with ID3v2, ID3v1, and APEv2
+// tags; each reports its own artist.
+func TestMpcReadSv5(t *testing.T) {
+	f, err := os.Open(testAsset("minimal", "mpc_sv5.mpc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	mf, err := MusepackFileReadFrom(f, NewParseOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tf := mf.TaggedFile()
+	if !tf.FileType().Equal(FileTypeMpc) {
+		t.Fatalf("expected Mpc, got %s", tf.FileType())
+	}
+	verifyArtist(t, tf, TagTypeApe, "Foo artist", 1)
+	verifyArtist(t, tf, TagTypeID3v1, "Bar artist", 1)
+	verifyArtist(t, tf, TagTypeID3v2, "Baz artist", 1)
+}
+
+// Ported from wav.rs::empty_id3_chunk_skipped_644 — an `ID3 ` chunk with no
+// payload is skipped rather than producing an empty tag.
+func TestWavEmptyId3ChunkSkipped(t *testing.T) {
+	file := probeRead(t, testAsset("644_empty_id3v2.wav"), NewParseOptions())
+	if !file.FileType().Equal(FileTypeWav) {
+		t.Fatalf("expected Wav, got %s", file.FileType())
+	}
+	if file.Tag(TagTypeID3v2) != nil {
+		t.Fatal("expected no ID3v2 tag")
+	}
+}
+
+// Ported from wav.rs::issue_174_divide_by_zero — a WAVE_FORMAT_EXTENSIBLE
+// file with a byte rate of 0 must not panic computing durations.
+func TestWavIssue174DivideByZero(t *testing.T) {
+	file := probeRead(t, testAsset("issue_174_waveformatextensible-ieeefloat-44100Hz-mono95060.wav"), NewParseOptions())
+	if !file.FileType().Equal(FileTypeWav) {
+		t.Fatalf("expected Wav, got %s", file.FileType())
+	}
+}
+
 // --- ported from lofty-rs lofty/tests/files/aiff.rs ---
 
 func TestAiffRead(t *testing.T) {
@@ -200,6 +243,18 @@ func TestAiffRead(t *testing.T) {
 	}
 	verifyArtist(t, file, TagTypeID3v2, "Foo artist", 1)
 	verifyArtist(t, file, TagTypeAiffText, "Bar artist", 1)
+}
+
+// Ported from aiff.rs::empty_id3_chunk_skipped_644 — an `ID3 ` chunk with no
+// payload is skipped rather than producing an empty tag.
+func TestAiffEmptyId3ChunkSkipped(t *testing.T) {
+	file := probeRead(t, testAsset("644_empty_id3v2.aiff"), NewParseOptions())
+	if !file.FileType().Equal(FileTypeAiff) {
+		t.Fatalf("expected Aiff, got %s", file.FileType())
+	}
+	if file.Tag(TagTypeID3v2) != nil {
+		t.Fatal("expected no ID3v2 tag")
+	}
 }
 
 // --- ported from lofty-rs lofty/tests/files/mp4.rs ---
@@ -252,9 +307,18 @@ func TestAacReadJunkBetweenFrames(t *testing.T) {
 	if a, ok := id3v2.GetString(ItemKeyTrackTitle); !ok || a != "title test" {
 		t.Fatalf("expected title \"title test\", got %q", a)
 	}
+	if s, _ := id3v2.GetString(ItemKeyEncoderSettings); s != "Lavf58.62.100" {
+		t.Fatalf("expected encoder settings \"Lavf58.62.100\", got %q", s)
+	}
 	id3v1 := tags[1]
 	if a, ok := id3v1.GetString(ItemKeyTrackArtist); !ok || a != "artist test" {
 		t.Fatalf("expected ID3v1 artist \"artist test\", got %q", a)
+	}
+	if a, ok := id3v1.GetString(ItemKeyAlbumTitle); !ok || a != "album test" {
+		t.Fatalf("expected ID3v1 album \"album test\", got %q", a)
+	}
+	if a, ok := id3v1.GetString(ItemKeyTrackTitle); !ok || a != "title test" {
+		t.Fatalf("expected ID3v1 title \"title test\", got %q", a)
 	}
 }
 

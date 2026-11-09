@@ -680,6 +680,120 @@ func TestTaglibFlacEmptyId3v2(t *testing.T) {
 	}
 }
 
+// Inspired by test_flac.rs::test_strip_tags (#[ignore]'d upstream — its
+// vendor-retention expectation is a TagLib behavior Lofty doesn't replicate).
+// Locks in Rust's actual `FlacFile::write_to` semantics:
+//   - no VC tag + pictures: a dummy write keeps the pictures but drops the
+//     comments block.
+//   - no VC tag + no pictures: save is a no-op, disk blocks are untouched.
+//   - TagType::remove_from strips the block (and pictures) entirely.
+func TestTaglibFlacStripTags(t *testing.T) {
+	f := taglibTempFile(t, "silence-44-s.flac")
+	defer f.Close()
+	vf := NewOSFile(f)
+
+	{
+		ff, err := FlacFileReadFrom(vf, NewParseOptions())
+		if err != nil {
+			t.Fatal(err)
+		}
+		vc, ok := ff.VorbisComments.Get()
+		if !ok {
+			t.Fatal("no vorbis comments")
+		}
+		vc.SetTitle("XiphComment Title")
+		if err := ff.SaveFile(vf, NewWriteOptions()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := vf.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	// In-memory VC removal + save: file still has a picture, so the dummy-VC
+	// write strips the comments block and keeps the picture (Rust write_to).
+	{
+		ff, err := FlacFileReadFrom(vf, NewParseOptions())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(ff.Pictures()) != 1 {
+			t.Fatalf("pictures = %d, want 1", len(ff.Pictures()))
+		}
+		vc, ok := ff.VorbisComments.Get()
+		if !ok {
+			t.Fatal("no vorbis comments")
+		}
+		if title, _ := vc.Title(); title != "XiphComment Title" {
+			t.Fatalf("title = %q", title)
+		}
+		ff.VorbisComments = None[*VorbisCommentsTag]()
+		if err := ff.SaveFile(vf, NewWriteOptions()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := vf.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	{
+		ff, err := FlacFileReadFrom(vf, NewParseOptions())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ff.VorbisComments.IsSome() {
+			t.Fatal("comments block should be stripped by the dummy-VC write")
+		}
+		if len(ff.Pictures()) != 1 {
+			t.Fatalf("pictures = %d, want 1", len(ff.Pictures()))
+		}
+	}
+	// No VC tag and no pictures: save is a no-op; the on-disk state survives.
+	if _, err := vf.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	{
+		ff, err := FlacFileReadFrom(vf, NewParseOptions())
+		if err != nil {
+			t.Fatal(err)
+		}
+		ff.RemovePictures()
+		ff.VorbisComments = None[*VorbisCommentsTag]()
+		if err := ff.SaveFile(vf, NewWriteOptions()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := vf.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	{
+		ff, err := FlacFileReadFrom(vf, NewParseOptions())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(ff.Pictures()) != 1 {
+			t.Fatalf("no-op save should leave the on-disk picture, got %d", len(ff.Pictures()))
+		}
+	}
+	// Explicit removal strips the comments block and the picture blocks.
+	if err := TagTypeVorbisComments.RemoveFrom(vf, NewWriteOptions()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vf.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	{
+		ff, err := FlacFileReadFrom(vf, NewParseOptions())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ff.VorbisComments.IsSome() {
+			t.Fatal("vorbis comments block should be gone after RemoveFrom")
+		}
+		if len(ff.Pictures()) != 0 {
+			t.Fatalf("pictures = %d, want 0 after RemoveFrom", len(ff.Pictures()))
+		}
+	}
+}
+
 func TestTaglibFlacEmptySeekTable(t *testing.T) {
 	f := taglibTempFile(t, "empty-seektable.flac")
 	defer f.Close()
@@ -957,6 +1071,56 @@ func TestTaglibMp4EdgeFiles(t *testing.T) {
 		f.Close()
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
+		}
+	}
+}
+
+// Ported from taglib/test_mp4.rs::test_properties_{aac,alac}_without_bitrate —
+// zeroing the esds bitrate fields must not affect parsed properties.
+func TestTaglibMp4PropertiesWithoutBitrate(t *testing.T) {
+	for _, tc := range []struct {
+		file      string
+		marker    []byte
+		markerOff int
+		zeroRange [2]int
+		millis    int64
+		bitrate   uint32
+		bitDepth  uint8
+		codec     Mp4Codec
+	}{
+		{"has-tags.m4a", []byte("mp4a"), 1890, [2]int{1956, 1960}, 3708, 3, 0, Mp4CodecAAC},
+		{"empty_alac.m4a", []byte("alac"), 446, [2]int{470, 474}, 3705, 2, 16, Mp4CodecALAC},
+	} {
+		data, err := os.ReadFile(taglibPath(tc.file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(data) <= tc.zeroRange[1] {
+			t.Fatalf("%s too small", tc.file)
+		}
+		if !bytes.Equal(data[tc.markerOff:tc.markerOff+4], tc.marker) {
+			t.Fatalf("%s: no %s at %d", tc.file, tc.marker, tc.markerOff)
+		}
+		for i := tc.zeroRange[0]; i < tc.zeroRange[1]; i++ {
+			data[i] = 0
+		}
+		mf, err := Mp4FileReadFrom(bytes.NewReader(data), NewParseOptions())
+		if err != nil {
+			t.Fatalf("%s: %v", tc.file, err)
+		}
+		p := mf.Properties
+		if ms(p.Duration) != tc.millis || p.AudioBitrate != tc.bitrate ||
+			p.Channels != 2 || p.SampleRate != 44100 {
+			t.Errorf("%s: %+v", tc.file, p)
+		}
+		if p.BitDepth != tc.bitDepth {
+			t.Errorf("%s: bit depth = %v, want %v", tc.file, p.BitDepth, tc.bitDepth)
+		}
+		if p.Codec != tc.codec {
+			t.Errorf("%s: codec = %q, want %q", tc.file, p.Codec, tc.codec)
+		}
+		if p.IsDrmProtected {
+			t.Errorf("%s: unexpectedly DRM-protected", tc.file)
 		}
 	}
 }
@@ -1296,7 +1460,7 @@ func TestTaglibAifcProperties(t *testing.T) {
 // --- tests/taglib/test_ape.rs ---
 
 func TestTaglibApeProperties399(t *testing.T) {
-	for _, name := range []string{"mac-399.ape", "mac-399-tagged.ape"} {
+	for _, name := range []string{"mac-399.ape", "mac-399-tagged.ape", "mac-399-id3v2.ape"} {
 		f := taglibFile(t, name)
 		af, err := ApeFileReadFrom(f, NewParseOptions())
 		f.Close()
@@ -2625,7 +2789,7 @@ func TestTaglibMp4Gnre(t *testing.T) {
 		t.Fatal(err)
 	}
 	ilst, ok := mf.Ilst.Get()
-		tag := ilst.Tag()
+	tag := ilst.Tag()
 	if !ok {
 		t.Fatal("no ilst")
 	}
@@ -2644,7 +2808,7 @@ func TestTaglibMp4CovrRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	ilst, _ := mf.Ilst.Get()
-		tag := ilst.Tag()
+	tag := ilst.Tag()
 	covrs := mp4Covrs(tag)
 	if len(covrs) != 2 {
 		t.Fatalf("covrs = %d", len(covrs))
@@ -2710,7 +2874,7 @@ func TestTaglibMp4CovrRead2(t *testing.T) {
 		t.Fatal(err)
 	}
 	ilst, _ := mf.Ilst.Get()
-		tag := ilst.Tag()
+	tag := ilst.Tag()
 	covrs := mp4Covrs(tag)
 	if len(covrs) != 2 {
 		t.Fatalf("covrs = %d", len(covrs))
@@ -3667,5 +3831,83 @@ func TestTaglibHoundFuzz(t *testing.T) {
 		if got := wf.Properties.BitDepth; got != uint8(bits) && bits <= 255 {
 			t.Errorf("%s: bit_depth = %d, want %d", e.Name(), got, bits)
 		}
+	}
+}
+
+// taglib/test_apetag.rs::test_id3v1_collision is not ported — it is #[ignore]d
+// upstream ("We currently fall for this collision"). An APE tag sized so that
+// the "TAG" inside its "APETAGEX" header lands at EOF-128 re-reads as ID3v1 in
+// Rust as well, so Go's identical false positive is parity, not a gap.
+
+// Ported from src/tag/items/popularimeter.rs::popm_custom_provider — a custom
+// rating provider overrides the default for supported emails only; unsupported
+// emails are dropped from Ratings(). Placed here because test files run in
+// filename order and every other POPM read lives in an earlier file — the
+// provider is a process-global set-once.
+type customRatingProvider struct{}
+
+func (customRatingProvider) SupportsEmail(email string) bool {
+	return email == "foo@example.com"
+}
+func (customRatingProvider) Rate(tagType TagType, rating StarRating) uint8 {
+	if tagType == TagTypeID3v2 && rating == StarRatingOne {
+		return 128
+	}
+	return DefaultRatingProvider{}.Rate(tagType, rating)
+}
+func (customRatingProvider) ConvertRaw(tagType TagType, rating uint8) StarRating {
+	if tagType == TagTypeID3v2 && rating == 128 {
+		return StarRatingOne
+	}
+	return DefaultRatingProvider{}.ConvertRaw(tagType, rating)
+}
+func (customRatingProvider) DefaultEmail() string { return "foo@example.com" }
+
+func TestPopmCustomProvider(t *testing.T) {
+	popm := func(email string, rating byte, counter uint64) []byte {
+		body := append([]byte(email), 0, rating)
+		for i := 0; i < 8; i++ {
+			body = append(body, byte(counter>>(56-8*i)))
+		}
+		return body
+	}
+	writeTag := func(bodies ...[]byte) []byte {
+		var content bytes.Buffer
+		for _, body := range bodies {
+			content.WriteString("POPM")
+			sz := synchsafe32(uint32(len(body)))
+			content.Write(sz[:])
+			content.Write([]byte{0, 0})
+			content.Write(body)
+		}
+		var tagBytes bytes.Buffer
+		tagBytes.WriteString("ID3\x04\x00\x00")
+		ss := synchsafe32(uint32(content.Len()))
+		tagBytes.Write(ss[:])
+		tagBytes.Write(content.Bytes())
+		return tagBytes.Bytes()
+	}
+
+	// Default: raw 128 maps to three stars.
+	tag := id3v2Reparse(t, writeTag(popm("foo@example.com", 128, 40)), NewParseOptions())
+	ratings := tag.Ratings()
+	if len(ratings) != 1 || ratings[0].Rating != StarRatingThree {
+		t.Fatalf("default rating = %+v, want one Three-star", ratings)
+	}
+
+	if !SetCustomRatingProvider(customRatingProvider{}) {
+		t.Fatal("provider already set")
+	}
+
+	tag2 := id3v2Reparse(t, writeTag(
+		popm("foo@example.com", 128, 40),
+		popm("bar@example.com", 128, 40),
+	), NewParseOptions())
+	ratings = tag2.Ratings()
+	if len(ratings) != 1 {
+		t.Fatalf("ratings = %d, want 1 (bar@ dropped)", len(ratings))
+	}
+	if ratings[0].Email() != "foo@example.com" || ratings[0].Rating != StarRatingOne || ratings[0].PlayCounter != 40 {
+		t.Fatalf("rating = %+v, want foo@/One/40", ratings[0])
 	}
 }

@@ -218,9 +218,13 @@ func (f *FlacFile) ContainsTagType(tagType TagType) bool {
 	return false
 }
 
-// TaggedFile converts to a [TaggedFile].
+// TaggedFile converts to a [TaggedFile]. Tag order follows the Rust struct
+// declaration order: ID3v2, VorbisComments.
 func (f *FlacFile) TaggedFile() *TaggedFile {
 	var tags []*Tag
+	if t, ok := f.ID3v2.Get(); ok {
+		tags = append(tags, t)
+	}
 	if t, ok := f.VorbisComments.Get(); ok {
 		g := t.Tag()
 		for _, pic := range f.pictures {
@@ -233,9 +237,6 @@ func (f *FlacFile) TaggedFile() *TaggedFile {
 			g.PushPicture(pic.Picture)
 		}
 		tags = append(tags, g)
-	}
-	if t, ok := f.ID3v2.Get(); ok {
-		tags = append(tags, t)
 	}
 	return NewTaggedFile(FileTypeFlac, tags, *f.GetProperties())
 }
@@ -258,6 +259,10 @@ func (f *FlacFile) SaveFile(file FileLike, writeOptions WriteOptions) error {
 	var g *Tag
 	if t, ok := f.VorbisComments.Get(); ok {
 		g = t.Tag()
+	} else if len(f.pictures) == 0 {
+		// Rust's write_to is a no-op when the tag is absent and there are no
+		// pictures to store; it does not strip the existing VC block.
+		return nil
 	} else {
 		g = NewTag(TagTypeVorbisComments)
 	}

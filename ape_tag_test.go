@@ -4,6 +4,8 @@ package lofty
 
 import (
 	"bytes"
+	"encoding/binary"
+	"io"
 	"os"
 	"testing"
 )
@@ -55,6 +57,51 @@ func TestApeParseApe(t *testing.T) {
 		if !got.Value.Equal(item.Value) {
 			t.Fatalf("item %q = %v, want %v", item.Key, got.Value, item.Value)
 		}
+	}
+}
+
+// Ported from ape/tag/read.rs::ape_without_header — a footer-only tag parses
+// when the header block is absent.
+func TestApeWithoutHeader(t *testing.T) {
+	data := readApev2Asset(t)
+
+	// Drain the 32-byte header, then mark the footer as footer-only
+	tagBytes := data[32:]
+	flagsPos := len(tagBytes) - 12 // preamble+version+size+count = 20 bytes into the footer
+	binary.LittleEndian.PutUint32(tagBytes[flagsPos:], apeHeaderContainsFooter)
+
+	reader := bytes.NewReader(tagBytes)
+	if _, err := reader.Seek(-32, io.SeekEnd); err != nil {
+		t.Fatal(err)
+	}
+	po := NewParseOptions()
+	po.ParsingMode = ParsingModeStrict
+	parsed, _, err := readApeTag(reader, true, po)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Len() != 7 {
+		t.Fatalf("len = %d, want 7", parsed.Len())
+	}
+}
+
+// Ported from ape/tag/read.rs::ape_without_footer — a header-only tag parses
+// when the footer block is absent.
+func TestApeWithoutFooter(t *testing.T) {
+	data := readApev2Asset(t)
+
+	// Trim the 32-byte footer, then mark the header as header-only
+	tagBytes := data[:len(data)-32]
+	binary.LittleEndian.PutUint32(tagBytes[20:], apeHeaderContainsHeader|apeHeaderIsHeader)
+
+	po := NewParseOptions()
+	po.ParsingMode = ParsingModeStrict
+	parsed, _, err := readApeTag(bytes.NewReader(tagBytes), false, po)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Len() != 7 {
+		t.Fatalf("len = %d, want 7", parsed.Len())
 	}
 }
 
@@ -304,6 +351,78 @@ func TestApeDiskNumberAndDiskTotalTagToApe(t *testing.T) {
 	}
 	if n, _ := ape.DiskTotal(); n != 2 {
 		t.Fatalf("disk_total = %d", n)
+	}
+}
+
+// Ported from id3/v2/util/pairs.rs::whitespace_in_number (reached through the
+// ApeTag generic conversion — Rust `set_number` trims before parsing).
+func TestApeWhitespaceInNumber(t *testing.T) {
+	tag := NewTag(TagTypeApe)
+	tag.Push(NewTagItem(ItemKeyTrackNumber, ItemValueText("  12  ")))
+	ape := ApeTagFromTag(tag)
+	if n, _ := ape.Track(); n != 12 {
+		t.Fatalf("track = %d, want 12", n)
+	}
+}
+
+// Ported from id3/v2/util/pairs.rs::empty_number_string — empty or
+// whitespace-only number text is skipped entirely.
+func TestApeEmptyNumberString(t *testing.T) {
+	for _, text := range []string{"", "        "} {
+		tag := NewTag(TagTypeApe)
+		tag.Push(NewTagItem(ItemKeyTrackNumber, ItemValueText(text)))
+		ape := ApeTagFromTag(tag)
+		if item, ok := ape.Item("Track"); ok {
+			t.Fatalf("Track item %v written for %q", item, text)
+		}
+	}
+}
+
+// Ported from ape/tag/mod.rs::split_text_values — same-key text items merge
+// with NUL on push, and the generic conversion splits them back out.
+func TestApeSplitTextValues(t *testing.T) {
+	ape := NewApeTag()
+	ape.Push(mustApeItem(t, "Artists", ItemValueText("Serial-ATA")))
+	ape.Push(mustApeItem(t, "Artists", ItemValueText("Lofty")))
+
+	artists, ok := ape.Item("Artists")
+	if !ok {
+		t.Fatal("no Artists item")
+	}
+	text, _ := artists.Value.IntoString()
+	if text != "Serial-ATA\x00Lofty" {
+		t.Fatalf("Artists = %q, want merged multi-value", text)
+	}
+
+	tag := ape.Tag()
+	var values []string
+	for _, item := range tag.GetItems(ItemKeyTrackArtists) {
+		s, _ := item.Value().IntoString()
+		values = append(values, s)
+	}
+	if len(values) != 2 || values[0] != "Serial-ATA" || values[1] != "Lofty" {
+		t.Fatalf("TrackArtists = %v, want [Serial-ATA Lofty]", values)
+	}
+}
+
+// Ported from ape/tag/mod.rs::merge_text_values — multiple same-key generic
+// items merge into one NUL-separated APE item.
+func TestApeMergeTextValues(t *testing.T) {
+	tag := NewTag(TagTypeApe)
+	tag.PushUnchecked(NewTagItem(ItemKeyTrackArtists, ItemValueText("Serial-ATA")))
+	tag.PushUnchecked(NewTagItem(ItemKeyTrackArtists, ItemValueText("Lofty")))
+
+	ape := ApeTagFromTag(tag)
+	if ape.Len() != 1 {
+		t.Fatalf("len = %d, want 1", ape.Len())
+	}
+	artists, ok := ape.Item("Artists")
+	if !ok {
+		t.Fatal("no Artists item")
+	}
+	text, _ := artists.Value.IntoString()
+	if text != "Serial-ATA\x00Lofty" {
+		t.Fatalf("Artists = %q, want merged multi-value", text)
 	}
 }
 

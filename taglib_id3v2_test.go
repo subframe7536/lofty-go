@@ -585,3 +585,96 @@ func TestTaglibTagToId3v2LangFrame(t *testing.T) {
 		t.Fatalf("COMM = %+v", cf)
 	}
 }
+
+// test_save_and_strip_id3v1_should_not_add_frame_from_id3v1_to_id3v2 —
+// removing the only ID3v2 frame and re-saving must remove the tag, not
+// resurrect fields from the file's ID3v1 tag.
+func TestTaglibId3v2SaveStripNoId3v1Migration(t *testing.T) {
+	f := taglibTempFile(t, "xing.mp3")
+
+	mf, err := MpegFileReadFrom(f, NewParseOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	tag := NewTag(TagTypeID3v2)
+	tag.SetArtist("Artist")
+	mf.ID3v2 = Some(tag)
+	if err := mf.SaveFile(NewOSFile(f), NewWriteOptions()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	mf2, err := MpegFileReadFrom(f, NewParseOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	it, ok := mf2.ID3v2.Get()
+	if !ok {
+		t.Fatal("no ID3v2 after write")
+	}
+	it.RemoveKey(ItemKeyTrackArtist)
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	if err := mf2.SaveFile(NewOSFile(f), NewWriteOptions()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	mf3, err := MpegFileReadFrom(f, NewParseOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mf3.ID3v2.IsSome() {
+		t.Fatal("ID3v2 still present after stripping last frame")
+	}
+}
+
+// test_parse_apic_utf16_bom — UTF-16 APIC description with BOM.
+func TestTaglibId3v2ParseApicUtf16Bom(t *testing.T) {
+	body := []byte{
+		0x01,
+		'i', 'm', 'a', 'g', 'e', '/', 'j', 'p', 'e', 'g', 0x00,
+		0x00,
+		0xfe, 0xff, 0x00, 'c', 0x00, 'o', 0x00, 'v', 0x00, 'e', 0x00, 'r', 0x00, '.', 0x00, 'j', 0x00, 'p', 0x00, 'g', 0x00, 0x00,
+		0xff, 0xd8, 0xff,
+	}
+	var frame []byte
+	frame = append(frame, []byte("APIC")...)
+	sz := synchsafe32(uint32(len(body)))
+	frame = append(frame, sz[:]...)
+	frame = append(frame, 0, 0)
+	frame = append(frame, body...)
+	var tagBytes []byte
+	tagBytes = append(tagBytes, []byte("ID3\x04\x00\x00")...)
+	ss := synchsafe32(uint32(len(frame)))
+	tagBytes = append(tagBytes, ss[:]...)
+	tagBytes = append(tagBytes, frame...)
+
+	tag := id3v2Reparse(t, tagBytes, NewParseOptions())
+	pics := tag.Pictures()
+	if len(pics) != 1 {
+		t.Fatalf("pictures = %d", len(pics))
+	}
+	pic := pics[0]
+	if mt, _ := pic.MimeType().Get(); mt != MimeTypeJpeg {
+		t.Fatalf("mime = %v", pic.MimeType())
+	}
+	if pic.PicType() != PictureTypeOther {
+		t.Fatalf("type = %v", pic.PicType())
+	}
+	d, dok := pic.Description()
+	if !dok || d != "cover.jpg" {
+		t.Fatalf("desc = %q, %v", d, dok)
+	}
+	if !bytes.Equal(pic.Data(), []byte{0xff, 0xd8, 0xff}) {
+		t.Fatalf("data = %x", pic.Data())
+	}
+}

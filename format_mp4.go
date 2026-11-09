@@ -139,6 +139,26 @@ func mp4SkipBox(reader io.ReadSeeker, h *mp4BoxHeader) error {
 	return err
 }
 
+// mp4MetaIsFull reports whether a `meta` atom carries the 4-byte
+// version+flags field before its children (Rust `meta_is_full`): if the
+// second four bytes of the payload are a known child ident, the `meta` is
+// non-full and children start immediately.
+func mp4MetaIsFull(reader io.ReadSeeker, h *mp4BoxHeader) bool {
+	var b [8]byte
+	if _, err := reader.Seek(h.pos, io.SeekStart); err != nil {
+		return true
+	}
+	if _, err := io.ReadFull(reader, b[:]); err != nil {
+		return true
+	}
+	reader.Seek(h.pos, io.SeekStart)
+	switch string(b[4:8]) {
+	case "hdlr", "ilst", "mhdr", "ctry", "lang":
+		return false
+	}
+	return true
+}
+
 // mp4FindDescendants walks a container box's children looking for a named box.
 func mp4FindBox(reader io.ReadSeeker, end int64, name string) (*mp4BoxHeader, error) {
 	for {
@@ -863,6 +883,219 @@ func mp4UpdateBoxSize(file FileLike, box *mp4BoxHeader, delta int64) error {
 	return err
 }
 
+// mp4OffsetUpdateContainers are the container atoms Rust treats as important
+// when adjusting chunk offsets after a size shift (write.rs
+// `IMPORTANT_CONTAINERS`): only atoms nested inside these are found.
+var mp4OffsetUpdateContainers = map[string]bool{
+	"moov": true, "udta": true, "moof": true, "trak": true,
+	"mdia": true, "minf": true, "stbl": true,
+}
+
+// mp4UpdateChunkOffsets shifts every `stco`/`co64` chunk offset inside `moov`
+// and every `moof` `tfhd` base data offset at or beyond shiftPos by delta —
+// Rust's `AtomWriterCompanion::update_offsets`. The file is walked post-edit,
+// so box positions already reflect the shift; only the stored offsets are
+// adjusted.
+func mp4UpdateChunkOffsets(file FileLike, moov, moof *mp4BoxHeader, shiftPos, delta int64) error {
+	if delta == 0 {
+		return nil
+	}
+	if moov != nil {
+		// moov's own start always precedes the edit point; its end grew
+		moovEnd := moov.pos + int64(moov.size) + delta
+		if err := mp4WalkOffsetAtoms(file, moov.pos, moovEnd, false, shiftPos, delta); err != nil {
+			return &FileEncodingError{Source: err}
+		}
+	}
+	if moof != nil {
+		// moof is top-level — its position may have shifted with the edit
+		moofStart := moof.pos
+		if moofStart >= shiftPos {
+			moofStart += delta
+		}
+		if err := mp4WalkOffsetAtoms(file, moofStart, moofStart+int64(moof.size), true, shiftPos, delta); err != nil {
+			return &FileEncodingError{Source: err}
+		}
+	}
+	return nil
+}
+
+// mp4WalkOffsetAtoms recursively walks container children between start and
+// end, adjusting offset atoms it finds.
+func mp4WalkOffsetAtoms(file FileLike, start, end int64, tfhdMode bool, shiftPos, delta int64) error {
+	for pos := start; pos+8 <= end; {
+		if _, err := file.Seek(pos, io.SeekStart); err != nil {
+			return err
+		}
+		h, err := mp4ReadBox(file)
+		if err != nil {
+			// Rust's atom tree only contains atoms it could parse — an
+			// unreadable child just ends the walk, it doesn't fail.
+			break
+		}
+		atomEnd := h.pos + int64(h.size)
+		if atomEnd > end || int64(h.size) < 0 {
+			break
+		}
+		name := string(h.name[:])
+		var adjErr error
+		switch {
+		case !tfhdMode && name == "stco":
+			adjErr = mp4ShiftStco(file, h, shiftPos, delta)
+		case !tfhdMode && name == "co64":
+			adjErr = mp4ShiftCo64(file, h, shiftPos, delta)
+		case tfhdMode && name == "tfhd":
+			adjErr = mp4ShiftTfhd(file, h, shiftPos, delta)
+		}
+		if adjErr != nil {
+			return adjErr
+		}
+		if mp4OffsetUpdateContainers[name] {
+			if err := mp4WalkOffsetAtoms(file, h.pos, atomEnd, tfhdMode, shiftPos, delta); err != nil {
+				return err
+			}
+		}
+		pos = atomEnd
+	}
+	return nil
+}
+
+// mp4ShiftStco updates the u32 chunk offsets inside an stco atom.
+func mp4ShiftStco(file FileLike, h *mp4BoxHeader, shiftPos, delta int64) error {
+	// version (1) + flags (3) + entry count (4) + u32 entries
+	count, err := mp4ReadU32At(file, h.pos+4)
+	if err != nil {
+		return err
+	}
+	maxEntries := int64(0)
+	if h.size > 8 {
+		maxEntries = (int64(h.size) - 8) / 4
+	}
+	if int64(count) < maxEntries {
+		maxEntries = int64(count)
+	}
+	for i := int64(0); i < maxEntries; i++ {
+		entryPos := h.pos + 8 + i*4
+		off, err := mp4ReadU32At(file, entryPos)
+		if err != nil {
+			return err
+		}
+		if int64(off) < shiftPos {
+			continue
+		}
+		if err := mp4WriteU32At(file, entryPos, uint32(int64(off)+delta)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// mp4ShiftCo64 updates the u64 chunk offsets inside a co64 atom.
+func mp4ShiftCo64(file FileLike, h *mp4BoxHeader, shiftPos, delta int64) error {
+	count, err := mp4ReadU32At(file, h.pos+4)
+	if err != nil {
+		return err
+	}
+	maxEntries := int64(0)
+	if h.size > 8 {
+		maxEntries = (int64(h.size) - 8) / 8
+	}
+	if int64(count) < maxEntries {
+		maxEntries = int64(count)
+	}
+	for i := int64(0); i < maxEntries; i++ {
+		entryPos := h.pos + 8 + i*8
+		var b [8]byte
+		if _, err := file.Seek(entryPos, io.SeekStart); err != nil {
+			return err
+		}
+		if _, err := io.ReadFull(file, b[:]); err != nil {
+			return err
+		}
+		off := binary.BigEndian.Uint64(b[:])
+		if int64(off) < shiftPos {
+			continue
+		}
+		binary.BigEndian.PutUint64(b[:], uint64(int64(off)+delta))
+		if _, err := file.Seek(entryPos, io.SeekStart); err != nil {
+			return err
+		}
+		if _, err := file.Write(b[:]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// mp4ShiftTfhd updates a tfhd atom's base data offset when present.
+// Rust reads the u64 immediately after the 3 flag bytes (payload offset 4),
+// which overlaps track_ID — mirrored verbatim. (`traf` is not an important
+// container, so only a direct moof.tfhd child would ever be found.)
+func mp4ShiftTfhd(file FileLike, h *mp4BoxHeader, shiftPos, delta int64) error {
+	// version (1) + flags (3) — flag bit 0x1 signals a base_data_offset u64
+	if h.size < 12 {
+		return nil
+	}
+	var b [4]byte
+	if _, err := file.Seek(h.pos, io.SeekStart); err != nil {
+		return err
+	}
+	if _, err := io.ReadFull(file, b[:]); err != nil {
+		return err
+	}
+	if b[3]&0b1 == 0 {
+		return nil
+	}
+	entryPos := h.pos + 4
+	var ob [8]byte
+	if _, err := io.ReadFull(file, ob[:]); err != nil {
+		return err
+	}
+	off := binary.BigEndian.Uint64(ob[:])
+	if int64(off) < shiftPos {
+		return nil
+	}
+	binary.BigEndian.PutUint64(ob[:], uint64(int64(off)+delta))
+	if _, err := file.Seek(entryPos, io.SeekStart); err != nil {
+		return err
+	}
+	_, err := file.Write(ob[:])
+	return err
+}
+
+func mp4ReadU32At(file FileLike, pos int64) (uint32, error) {
+	var b [4]byte
+	if _, err := file.Seek(pos, io.SeekStart); err != nil {
+		return 0, err
+	}
+	if _, err := io.ReadFull(file, b[:]); err != nil {
+		return 0, err
+	}
+	return binary.BigEndian.Uint32(b[:]), nil
+}
+
+func mp4WriteU32At(file FileLike, pos int64, v uint32) error {
+	var b [4]byte
+	binary.BigEndian.PutUint32(b[:], v)
+	if _, err := file.Seek(pos, io.SeekStart); err != nil {
+		return err
+	}
+	_, err := file.Write(b[:])
+	return err
+}
+
+// mp4FreeAtom builds a `free` padding atom of `size` bytes (header included).
+// Rust `write_free_atom` pads with 0x01 bytes.
+func mp4FreeAtom(size uint32) []byte {
+	b := make([]byte, size)
+	binary.BigEndian.PutUint32(b[:4], size)
+	copy(b[4:8], "free")
+	for i := 8; i < len(b); i++ {
+		b[i] = 1
+	}
+	return b
+}
+
 // mp4HdlrAtom is the `hdlr` atom written inside `meta` when creating a new
 // udta/meta subtree (moov.udta.meta.hdlr).
 var mp4HdlrAtom = []byte{
@@ -893,8 +1126,8 @@ func mp4WriteIlstData(file FileLike, ilst *Ilst, writeOptions WriteOptions) erro
 		return &FileEncodingError{Source: err}
 	}
 
-	// Find moov, then ilst via udta/meta
-	var moov *mp4BoxHeader
+	// Find moov (+ moof for tfhd offset updates), then ilst via udta/meta
+	var moov, moof *mp4BoxHeader
 	for {
 		pos, _ := file.Seek(0, io.SeekCurrent)
 		if pos >= streamEnd {
@@ -904,8 +1137,11 @@ func mp4WriteIlstData(file FileLike, ilst *Ilst, writeOptions WriteOptions) erro
 		if err != nil {
 			break
 		}
-		if string(h.name[:]) == "moov" {
+		switch string(h.name[:]) {
+		case "moov":
 			moov = h
+		case "moof":
+			moof = h
 		}
 		mp4SkipBox(file, h)
 	}
@@ -953,16 +1189,16 @@ func mp4WriteIlstData(file FileLike, ilst *Ilst, writeOptions WriteOptions) erro
 		metaBox.Write(mp4HdlrAtom)
 		metaBox.Write(ilstData)
 		var metaHdr [4]byte
-		binary.BigEndian.PutUint32(metaHdr[:], uint32(metaBox.Len()))
+		binary.BigEndian.PutUint32(metaHdr[:], uint32(metaBox.Len()+4))
 		udta.Write(metaHdr[:])
 		udta.Write(metaBox.Bytes())
 		var udtaHdr [4]byte
-		binary.BigEndian.PutUint32(udtaHdr[:], uint32(udta.Len()))
+		binary.BigEndian.PutUint32(udtaHdr[:], uint32(udta.Len()+4))
 		var out bytes.Buffer
 		out.Write(udtaHdr[:])
 		out.Write(udta.Bytes())
-		// Insert before end of moov
-		insertPos := moov.pos + int64(moov.size)
+		// Rust puts a created `udta` at the start of `moov` (data_start)
+		insertPos := moov.pos
 		if err := Splice(file, uint64(insertPos), uint64(insertPos), out.Bytes()); err != nil {
 			return &FileEncodingError{Source: err}
 		}
@@ -970,7 +1206,7 @@ func mp4WriteIlstData(file FileLike, ilst *Ilst, writeOptions WriteOptions) erro
 		if err := mp4UpdateBoxSize(file, moov, int64(out.Len())); err != nil {
 			return &FileEncodingError{Source: err}
 		}
-		return nil
+		return mp4UpdateChunkOffsets(file, moov, moof, insertPos, int64(out.Len()))
 	}
 
 	// udta exists: find meta inside it
@@ -991,8 +1227,12 @@ func mp4WriteIlstData(file FileLike, ilst *Ilst, writeOptions WriteOptions) erro
 		}
 		if string(h.name[:]) == "meta" {
 			metaBox = h
-			// children of meta after 4-byte fullbox header
-			file.Seek(4, io.SeekCurrent)
+			// A `meta` atom is usually "full" (version+flags precede its
+			// children), but a non-full `meta` nests children immediately
+			// (Rust `meta_is_full`).
+			if mp4MetaIsFull(file, h) {
+				file.Seek(4, io.SeekCurrent)
+			}
 			metaEnd := h.pos + int64(h.size)
 			for {
 				pos, _ := file.Seek(0, io.SeekCurrent)
@@ -1025,7 +1265,9 @@ func mp4WriteIlstData(file FileLike, ilst *Ilst, writeOptions WriteOptions) erro
 		}
 		rangeStart := ilstBox.pos - int64(ilstBox.hdr)
 		rangeEnd := ilstBox.pos + int64(ilstBox.size)
-		if ilstIdx >= 0 {
+		// Rust only expands the range over adjacent `free` atoms when
+		// writing a tag — removal leaves the padding in place.
+		if len(ilstData) > 0 && ilstIdx >= 0 {
 			for i := ilstIdx - 1; i >= 0; i-- {
 				ch := metaChildren[i]
 				if string(ch.name[:]) != "free" || ch.pos+int64(ch.size) != rangeStart {
@@ -1043,16 +1285,21 @@ func mp4WriteIlstData(file FileLike, ilst *Ilst, writeOptions WriteOptions) erro
 		}
 
 		availableSpace := rangeEnd - rangeStart
-		// When the tag shrinks by >= 8 bytes, pad it back out with a `free`
-		// atom so the ancestor sizes (and chunk offsets) stay put — Rust's
-		// `pad_atom` offset-avoidance path.
-		if len(ilstData) > 0 {
-			if diff := availableSpace - int64(len(ilstData)); diff >= 8 {
-				free := make([]byte, diff)
-				binary.BigEndian.PutUint32(free[:], uint32(diff))
-				copy(free[4:], "free")
-				ilstData = append(ilstData, free...)
+		if len(ilstData) == 0 {
+			// Removal: with preferred padding the old `ilst` becomes a
+			// same-size `free` atom so nothing shifts
+			// (Rust `save_to_existing`).
+			if writeOptions.PreferredPadding > 0 && availableSpace > 8 {
+				ilstData = mp4FreeAtom(uint32(availableSpace))
 			}
+		} else if diff := availableSpace - int64(len(ilstData)); diff >= 8 {
+			// Shrink by >= 8: a `free` atom fills the gap so the ancestor
+			// sizes (and chunk offsets) stay put — Rust's `pad_atom`.
+			ilstData = append(ilstData, mp4FreeAtom(uint32(diff))...)
+		} else if diff > 0 && writeOptions.PreferredPadding > 0 {
+			// Shrink by < 8 with padding enabled: a `free` atom of the
+			// preferred size is appended and offsets do shift.
+			ilstData = append(ilstData, mp4FreeAtom(writeOptions.PreferredPadding)...)
 		}
 
 		if err := Splice(file, uint64(rangeStart), uint64(rangeEnd), ilstData); err != nil {
@@ -1070,7 +1317,7 @@ func mp4WriteIlstData(file FileLike, ilst *Ilst, writeOptions WriteOptions) erro
 				}
 			}
 		}
-		return nil
+		return mp4UpdateChunkOffsets(file, moov, moof, rangeStart, delta)
 	}
 	if len(ilstData) == 0 {
 		return nil
@@ -1087,7 +1334,7 @@ func mp4WriteIlstData(file FileLike, ilst *Ilst, writeOptions WriteOptions) erro
 				return &FileEncodingError{Source: err}
 			}
 		}
-		return nil
+		return mp4UpdateChunkOffsets(file, moov, moof, insertPos, delta)
 	}
 	// udta exists without meta: create meta/ilst inside it
 	var metaOut bytes.Buffer
@@ -1096,11 +1343,12 @@ func mp4WriteIlstData(file FileLike, ilst *Ilst, writeOptions WriteOptions) erro
 	metaOut.Write(mp4HdlrAtom)
 	metaOut.Write(ilstData)
 	var metaHdr [4]byte
-	binary.BigEndian.PutUint32(metaHdr[:], uint32(metaOut.Len()))
+	binary.BigEndian.PutUint32(metaHdr[:], uint32(metaOut.Len()+4))
 	var out bytes.Buffer
 	out.Write(metaHdr[:])
 	out.Write(metaOut.Bytes())
-	insertPos := udtaBox.pos + int64(udtaBox.size)
+	// Rust puts a created `meta` at the start of `udta` (data_start)
+	insertPos := udtaBox.pos
 	if err := Splice(file, uint64(insertPos), uint64(insertPos), out.Bytes()); err != nil {
 		return &FileEncodingError{Source: err}
 	}
@@ -1110,7 +1358,7 @@ func mp4WriteIlstData(file FileLike, ilst *Ilst, writeOptions WriteOptions) erro
 			return &FileEncodingError{Source: err}
 		}
 	}
-	return nil
+	return mp4UpdateChunkOffsets(file, moov, moof, insertPos, delta)
 }
 
 // encodeMp4Ilst encodes a generic tag as an ilst atom (includes the box header).

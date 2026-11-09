@@ -162,12 +162,21 @@ func (t *TaggedFile) Conflicts() [][2]TagType {
 
 // Save writes all tags to the file.
 func (t *TaggedFile) Save(file FileLike, writeOptions WriteOptions) error {
+	// Rust's save_to refuses to write when conflicting tag types are present
+	if conflicts := t.Conflicts(); len(conflicts) > 0 {
+		return &FileEncodingError{Source: &ConflictingTagError{First: conflicts[0][0], Second: conflicts[0][1]}}
+	}
 	// The file type is already known; no need to re-verify
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return &FileEncodingError{Source: err}
 	}
 	vf := &verifiedFile{format: t.fileType, file: file}
 	for _, tag := range t.tags {
+		// Users aren't necessarily aware of any read-only tags they happen to
+		// read; skip them rather than error (Rust `save_to`).
+		if !t.fileType.TagSupport(tag.tagType).IsWritable() {
+			continue
+		}
 		if err := writeTag(tag, vf, writeOptions); err != nil {
 			return err
 		}

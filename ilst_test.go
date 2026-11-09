@@ -527,3 +527,72 @@ func TestIlstWriteNonFullMetaAtom(t *testing.T) {
 	}
 	ilstAtomText(t, back, "©ART", "Foo artist")
 }
+
+// Ported from ilst/write.rs::integer_shrinking_unsigned — unsigned ints occupy
+// 1/2/4 bytes; 3-byte values round up to 4.
+func TestIlstIntegerShrinkingUnsigned(t *testing.T) {
+	cases := []struct {
+		input    uint32
+		expected []byte
+	}{
+		{0, []byte{0}},
+		{1, []byte{1}},
+		{32767, []byte{127, 255}},
+		{65535, []byte{255, 255}},
+		{8388607, []byte{0, 127, 255, 255}},
+		{16777215, []byte{0, 255, 255, 255}},
+		{4294967295, []byte{255, 255, 255, 255}},
+	}
+	for _, c := range cases {
+		code, payload := intPayload(int64(c.input), false)
+		if code != 22 || !bytes.Equal(payload, c.expected) {
+			t.Errorf("intPayload(%d) = (%d, %v), want (22, %v)", c.input, code, payload, c.expected)
+		}
+	}
+}
+
+// Ported from ilst/tests.rs::retain_known_idents_with_unknown_types — data
+// values that can't convert to TagItems stay in the remainder.
+func TestIlstRetainKnownIdentsWithUnknownTypes(t *testing.T) {
+	ilst := NewIlst()
+	atom := Atom{
+		Ident: AtomIdent{
+			Freeform: true,
+			Mean:     "com.apple.iTunes",
+			Name:     "ARTISTS",
+		},
+		Data: []AtomData{
+			{Kind: AtomDataUTF8, Text: "Serial-ATA"},
+			{Kind: AtomDataUTF8, Text: "Lofty"},
+			{Kind: AtomDataUnsignedInt, Uint: 42}, // unexpected
+		},
+	}
+	ilst.Insert(atom)
+
+	tag := ilst.Tag()
+	var artists []string
+	for _, item := range tag.GetItems(ItemKeyTrackArtists) {
+		s, _ := item.Value().IntoString()
+		artists = append(artists, s)
+	}
+	if len(artists) != 2 || artists[0] != "Serial-ATA" || artists[1] != "Lofty" {
+		t.Fatalf("TrackArtists = %v, want [Serial-ATA Lofty]", artists)
+	}
+
+	// The unconvertible UnsignedInt data must survive a round-trip via the
+	// remainder/companion tag.
+	back := IlstFromTag(tag)
+	got := back.Get(AtomIdent{Freeform: true, Mean: "com.apple.iTunes", Name: "ARTISTS"})
+	if got == nil {
+		t.Fatal("freeform ARTISTS atom lost")
+	}
+	var hasUint bool
+	for _, d := range got.Data {
+		if d.Kind == AtomDataUnsignedInt && d.Uint == 42 {
+			hasUint = true
+		}
+	}
+	if !hasUint {
+		t.Fatalf("uint data lost in round-trip: %+v", got.Data)
+	}
+}

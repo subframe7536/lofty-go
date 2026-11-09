@@ -395,13 +395,28 @@ func id3v2TagToGeneric(btag *bogem.Tag, parseOptions ParseOptions) *Tag {
 			return
 		}
 		if id == "TIPL" || id == "IPLS" || id == "TMCL" {
-			// Involved people: pairs of role \x00 name
+			// Involved people: pairs of role \x00 name. Unmapped pairs are
+			// held back (Rust retains them in the KeyValueFrame remainder);
+			// TMCL has no ItemKey mappings at all (all pairs held back).
+			var heldBack []string
 			for i := 0; i+1 < len(parts); i += 2 {
 				role := parts[i]
 				name := parts[i+1]
-				if ik, ok := tiplKeyRoles[role]; ok {
+				if ik, ok := tiplKeyRoles[role]; ok && id != "TMCL" {
 					tag.PushUnchecked(NewTagItem(ik, ItemValueText(name)))
+				} else {
+					heldBack = append(heldBack, role, name)
 				}
+			}
+			if len(heldBack) > 0 {
+				desc := id
+				if id == "IPLS" {
+					desc = "TIPL" // Rust upgrades IPLS → TIPL on read
+				}
+				body := append([]byte{tf.Encoding.Key}, joinNulls(heldBack)...)
+				item := NewTagItem(ItemKeyUnknown, ItemValueBinary(body))
+				item.Description = desc
+				tag.PushUnchecked(item)
 			}
 			return
 		}
@@ -481,12 +496,14 @@ func id3v2TagToGeneric(btag *bogem.Tag, parseOptions ParseOptions) *Tag {
 				if !parseOptions.ReadCoverArt {
 					continue
 				}
-				pic := PictureUnchecked(fr.Picture).
+				pb := PictureUnchecked(fr.Picture).
 					PicType(PictureType(fr.PictureType)).
-					MimeType(MimeTypeFromStr(fr.MimeType)).
-					Description(fr.Description).
-					Build()
-				tag.PushPicture(pic)
+					MimeType(MimeTypeFromStr(fr.MimeType))
+				// Rust's decode_text().text_or_none(): an empty description is None
+				if fr.Description != "" {
+					pb = pb.Description(fr.Description)
+				}
+				tag.PushPicture(pb.Build())
 			case bogem.PopularimeterFrame:
 				counter := uint64(0)
 				if fr.Counter != nil {
@@ -505,12 +522,23 @@ func id3v2TagToGeneric(btag *bogem.Tag, parseOptions ParseOptions) *Tag {
 				}
 			case bogem.UnknownFrame:
 				// IPLS (ID3v2.3 involved-people list) is not a text frame to bogem.
+				// It upgrades to TIPL (Rust `upgrade_v3`); unmapped pairs are
+				// held back like unmapped TIPL pairs.
 				if id == "IPLS" && len(fr.Body) > 0 {
 					parts := splitNulls(id3v2DecodeTextBody(fr.Body))
+					var heldBack []string
 					for i := 0; i+1 < len(parts); i += 2 {
 						if ik, ok := tiplKeyRoles[parts[i]]; ok {
 							tag.PushUnchecked(NewTagItem(ik, ItemValueText(parts[i+1])))
+						} else {
+							heldBack = append(heldBack, parts[i], parts[i+1])
 						}
+					}
+					if len(heldBack) > 0 {
+						body := append([]byte{fr.Body[0]}, joinNulls(heldBack)...)
+						item := NewTagItem(ItemKeyUnknown, ItemValueBinary(body))
+						item.Description = "TIPL"
+						tag.PushUnchecked(item)
 					}
 					continue
 				}
@@ -752,8 +780,8 @@ func genericTagToBogem(tag *Tag, useV23 bool) (*bogem.Tag, error) {
 		utf8Enc = bogem.EncodingUTF16
 	}
 
-	// Collect TIPL pair items.
-	var tiplPairs []string
+	// Collect TIPL/TMCL pair items.
+	var tiplPairs, tmclPairs []string
 	tiplKeys := map[ItemKey]bool{
 		ItemKeyProducer: true, ItemKeyArranger: true, ItemKeyEngineer: true,
 		ItemKeyMixDj: true, ItemKeyMixEngineer: true,
@@ -821,6 +849,18 @@ func genericTagToBogem(tag *Tag, useV23 bool) (*bogem.Tag, error) {
 			switch {
 			case useV23 && id3v23DiscardFrames[item.Description]:
 				// ID3v2.4-only frame — dropped when saving as ID3v2.3
+			case item.Description == "TIPL" || item.Description == "IPLS":
+				// Held-back unmapped pairs merge into the emitted frame
+				// (Rust's remainder extension on merge_tag).
+				if len(item.value.binary) > 0 {
+					tiplPairs = append(tiplPairs, splitNulls(string(item.value.binary[1:]))...)
+				}
+			case item.Description == "TMCL":
+				// Held-back musician credits — their own frame on v2.4, merged
+				// into IPLS on v2.3 (Rust merges both lists there).
+				if len(item.value.binary) > 0 {
+					tmclPairs = append(tmclPairs, splitNulls(string(item.value.binary[1:]))...)
+				}
 			case len(item.Description) >= 5 && item.Description[:5] == "UFID:":
 				owner := item.Description[5:]
 				if seenUfid[owner] {
@@ -1100,13 +1140,20 @@ func genericTagToBogem(tag *Tag, useV23 bool) (*bogem.Tag, error) {
 			}
 		}
 	}
-	if len(tiplPairs) > 0 {
+	if useV23 {
 		// ID3v2.3 merges the involved-people and musician-credits lists into IPLS
+		tiplPairs = append(tiplPairs, tmclPairs...)
+		tmclPairs = nil
+	}
+	if len(tiplPairs) > 0 {
 		id := "TIPL"
 		if useV23 {
 			id = "IPLS"
 		}
 		btag.AddFrame(id, id3v2TextFrameNoTerm{enc: utf8Enc, text: joinNulls(tiplPairs)})
+	}
+	if len(tmclPairs) > 0 {
+		btag.AddFrame("TMCL", id3v2TextFrameNoTerm{enc: utf8Enc, text: joinNulls(tmclPairs)})
 	}
 
 	for _, pic := range tag.pictures {
@@ -1225,22 +1272,19 @@ func parseId3v2(reader io.Reader, header Id3v2Header, parseOptions ParseOptions)
 	if err != nil {
 		return nil, &Id3v2ParseError{Source: err}
 	}
-	// Whole-tag unsynchronisation must be removed before parsing (bogem does
-	// not handle it).
-	if header.Flags.Unsynchronisation {
+	// Prior to ID3v2.4 the tag-wide unsynchronisation flag meant the entire
+	// tag content was unsynchronised; in v4 it's equivalent to setting the
+	// per-frame flag on every frame (handled inside the frame walk).
+	if header.Flags.Unsynchronisation && header.Version < 4 {
 		content = id3v2Deunsync(content)
 	}
-	// Rust's BestAttempt parser stops at the first malformed frame and keeps
-	// what it has. Truncate trailing frames that overflow the tag so a strict
-	// parse (bogem) doesn't fail the whole tag.
-	content, err = id3v2TruncateBadFrames(content, header)
+	// Walk the frames manually, applying Rust's ParsedFrame::read semantics:
+	// bad IDs/zero sizes/undersized frames are skipped (or error, per the
+	// parsing mode), per-frame flags are resolved, and kept frames are
+	// re-emitted flagless for bogem.
+	content, manual, err := id3v2SanitizeTag(content, header, parseOptions)
 	if err != nil {
 		return nil, &Id3v2ParseError{Source: err}
-	}
-	// Decompress zlib-compressed frames — bogem requires a correct declared
-	// decompressed size, while Rust inflates regardless of it.
-	if header.Version == 3 {
-		content = id3v2DecompressFrames(content)
 	}
 	// bogem expects a stream starting at "ID3"; reconstruct it.
 	full := make([]byte, 0, len(content)+10)
@@ -1267,6 +1311,9 @@ func parseId3v2(reader io.Reader, header Id3v2Header, parseOptions ParseOptions)
 		return nil, &Id3v2ParseError{Source: err}
 	}
 	tag := id3v2TagToGeneric(btag, parseOptions)
+	for _, mf := range manual {
+		id3v2ManualDescFrame(tag, mf, parseOptions)
+	}
 	tag.OriginalVersion = header.Version
 	if header.Version == 3 && parseOptions.ImplicitConversions {
 		upgradeV3Items(tag)
@@ -1361,19 +1408,54 @@ func parseDDMM(s string) (uint8, uint8, bool) {
 	return uint8(a), uint8(b), true
 }
 
+// id3v2Serialize converts a generic tag to ID3v2 bytes. Unlike bogem, Rust
+// always emits the 10-byte tag header — even when every frame was discarded
+// (e.g. v2.4-only frames on a v2.3 save) — so an empty bogem tag is written
+// out as a bare header. Trailing padding is applied like Rust's
+// `verify_tag_size`: the tag grows by min(PreferredPadding, SYNCHSAFE_MAX -
+// content size) zero bytes, included in the declared size.
+func id3v2Serialize(tag *Tag, writeOptions WriteOptions) ([]byte, error) {
+	btag, err := genericTagToBogem(tag, writeOptions.UseID3v23)
+	if err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	if _, err := btag.WriteTo(&buf); err != nil {
+		return nil, err
+	}
+	if buf.Len() == 0 {
+		version := byte(4)
+		if writeOptions.UseID3v23 {
+			version = 3
+		}
+		buf.Write([]byte{'I', 'D', '3', version, 0, 0, 0, 0, 0, 0})
+	}
+	out := buf.Bytes()
+	if pp := writeOptions.PreferredPadding; pp > 0 && len(out) >= 10 {
+		const synchsafeMax = 0x0FFFFFFF
+		contentSize := unsynchsafe32(out[6:10])
+		if rem := synchsafeMax - contentSize; rem > 0 {
+			pad := pp
+			if pad > rem {
+				pad = rem
+			}
+			ss := synchsafe32(contentSize + pad)
+			copy(out[6:10], ss[:])
+			out = append(out, make([]byte, pad)...)
+		}
+	}
+	return out, nil
+}
+
 // writeId3v2 writes an ID3v2 tag at the start of a file.
 func writeId3v2(file FileLike, tag *Tag, writeOptions WriteOptions) error {
 	var encoded []byte
 	if !tag.IsEmpty() {
-		btag, err := genericTagToBogem(tag, writeOptions.UseID3v23)
+		var err error
+		encoded, err = id3v2Serialize(tag, writeOptions)
 		if err != nil {
 			return &FileEncodingError{Source: &TagEncodingError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
 		}
-		var buf bytes.Buffer
-		if _, err := btag.WriteTo(&buf); err != nil {
-			return &FileEncodingError{Source: &TagEncodingError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
-		}
-		encoded = buf.Bytes()
 	}
 
 	// Find the existing tag range
@@ -1472,11 +1554,11 @@ func init() {
 		if tag.IsEmpty() {
 			return nil
 		}
-		btag, err := genericTagToBogem(tag, writeOptions.UseID3v23)
+		encoded, err := id3v2Serialize(tag, writeOptions)
 		if err != nil {
 			return err
 		}
-		_, err = btag.WriteTo(writer)
+		_, err = writer.Write(encoded)
 		return err
 	}
 }
@@ -1690,7 +1772,7 @@ func parseId3v22(reader io.Reader, header Id3v2Header, parseOptions ParseOptions
 		tag.PushUnchecked(item)
 	}
 
-	pushText := func(id string, text string) {
+	pushText := func(id string, text string, encByte byte) {
 		switch id {
 		case "TCON":
 			for _, g := range id3v2GenresIter(text, false) {
@@ -1715,10 +1797,19 @@ func parseId3v22(reader io.Reader, header Id3v2Header, parseOptions ParseOptions
 			}
 		case "TIPL", "TMCL":
 			parts := splitNulls(text)
+			var heldBack []string
 			for i := 0; i+1 < len(parts); i += 2 {
-				if ik, ok := tiplKeyRoles[parts[i]]; ok {
+				if ik, ok := tiplKeyRoles[parts[i]]; ok && id != "TMCL" {
 					tag.PushUnchecked(NewTagItem(ik, ItemValueText(parts[i+1])))
+				} else {
+					heldBack = append(heldBack, parts[i], parts[i+1])
 				}
+			}
+			if len(heldBack) > 0 {
+				body := append([]byte{encByte}, joinNulls(heldBack)...)
+				item := NewTagItem(ItemKeyUnknown, ItemValueBinary(body))
+				item.Description = id
+				tag.PushUnchecked(item)
 			}
 		default:
 			ik, ok := ItemKeyFromKey(TagTypeID3v2, id)
@@ -1848,10 +1939,14 @@ func parseId3v22(reader io.Reader, header Id3v2Header, parseOptions ParseOptions
 			switch {
 			case v4id[0] == 'T':
 				text := id3v22DecodeText(body)
+				var enc byte
+				if len(body) > 0 {
+					enc = body[0]
+				}
 				if v4id == "TDRC" || v4id == "TDOR" || v4id == "TDRL" || v4id == "TDTG" || v4id == "TDEN" {
 					pushTimestamp(v4id, text)
 				} else {
-					pushText(v4id, text)
+					pushText(v4id, text, enc)
 				}
 			case v4id[0] == 'W':
 				ik, ok := ItemKeyFromKey(TagTypeID3v2, v4id)
@@ -1879,91 +1974,356 @@ func parseId3v22(reader io.Reader, header Id3v2Header, parseOptions ParseOptions
 	return tag, nil
 }
 
-// id3v2TruncateBadFrames trims tag content to the end of the last frame that
-// fits inside it, so a trailing malformed frame doesn't fail the whole tag
-// (Rust's BestAttempt parse keeps already-parsed frames).
-func id3v2TruncateBadFrames(content []byte, header Id3v2Header) ([]byte, error) {
-	pos := 0
-	last := 0
-	for pos+10 <= len(content) {
-		id := content[pos : pos+4]
-		if id[0] == 0 && id[1] == 0 && id[2] == 0 && id[3] == 0 {
-			break // padding
-		}
-		for _, c := range id {
-			if (c < 'A' || c > 'Z') && (c < '0' || c > '9') {
-				return content[:last], nil
-			}
-		}
-		var size uint32
-		if header.Version == 4 {
-			size = unsynchsafe32(content[pos+4 : pos+8])
-		} else {
-			size = binary.BigEndian.Uint32(content[pos+4 : pos+8])
-		}
-		// Encrypted frames are read into memory eagerly in Rust via try_vec —
-		// enforce the allocation limit on their declared size.
-		encrypted := header.Version == 4 && content[pos+9]&0x04 != 0 ||
-			header.Version == 3 && content[pos+9]&0x40 != 0
-		if encrypted {
-			if _, err := tryByteSlice(int(size)); err != nil {
-				return nil, err
-			}
-		}
-		end := pos + 10 + int(size)
-		if end > len(content) {
-			break
-		}
-		pos = end
-		last = pos
+// id3v2MinContentSize mirrors the `verify_size` minimum content sizes from
+// Rust's `parse_content` dispatch (FrameConstraints::MIN_CONTENT_SIZE_V4; all
+// v3 mins equal their v4 counterparts).
+func id3v2MinContentSize(id string) uint32 {
+	switch id {
+	case "APIC":
+		return 4
+	case "TXXX", "WXXX":
+		return 2
+	case "COMM", "USLT":
+		return 5 // LanguageFrame
+	case "TIPL", "TMCL":
+		return 3 // KeyValueFrame
+	case "OWNE":
+		return 10
+	case "POPM":
+		return 6
+	case "CHAP":
+		return 17
+	case "CTOC":
+		return 3
+	case "UFID", "RVA2", "ETCO", "PRIV":
+		return 1
 	}
-	return content[:last], nil
+	// TDEN|TDOR|TDRC|TDRL|TDTG are TimestampFrames (min 1, same as text),
+	// GRP1|MVNM|MVIN and all other T*/W* frames are min 1.
+	if len(id) == 4 && (id[0] == 'T' || id[0] == 'W' || id == "GRP1" || id == "MVNM" || id == "MVIN") {
+		return 1
+	}
+	return 0 // BinaryFrame — no minimum
 }
 
-// id3v2DecompressFrames rewrites ID3v2.3 zlib-compressed frames (flag 0x80)
-// into uncompressed frames, inflating regardless of the declared decompressed
-// size. Uninflatable frames are dropped (Rust's BestAttempt skips them).
-func id3v2DecompressFrames(content []byte) []byte {
+// id3v2ManualFrame is a frame body held out of bogem's parse because bogem
+// mis-handles it; the generic conversion handles it instead.
+type id3v2ManualFrame struct {
+	id   string
+	body []byte
+}
+
+// id3v2SanitizeTag walks an ID3v2.3/2.4 tag's frames exactly like Rust's
+// `ParsedFrame::read`: invalid frame IDs and zero-length frames are skipped
+// (error in Strict mode), flag-prefixed bytes (encryption method, group
+// identifier, data length indicator) are consumed, per-frame
+// unsynchronisation and zlib compression are applied, undersized frames are
+// skipped in Relaxed mode (error otherwise), and encrypted frames are kept
+// as binary blobs. Kept frames are re-emitted flagless so bogem can parse
+// them; skipped frames are excised so a bad frame doesn't abort the parse.
+func id3v2SanitizeTag(content []byte, header Id3v2Header, parseOptions ParseOptions) ([]byte, []id3v2ManualFrame, error) {
+	v4 := header.Version == 4
+	strict := parseOptions.ParsingMode == ParsingModeStrict
+	relaxed := parseOptions.ParsingMode == ParsingModeRelaxed
+	var manual []id3v2ManualFrame
+	undersized := func(id string) error {
+		return &Id3v2ParseError{Message: "undersized frame " + strconv.Quote(id)}
+	}
+
 	var out []byte
-	pos := 0
-	for pos+10 <= len(content) {
-		id := content[pos : pos+4]
-		if id[0] == 0 && id[1] == 0 && id[2] == 0 && id[3] == 0 {
-			break
-		}
-		size := int(binary.BigEndian.Uint32(content[pos+4 : pos+8]))
-		flags := content[pos+8 : pos+10]
-		end := pos + 10 + size
-		if end > len(content) {
-			break
-		}
-		body := content[pos+10 : end]
-		pos = end
-		if flags[1]&0x80 == 0 {
-			out = append(out, content[pos-size-10:pos]...)
-			continue
-		}
-		// Compressed: body = 4-byte decompressed size + zlib stream
-		if len(body) < 5 {
-			continue
-		}
-		zr, err := zlib.NewReader(bytes.NewReader(body[4:]))
-		if err != nil {
-			continue
-		}
-		inflated, err := io.ReadAll(zr)
-		zr.Close()
-		if err != nil {
-			continue
-		}
+	emit := func(id []byte, body []byte) {
 		out = append(out, id...)
 		var sz [4]byte
-		binary.BigEndian.PutUint32(sz[:], uint32(len(inflated)))
+		if v4 {
+			sz = synchsafe32(uint32(len(body)))
+		} else {
+			binary.BigEndian.PutUint32(sz[:], uint32(len(body)))
+		}
 		out = append(out, sz[:]...)
-		out = append(out, flags[0], flags[1]&^0x80)
-		out = append(out, inflated...)
+		out = append(out, 0, 0)
+		out = append(out, body...)
 	}
-	return out
+
+	for pos := 0; pos+10 <= len(content); {
+		h := content[pos : pos+10]
+		if h[0] == 0 {
+			break // padding
+		}
+		var size uint32
+		if v4 {
+			size = unsynchsafe32(h[4:8])
+		} else {
+			size = binary.BigEndian.Uint32(h[4:8])
+		}
+		frameEnd := int64(pos) + 10 + int64(size)
+
+		// Some apps write v2 (3-char) frame IDs inside v3 tags — the 4th ID
+		// byte is NUL and the rest of the header is v3-shaped. Upgrade via
+		// the v2->v4 table like Rust's parse_header.
+		var id [4]byte
+		copy(id[:], h[:4])
+		idLen := 4
+		if !v4 && h[3] == 0 {
+			idLen = 3
+			if upgraded, ok := v2ToV4FrameIds[string(h[:3])]; ok {
+				copy(id[:], upgraded)
+			}
+		}
+		for i := 0; i < idLen; i++ {
+			if c := h[i]; !(c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+				// Bad frame ID — Strict errors; other modes skip `size`
+				// bytes and keep going (Rust `skip_frame`).
+				if strict {
+					return nil, nil, &Id3v2ParseError{Message: "invalid frame ID " + strconv.Quote(string(h[:idLen]))}
+				}
+				pos += 10
+				pos += int(size)
+				if pos > len(content) {
+					pos = len(content)
+				}
+				goto next
+			}
+		}
+
+		// Frames Rust refuses to read at all: cover art when disabled
+		if !parseOptions.ReadCoverArt && string(id[:]) == "APIC" {
+			pos += 10
+			pos += int(size)
+			if pos > len(content) {
+				pos = len(content)
+			}
+			goto next
+		}
+
+		if size == 0 {
+			if strict {
+				return nil, nil, undersized(string(id[:idLen]))
+			}
+			pos += 10
+			goto next
+		}
+
+		{
+			flags := binary.BigEndian.Uint16(h[8:10])
+			var grouping, encryption, compression, unsync, dli bool
+			if v4 {
+				grouping = flags&0x0040 != 0
+				compression = flags&0x0008 != 0
+				encryption = flags&0x0004 != 0
+				// v4 tag-level unsynchronisation applies to every frame
+				unsync = flags&0x0002 != 0 || header.Flags.Unsynchronisation
+				dli = flags&0x0001 != 0
+			} else {
+				grouping = flags&0x0020 != 0
+				compression = flags&0x0080 != 0
+				encryption = flags&0x0040 != 0
+			}
+
+			consumed := uint32(0)
+			if encryption {
+				if size < 1 {
+					return nil, nil, undersized(string(id[:idLen]))
+				}
+				consumed++
+				size--
+			}
+			if grouping {
+				if size < 1 {
+					return nil, nil, undersized(string(id[:idLen]))
+				}
+				consumed++
+				size--
+			}
+			if dli || compression {
+				if size < 4 {
+					return nil, nil, undersized(string(id[:idLen]))
+				}
+				consumed += 4
+				size -= 4
+			}
+			// At least 1 byte of real content must remain
+			if size == 0 {
+				return nil, nil, undersized(string(id[:idLen]))
+			}
+			if encryption && !dli && !compression {
+				return nil, nil, &Id3v2ParseError{Message: "missing data length indicator " + strconv.Quote(string(id[:idLen]))}
+			}
+
+			bodyStart := pos + 10 + int(consumed)
+			availEnd := int(frameEnd)
+			if availEnd > len(content) {
+				availEnd = len(content)
+			}
+			if bodyStart > availEnd {
+				// The flag bytes themselves are truncated — Rust's
+				// read hits EOF (FrameParseError::io, all modes).
+				return nil, nil, &Id3v2ParseError{Source: io.ErrUnexpectedEOF}
+			}
+			body := content[bodyStart:availEnd]
+
+			if unsync {
+				body = id3v2Deunsync(body)
+			}
+			if compression {
+				zr, err := zlib.NewReader(bytes.NewReader(body))
+				if err != nil {
+					return nil, nil, &Id3v2ParseError{Source: err}
+				}
+				inflated, err := io.ReadAll(zr)
+				zr.Close()
+				if err != nil {
+					return nil, nil, &Id3v2ParseError{Source: err}
+				}
+				body = inflated
+			}
+			if encryption {
+				// Rust reads the encrypted content eagerly (try_vec) and
+				// keeps it as a BinaryFrame — emit it flagless so it lands
+				// as a retained binary item.
+				if _, err := tryByteSlice(int(size)); err != nil {
+					return nil, nil, err
+				}
+				emit(id[:], body)
+				pos = int(frameEnd)
+				goto next
+			}
+
+			// verify_size: Relaxed skips undersized frames, every other
+			// mode errors on them.
+			if size < id3v2MinContentSize(string(id[:])) {
+				if relaxed {
+					pos = int(frameEnd)
+					goto next
+				}
+				return nil, nil, undersized(string(id[:idLen]))
+			}
+
+			// Description-terminated frames with a UTF-16 encoding byte are
+			// parsed manually: bogem's ReadText reads one byte past the
+			// `00 00` terminator for enc=1 (and can find a misaligned
+			// terminator for enc=2), corrupting whatever field follows.
+			if len(body) > 0 && (body[0] == 1 || body[0] == 2) {
+				switch string(id[:]) {
+				case "APIC", "COMM", "USLT", "TXXX":
+					manual = append(manual, id3v2ManualFrame{id: string(id[:]), body: append([]byte(nil), body...)})
+					pos = int(frameEnd)
+					goto next
+				}
+			}
+
+			emit(id[:], body)
+			pos = int(frameEnd)
+		}
+	next:
+	}
+	return out, manual, nil
+}
+
+// id3v2DecodeEnc decodes bytes in a frame-encoding byte's charset: 0=latin-1,
+// 1=UTF-16 (BOM selects order, per Rust decode_text), 2=UTF-16BE, 3=UTF-8.
+func id3v2DecodeEnc(enc byte, b []byte) string {
+	switch enc {
+	case 1:
+		order := littleEndian
+		if len(b) >= 2 && b[0] == 0xFE && b[1] == 0xFF {
+			order = bigEndian
+		}
+		if s, err := utf16DecodeBytes(b, order); err == nil {
+			return s
+		}
+		return latin1Decode(b)
+	case 2:
+		if s, err := utf16DecodeBytes(b, bigEndian); err == nil {
+			return s
+		}
+		return latin1Decode(b)
+	case 3:
+		return trimEndNulls(string(b))
+	default:
+		return latin1Decode(b)
+	}
+}
+
+// id3v2SplitDescField splits an encoding-terminated description from the rest
+// of a frame body (excluding the encoding byte). UTF-16 encodings scan for a
+// pair-aligned `00 00` like Rust's read_to_terminator; other encodings use a
+// single NUL.
+func id3v2SplitDescField(data []byte, enc byte) (desc string, rest []byte) {
+	if enc == 1 || enc == 2 {
+		for i := 0; i+1 < len(data); i += 2 {
+			if data[i] == 0 && data[i+1] == 0 {
+				return id3v2DecodeEnc(enc, data[:i]), data[i+2:]
+			}
+		}
+		return id3v2DecodeEnc(enc, data), nil
+	}
+	if i := bytes.IndexByte(data, 0); i >= 0 {
+		return id3v2DecodeEnc(enc, data[:i]), data[i+1:]
+	}
+	return id3v2DecodeEnc(enc, data), nil
+}
+
+// id3v2ManualDescFrame converts a description-terminated frame held out of
+// bogem (see id3v2SanitizeTag) into generic items — the same conversions as
+// the bogem.CommentFrame/.UnsynchronisedLyricsFrame/.UserDefinedTextFrame/
+// .PictureFrame cases in id3v2TagToGeneric.
+func id3v2ManualDescFrame(tag *Tag, mf id3v2ManualFrame, parseOptions ParseOptions) {
+	body := mf.body
+	enc := body[0]
+	rest := body[1:]
+	switch mf.id {
+	case "APIC":
+		mimeEnd := bytes.IndexByte(rest, 0)
+		if mimeEnd < 0 || mimeEnd+1 >= len(rest) {
+			return
+		}
+		mime := string(rest[:mimeEnd])
+		picType := rest[mimeEnd+1]
+		desc, data := id3v2SplitDescField(rest[mimeEnd+2:], enc)
+		pb := PictureUnchecked(data).
+			PicType(PictureType(picType)).
+			MimeType(MimeTypeFromStr(mime))
+		if desc != "" { // text_or_none
+			pb = pb.Description(desc)
+		}
+		tag.PushPicture(pb.Build())
+	case "COMM", "USLT":
+		if len(rest) < 3 {
+			return
+		}
+		lang := rest[:3]
+		desc, val := id3v2SplitDescField(rest[3:], enc)
+		ik := ItemKeyComment
+		if mf.id == "USLT" {
+			ik = ItemKeyUnsyncLyrics
+		}
+		for _, c := range splitNulls(id3v2DecodeEnc(enc, val)) {
+			item := NewTagItem(ik, ItemValueText(c))
+			item.Description = desc
+			copy(item.Lang[:], lang)
+			tag.PushUnchecked(item)
+		}
+	case "TXXX":
+		desc, val := id3v2SplitDescField(rest, enc)
+		if desc == "" {
+			item := NewTagItem(ItemKeyUnknown, ItemValueBinary(body))
+			item.Description = "TXXX"
+			tag.PushUnchecked(item)
+			return
+		}
+		itemKey, ok := ItemKeyFromKey(TagTypeID3v2, desc)
+		if !ok {
+			itemKey = ItemKeyUnknown
+		}
+		for _, p := range splitNulls(id3v2DecodeEnc(enc, val)) {
+			item := NewTagItem(itemKey, ItemValueText(p))
+			if itemKey == ItemKeyUnknown {
+				item.Description = desc
+			}
+			tag.PushUnchecked(item)
+		}
+	}
+	_ = parseOptions
 }
 
 // id3v2TextFrameNoTerm is a bogem [bogem.Framer] that writes a text frame body

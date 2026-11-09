@@ -3,6 +3,7 @@ package lofty
 import (
 	"bytes"
 	"os"
+	"strings"
 	"testing"
 
 	bogem "github.com/bogem/id3v2/v2"
@@ -35,15 +36,13 @@ func readId3v2File(t *testing.T, path string, opts ParseOptions) *Tag {
 // id3v2Dump serializes a generic tag to ID3v2 bytes.
 func id3v2Dump(t *testing.T, tag *Tag, useV23 bool) []byte {
 	t.Helper()
-	btag, err := genericTagToBogem(tag, useV23)
+	wo := NewWriteOptions()
+	wo.UseID3v23 = useV23
+	encoded, err := id3v2Serialize(tag, wo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var buf bytes.Buffer
-	if _, err := btag.WriteTo(&buf); err != nil {
-		t.Fatal(err)
-	}
-	return buf.Bytes()
+	return encoded
 }
 
 // id3v2Reparse parses written ID3v2 bytes back to a generic tag.
@@ -69,6 +68,131 @@ func bogemFrames(t *testing.T, b []byte) *bogem.Tag {
 		t.Fatal(err)
 	}
 	return btag
+}
+
+// Ported from src/id3/v2/tag/tests.rs::id3v2{22,23,24}_full — the same tag
+// (create_full_test_tag) written at each version must parse identically.
+func TestId3v2Full(t *testing.T) {
+	cover, err := os.ReadFile(id3v2TestAsset("test_full_cover.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[ItemKey]string{
+		ItemKeyTrackTitle:    "TempleOS Hymn Risen (Remix)",
+		ItemKeyTrackArtist:   "Dave Eddy",
+		ItemKeyTrackNumber:   "1",
+		ItemKeyAlbumTitle:    "Summer",
+		ItemKeyRecordingDate: "2017",
+		ItemKeyGenre:         "Electronic",
+		ItemKeyLength:        "213017",
+	}
+	for _, name := range []string{"test_full.id3v22", "test_full.id3v23", "test_full.id3v24"} {
+		t.Run(name, func(t *testing.T) {
+			tag := readId3v2File(t, id3v2TestAsset(name), NewParseOptions())
+			if tag.ItemCount() != len(want) {
+				t.Errorf("item count = %d, want %d", tag.ItemCount(), len(want))
+			}
+			for key, wv := range want {
+				got, ok := tag.GetString(key)
+				if !ok || got != wv {
+					t.Errorf("%v = %q (ok=%v), want %q", key, got, ok, wv)
+				}
+			}
+			if tag.PictureCount() != 1 {
+				t.Fatalf("pictures = %d, want 1", tag.PictureCount())
+			}
+			pic := tag.Pictures()[0]
+			if pic.PicType() != PictureTypeCoverFront {
+				t.Errorf("pic type = %v, want CoverFront", pic.PicType())
+			}
+			if mt, ok := pic.MimeType().Get(); !ok || mt != MimeTypePng {
+				t.Errorf("mime = %v (ok=%v), want PNG", mt, ok)
+			}
+			if _, ok := pic.Description(); ok {
+				t.Error("pic description should be empty")
+			}
+			if !bytes.Equal(pic.Data(), cover) {
+				t.Errorf("pic data = %d bytes, want %d bytes of test_full_cover.png", len(pic.Data()), len(cover))
+			}
+		})
+	}
+}
+
+// Ported from src/id3/v2/tag/tests.rs::special_items_roundtrip — an RVA2
+// frame cannot be represented generically; it must survive a
+// generic-Tag round-trip as a binary item and serialize back byte-exact.
+func TestId3v2SpecialItemsRoundtrip(t *testing.T) {
+	// RVA2 body: "Foo RVA\0" + channel 1 (master volume) + adjustment 30 + 0 peak bits
+	rva2Body := []byte("Foo RVA\x00")
+	rva2Body = append(rva2Body, 0x01, 0x00, 0x1E, 0x00)
+
+	v4frame := func(id string, body []byte) []byte {
+		out := []byte(id)
+		sz := len(body)
+		out = append(out, byte(sz>>21), byte(sz>>14), byte(sz>>7), byte(sz))
+		out = append(out, 0, 0)
+		return append(out, body...)
+	}
+	tpe1Body := append([]byte{0}, "Foo Artist"...)
+	frames := append(v4frame("TPE1", tpe1Body), v4frame("RVA2", rva2Body)...)
+	tagBytes := []byte{'I', 'D', '3', 4, 0, 0,
+		byte(len(frames) >> 21), byte(len(frames) >> 14), byte(len(frames) >> 7), byte(len(frames))}
+	tagBytes = append(tagBytes, frames...)
+
+	parse := func(t *testing.T, b []byte) *Tag {
+		t.Helper()
+		r := bytes.NewReader(b)
+		header, err := parseId3v2Header(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tag, err := parseId3v2(r, header, NewParseOptions())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tag
+	}
+	findRva2 := func(t *testing.T, tag *Tag) TagItem {
+		t.Helper()
+		for _, item := range tag.Items() {
+			if item.Key() == ItemKeyUnknown && item.Description == "RVA2" {
+				return item
+			}
+		}
+		t.Fatal("no RVA2 binary item")
+		return TagItem{}
+	}
+
+	tag := parse(t, tagBytes)
+	if s, _ := tag.GetString(ItemKeyTrackArtist); s != "Foo Artist" {
+		t.Fatalf("artist = %q", s)
+	}
+	item := findRva2(t, tag)
+	if got, ok := item.Value().IntoBinary(); !ok || !bytes.Equal(got, rva2Body) {
+		t.Fatalf("RVA2 body = %v (ok=%v)", got, ok)
+	}
+
+	// Round-trip through the generic Tag — strict mode must still find it
+	strict := NewParseOptions()
+	strict.ParsingMode = ParsingModeStrict
+	reparsed, err := func() (*Tag, error) {
+		r := bytes.NewReader(id3v2Dump(t, tag, false))
+		header, err := parseId3v2Header(r)
+		if err != nil {
+			return nil, err
+		}
+		return parseId3v2(r, header, strict)
+	}()
+	if err != nil {
+		t.Fatal(err)
+	}
+	item = findRva2(t, reparsed)
+	if got, ok := item.Value().IntoBinary(); !ok || !bytes.Equal(got, rva2Body) {
+		t.Fatalf("RVA2 body after round-trip = %v (ok=%v)", got, ok)
+	}
+	if s, _ := reparsed.GetString(ItemKeyTrackArtist); s != "Foo Artist" {
+		t.Fatalf("artist after round-trip = %q", s)
+	}
 }
 
 func TestParseId3v2(t *testing.T) {
@@ -115,12 +239,12 @@ func TestId3v2ToTag(t *testing.T) {
 	tag := readId3v2File(t, id3v2TestAsset("test.id3v24"), NewParseOptions())
 	// verify_tag (track_number + genre)
 	checks := map[ItemKey]string{
-		ItemKeyTrackTitle:   "Foo title",
-		ItemKeyTrackArtist:  "Bar artist",
-		ItemKeyAlbumTitle:   "Baz album",
-		ItemKeyComment:      "Qux comment",
-		ItemKeyTrackNumber:  "1",
-		ItemKeyGenre:        "Classical",
+		ItemKeyTrackTitle:  "Foo title",
+		ItemKeyTrackArtist: "Bar artist",
+		ItemKeyAlbumTitle:  "Baz album",
+		ItemKeyComment:     "Qux comment",
+		ItemKeyTrackNumber: "1",
+		ItemKeyGenre:       "Classical",
 	}
 	for k, want := range checks {
 		if s, ok := tag.GetString(k); !ok || s != want {
@@ -639,15 +763,40 @@ func TestReplaygainTagConversion(t *testing.T) {
 // --- flags / advisory / timestamp ---
 
 func TestFlagItemConversion(t *testing.T) {
+	// Rust's flag_item_conversion asserts the Tag -> Id3v2Tag direction:
+	// both flags become text frames with normalized "0"/"1" values.
 	tag := NewTag(TagTypeID3v2)
 	tag.InsertText(ItemKeyFlagCompilation, "1")
 	tag.InsertText(ItemKeyFlagPodcast, "0")
-	re := id3v2Reparse(t, id3v2Dump(t, tag, false), NewParseOptions())
-	if s, ok := re.GetString(ItemKeyFlagCompilation); !ok || s != "1" {
-		t.Fatalf("TCMP = %q", s)
+
+	btag := bogemFrames(t, id3v2Dump(t, tag, false))
+	if got := btag.GetTextFrame("TCMP").Text; got != "1" {
+		t.Fatalf("TCMP = %q", got)
 	}
-	if s, ok := re.GetString(ItemKeyFlagPodcast); !ok || s != "0" {
-		t.Skip("KNOWN GAP: PCST flag value \"0\" does not round-trip through bogem")
+	// PCST is a nonstandard frame — bogem surfaces it as an unknown frame;
+	// decode the body (encoding byte + text) to verify the flag value.
+	pcst := btag.GetFrames("PCST")
+	if len(pcst) != 1 {
+		t.Fatalf("PCST frames = %d", len(pcst))
+	}
+	uf, ok := pcst[0].(bogem.UnknownFrame)
+	if !ok || id3v2DecodeTextBody(uf.Body) != "0" {
+		t.Fatalf("PCST = %+v", pcst[0])
+	}
+
+	// On re-read Rust keeps PCST as a binary (retained) frame; the port's
+	// equivalent is an unknown binary item that round-trips byte-identically.
+	re := id3v2Reparse(t, id3v2Dump(t, tag, false), NewParseOptions())
+	found := false
+	for _, item := range re.Items() {
+		if item.Key() == ItemKeyUnknown && item.Description == "PCST" {
+			if b, ok := item.Value().Binary(); ok && id3v2DecodeTextBody(b) == "0" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("PCST not retained as binary item")
 	}
 }
 
@@ -771,8 +920,9 @@ func TestRemoveId3v24FramesOnId3v23Save(t *testing.T) {
 	item.Description = "RVA2"
 	tag.PushUnchecked(item)
 	encoded := id3v2Dump(t, tag, true)
+	// Every frame was discarded — Rust still writes a valid empty tag header
 	if len(encoded) < 10 {
-		t.Skip("KNOWN GAP: fully-discarded v2.3 tag serializes to <10 bytes")
+		t.Fatalf("encoded v2.3 tag = %d bytes", len(encoded))
 	}
 	re := id3v2Reparse(t, encoded, NewParseOptions())
 	for _, it := range re.Items() {
@@ -850,11 +1000,71 @@ func TestEnsureFrameSkippingWithinBounds(t *testing.T) {
 	}
 }
 
+// Ported from id3/v2/read.rs::bad_frame_id_relaxed_id3v2.
+func TestBadFrameIDRelaxedId3v2(t *testing.T) {
+	// Contains a frame with a "+" in the ID, which is invalid.
+	// All other frames in the tag are valid, however.
+	opts := NewParseOptions()
+	opts.ParsingMode = ParsingModeRelaxed
+	tag := readId3v2File(t, id3v2TestAsset("bad_frame_otherwise_valid.id3v24"), opts)
+	// 6 valid frames and 1 invalid frame (T+LB, was TALB)
+	if tag.ItemCount() != 6 {
+		t.Fatalf("len = %d (items=%v)", tag.ItemCount(), tag.Items())
+	}
+	if s, _ := tag.GetString(ItemKeyTrackTitle); s != "Foo title" {
+		t.Fatalf("title = %q", s)
+	}
+	if s, _ := tag.GetString(ItemKeyTrackArtist); s != "Bar artist" {
+		t.Fatalf("artist = %q", s)
+	}
+	if s, _ := tag.GetString(ItemKeyComment); s != "Qux comment" {
+		t.Fatalf("comment = %q", s)
+	}
+	if s, _ := tag.GetString(ItemKeyRecordingDate); s != "1984" {
+		t.Fatalf("date = %q", s)
+	}
+	if s, _ := tag.GetString(ItemKeyTrackNumber); s != "1" {
+		t.Fatalf("track = %q", s)
+	}
+	if s, _ := tag.GetString(ItemKeyGenre); s != "Classical" {
+		t.Fatalf("genre = %q", s)
+	}
+}
+
 func TestUndersizedFrames(t *testing.T) {
-	// KNOWN GAP: bogem aborts on the undersized COMM instead of skipping it
-	// and reaching the trailing TPE1, so Relaxed mode can't recover the
-	// remaining frames the way Rust's own frame walker does.
-	t.Skip("KNOWN GAP: undersized-frame recovery relies on bogem's frame walk")
+	// A COMM frame needs at least 5 bytes
+	badTag := []byte("ID3\x04\x00\x00\x00\x00\x00\x20" +
+		"COMM\x00\x00\x00\x01\x00\x00\x00" +
+		"TPE1\x00\x00\x00\x0B\x00\x00\x00Serial-ATA")
+
+	// Relaxed mode should parse the tag fine, skipping the comment
+	opts := NewParseOptions()
+	opts.ParsingMode = ParsingModeRelaxed
+	r := bytes.NewReader(badTag)
+	header, err := parseId3v2Header(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag, err := parseId3v2(r, header, opts)
+	if err != nil {
+		t.Fatalf("relaxed parse failed: %v", err)
+	}
+	if s, ok := tag.GetString(ItemKeyTrackArtist); !ok || s != "Serial-ATA" {
+		t.Fatalf("artist = %q", s)
+	}
+
+	// Anything else should fail entirely
+	for _, mode := range []ParsingMode{ParsingModeStrict, ParsingModeBestAttempt} {
+		opts.ParsingMode = mode
+		r = bytes.NewReader(badTag)
+		header, err = parseId3v2Header(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := parseId3v2(r, header, opts); err == nil {
+			t.Fatalf("mode %v: expected error", mode)
+		}
+	}
 }
 
 func TestReadMultipleComposers(t *testing.T) {
@@ -866,18 +1076,41 @@ func TestReadMultipleComposers(t *testing.T) {
 }
 
 func TestTrimEndNullsWhenReadingFrameContent(t *testing.T) {
+	// Issue #273 — tag written by mid3v2; all frames contain
+	// null-terminated UTF-8 text that must come back trimmed.
 	tag := readId3v2File(t, id3v2TestAsset("trailing_nulls.id3v24"), NewParseOptions())
 	if s, _ := tag.GetString(ItemKeyTrackArtist); s != "Artist" {
 		t.Fatalf("artist = %q", s)
 	}
-	if s, _ := tag.GetString(ItemKeyWriter); s != "Writer" {
-		t.Skip("KNOWN GAP: trailing-NUL trim not applied to this frame's decoded text")
+	// TXXX:Writer has no ItemKey mapping — Rust retains the UserText frame,
+	// so the port's equivalent is an unknown item carrying the description.
+	found := false
+	for _, item := range tag.Items() {
+		if item.Key() == ItemKeyUnknown && item.Description == "Writer" {
+			if s, _ := item.Value().Text(); s == "Writer" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("TXXX:Writer missing or still NUL-terminated")
 	}
 	if s, _ := tag.GetString(ItemKeyUnsyncLyrics); s != "Lyrics to the song" {
 		t.Fatalf("lyrics = %q", s)
 	}
 	if s, _ := tag.GetString(ItemKeyComment); s != "Comment" {
 		t.Fatalf("comment = %q", s)
+	}
+	found = false
+	for _, item := range tag.Items() {
+		if item.Description == "Fanpage" {
+			if s, ok := item.Value().Locator(); ok && s == "https://www.myfanpage.com" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("WXXX url missing or still NUL-terminated")
 	}
 }
 
@@ -903,5 +1136,114 @@ func TestIssue36(t *testing.T) {
 	}
 	if len(p.Data()) != 200 {
 		t.Fatalf("pic data len = %d", len(p.Data()))
+	}
+}
+
+// Ported from id3/v2/read.rs::zero_size_id3v2 — a header-only tag parses fine
+// under Strict.
+func TestId3v2ZeroSize(t *testing.T) {
+	po := NewParseOptions()
+	po.ParsingMode = ParsingModeStrict
+	tag := readId3v2File(t, id3v2TestAsset("zero.id3v2"), po)
+	if tag == nil {
+		t.Fatal("expected a tag")
+	}
+}
+
+// Ported from id3/mod.rs::find_id3v2_seek_back — on failure the reader must be
+// restored to its original position.
+func TestFindId3v2SeekBack(t *testing.T) {
+	var data [32]byte
+	// Bury the tag in junk
+	copy(data[20:], "ID3")
+
+	r := bytes.NewReader(data[:])
+	if _, err := r.Seek(5, 0); err != nil {
+		t.Fatal(err)
+	}
+	_, _, found, err := findId3v2(r, true, NewParseOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found {
+		t.Fatal("found a tag in junk")
+	}
+	if pos, _ := r.Seek(0, 1); pos != 5 {
+		t.Fatalf("position = %d, want 5 (seek back)", pos)
+	}
+}
+
+// Ported from src/id3/v2/tag/tests.rs::tipl_round_trip — mapped TIPL pairs
+// convert to generic items; unmapped pairs are held back and merge into a
+// single TIPL frame on write. TMCL has no ItemKey mappings, so all of its
+// pairs are held back and re-emitted as TMCL (v2.4) or merged into IPLS (v2.3).
+func TestTiplRoundTrip(t *testing.T) {
+	// Build a v2.4 tag: TIPL with all mapped roles + one unmapped pair, and a
+	// TMCL frame.
+	var content bytes.Buffer
+	writeFrame := func(id, body string) {
+		content.WriteString(id)
+		sz := synchsafe32(uint32(len(body)))
+		content.Write(sz[:])
+		content.Write([]byte{0, 0}) // flags
+		content.WriteString(body)
+	}
+	tiplBody := "\x03" + strings.Join([]string{
+		"producer", "Serial-ATA", "arranger", "Serial-ATA", "engineer", "Serial-ATA",
+		"DJ-mix", "Serial-ATA", "mix", "Serial-ATA", "Foo", "Bar",
+	}, "\x00")
+	writeFrame("TIPL", tiplBody)
+	writeFrame("TMCL", "\x03guitar\x00Serial-ATA")
+
+	var tagBytes bytes.Buffer
+	tagBytes.WriteString("ID3\x04\x00\x00")
+	ss := synchsafe32(uint32(content.Len()))
+	tagBytes.Write(ss[:])
+	tagBytes.Write(content.Bytes())
+
+	tag := id3v2Reparse(t, tagBytes.Bytes(), NewParseOptions())
+
+	// All 5 mapped roles are generic items
+	for _, k := range []ItemKey{ItemKeyProducer, ItemKeyArranger, ItemKeyEngineer, ItemKeyMixDj, ItemKeyMixEngineer} {
+		if s, ok := tag.GetString(k); !ok || s != "Serial-ATA" {
+			t.Fatalf("key %v = %q (ok=%v)", k, s, ok)
+		}
+	}
+	// "Foo" (TIPL) and "guitar" (TMCL) are held back — not generic items
+	if tag.Len() != 7 {
+		t.Fatalf("len = %d, want 7 (5 mapped + TIPL + TMCL hold-backs)", tag.Len())
+	}
+
+	// Round-trip: the unmapped pairs merge back into single frames.
+	re := id3v2Reparse(t, id3v2Dump(t, tag, false), NewParseOptions())
+	if re.Len() != 7 {
+		t.Fatalf("re-read len = %d, want 7", re.Len())
+	}
+
+	// v2.3 write merges TIPL+TMCL into IPLS; on re-read both unmapped pairs
+	// collapse into a single TIPL hold-back (Rust-identical).
+	re23 := id3v2Reparse(t, id3v2Dump(t, tag, true), NewParseOptions())
+	if re23.Len() != 6 {
+		t.Fatalf("v2.3 re-read len = %d, want 6 (5 mapped + 1 merged hold-back)", re23.Len())
+	}
+	var held []string
+	for _, it := range re23.Items() {
+		if it.Key() == ItemKeyUnknown && it.Description == "TIPL" {
+			if b, ok := it.Value().IntoBinary(); ok && len(b) > 0 {
+				held = splitNulls(string(b[1:]))
+			}
+		}
+	}
+	for _, want := range []string{"Foo", "Bar", "guitar", "Serial-ATA"} {
+		found := false
+		for _, h := range held {
+			if h == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("held-back pairs missing %q: %v", want, held)
+		}
 	}
 }

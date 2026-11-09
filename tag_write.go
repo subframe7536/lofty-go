@@ -18,7 +18,10 @@ func writeTag(tag *Tag, file *verifiedFile, writeOptions WriteOptions) error {
 	if format.kind == fileTypeCustom {
 		return &FileEncodingError{Source: &UnsupportedTagError{}}
 	}
-	if format.TagSupport(tag.tagType) == TagSupportUnsupported {
+	support := format.TagSupport(tag.tagType)
+	// Rust tag_ext::save_to: empty tag writes are allowed for read-only
+	// formats, since they'll be stripped; non-empty writes are rejected.
+	if support == TagSupportUnsupported || (!support.IsWritable() && !tag.IsEmpty()) {
 		return &FileEncodingError{Source: &UnsupportedTagError{}}
 	}
 	if w, ok := formatWriters[format.kind]; ok {

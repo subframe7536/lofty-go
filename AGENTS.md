@@ -43,7 +43,8 @@ unexported helpers, so files stay grouped by name prefix, not directories:
 
 Manual code is used wherever Lofty semantics diverge from the dependency
 (e.g. `id3v2TextFrameNoTerm`, `popmFramer`, `urlFramer`, `wxxxFramer` custom
-Framers in `tag_id3v2.go`, and the whole Ogg page-rebuild writer).
+Framers in `tag_id3v2.go`, `id3v2ManualDescFrame` for description-terminated
+UTF-16 frames bogem corrupts, and the whole Ogg page-rebuild writer).
 
 ## Port-parity rules that matter
 
@@ -91,10 +92,12 @@ most debugging:
 
 ## Known gaps (see TODO.md)
 
-4 skipped ID3v2 tests where bogem's model can't express Rust semantics
-(PCST "0" round-trip, empty v2.3 tag, undersized-frame recovery, one
-trailing-NUL case). A manual v2.3/v2.4 frame walker (like the existing
-v2.2 path at `tag_id3v2.go:1700+`) would close them.
+None currently — the former ID3v2 bogem-delegation gaps were closed by a
+manual v2.3/v2.4 frame walker (`id3v2SanitizeTag` in `tag_id3v2.go`,
+mirroring Rust `ParsedFrame::read`) plus `id3v2Serialize` (empty-tag
+headers + `PreferredPadding`). MP4 writes update `stco`/`co64`/`tfhd`
+chunk offsets via `mp4UpdateChunkOffsets` in `format_mp4.go` (Rust
+`AtomWriterCompanion::update_offsets` parity).
 
 ## Conventions
 

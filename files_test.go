@@ -1,9 +1,11 @@
 package lofty
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // noProps is ParseOptions with ReadProperties disabled.
@@ -136,6 +138,12 @@ func TestMpegReadJunkBetweenFrames(t *testing.T) {
 	id3v1 := tf.Tags()[1]
 	if s, _ := id3v1.GetString(ItemKeyTrackArtist); s != "artist test" {
 		t.Fatalf("unexpected id3v1 artist %q", s)
+	}
+	if s, _ := id3v1.GetString(ItemKeyAlbumTitle); s != "album test" {
+		t.Fatalf("unexpected id3v1 album %q", s)
+	}
+	if s, _ := id3v1.GetString(ItemKeyTrackTitle); s != "title test" {
+		t.Fatalf("unexpected id3v1 title %q", s)
 	}
 }
 
@@ -309,4 +317,94 @@ func mustOpen(t *testing.T, path string) *os.File {
 		t.Fatalf("failed to open %s: %v", path, err)
 	}
 	return f
+}
+
+// tests/fuzz/*_read_from.rs — every corpus file must be readable without a
+// panic or an unbounded hang (Rust `oom_test` gives each read 3 seconds).
+func TestFuzzCorpusReadFrom(t *testing.T) {
+	base := filepath.Join("lofty-rs", "lofty", "tests", "fuzz", "assets")
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		t.Skip("fuzz corpus missing:", err)
+	}
+	readers := map[string]func(*os.File, ParseOptions) error{
+		"aacfile_read_from":     func(f *os.File, po ParseOptions) error { _, e := AacFileReadFrom(f, po); return e },
+		"aifffile_read_from":    func(f *os.File, po ParseOptions) error { _, e := AiffFileReadFrom(f, po); return e },
+		"apefile_read_from":     func(f *os.File, po ParseOptions) error { _, e := ApeFileReadFrom(f, po); return e },
+		"flacfile_read_from":    func(f *os.File, po ParseOptions) error { _, e := FlacFileReadFrom(f, po); return e },
+		"mp4file_read_from":     func(f *os.File, po ParseOptions) error { _, e := Mp4FileReadFrom(f, po); return e },
+		"mpcfile_read_from":     func(f *os.File, po ParseOptions) error { _, e := MusepackFileReadFrom(f, po); return e },
+		"mpegfile_read_from":    func(f *os.File, po ParseOptions) error { _, e := MpegFileReadFrom(f, po); return e },
+		"opusfile_read_from":    func(f *os.File, po ParseOptions) error { _, e := OggOpusFileReadFrom(f, po); return e },
+		"speexfile_read_from":   func(f *os.File, po ParseOptions) error { _, e := OggSpeexFileReadFrom(f, po); return e },
+		"vorbisfile_read_from":  func(f *os.File, po ParseOptions) error { _, e := OggVorbisFileReadFrom(f, po); return e },
+		"wavfile_read_from":     func(f *os.File, po ParseOptions) error { _, e := WavFileReadFrom(f, po); return e },
+		"wavpackfile_read_from": func(f *os.File, po ParseOptions) error { _, e := WavPackFileReadFrom(f, po); return e },
+		"pictureinformation_from_png": func(f *os.File, _ ParseOptions) error {
+			data, e := io.ReadAll(f)
+			if e != nil {
+				return e
+			}
+			_, e = PictureInformationFromPNG(data)
+			return e
+		},
+		"pictureinformation_from_jpeg": func(f *os.File, _ ParseOptions) error {
+			data, e := io.ReadAll(f)
+			if e != nil {
+				return e
+			}
+			_, e = PictureInformationFromJPEG(data)
+			return e
+		},
+	}
+	count := 0
+	for _, dir := range entries {
+		if !dir.IsDir() {
+			continue
+		}
+		read, ok := readers[dir.Name()]
+		if !ok {
+			continue // id3v2 corpus: concrete frame parse, covered by bogem
+		}
+		files, err := os.ReadDir(filepath.Join(base, dir.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, fe := range files {
+			path := filepath.Join(base, dir.Name(), fe.Name())
+			count++
+			done := make(chan any, 1)
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						done <- r
+						return
+					}
+					done <- nil
+				}()
+				f, err := os.Open(path)
+				if err != nil {
+					done <- err
+					return
+				}
+				defer f.Close()
+				_ = read(f, NewParseOptions()) // errors are fine; only panic/hang fail
+			}()
+			select {
+			case r := <-done:
+				if r != nil {
+					if err, ok := r.(error); ok {
+						t.Errorf("%s: %v", path, err)
+					} else {
+						t.Errorf("%s: panic %v", path, r)
+					}
+				}
+			case <-time.After(3 * time.Second):
+				t.Errorf("%s: read did not finish within 3s (oom_test parity)", path)
+			}
+		}
+	}
+	if count == 0 {
+		t.Skip("fuzz corpus empty")
+	}
 }

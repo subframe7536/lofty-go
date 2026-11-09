@@ -175,15 +175,39 @@ func (t *ApeTag) Item(key string) (*ApeItem, bool) {
 	return nil, false
 }
 
-// Push adds an item to the tag, replacing any with the same key.
+// Push appends an item to the tag. If an item with the same key exists and
+// both values are the same text-based variant (text or locator), the value is
+// merged with a NUL separator; otherwise the existing item is replaced
+// (Rust `ApeTag::push`).
 func (t *ApeTag) Push(item *ApeItem) {
-	for i, existing := range t.items {
-		if strings.EqualFold(existing.Key, item.Key) {
-			t.items[i] = item
+	for _, existing := range t.items {
+		if !strings.EqualFold(existing.Key, item.Key) {
+			continue
+		}
+		eText, eOk := existing.Value.IntoString()
+		nText, nOk := item.Value.IntoString()
+		if eOk && nOk && existing.Value.kind == item.Value.kind {
+			existing.Value = itemValueFromKind(item.Value.kind, eText+"\x00"+nText)
 			return
 		}
+		*existing = *item
+		return
 	}
 	t.items = append(t.items, item)
+}
+
+// insert removes any item with the same key, then appends (Rust
+// `ApeTag::insert`).
+func (t *ApeTag) insert(item *ApeItem) {
+	t.Remove(item.Key)
+	t.items = append(t.items, item)
+}
+
+func itemValueFromKind(kind itemValueKind, text string) ItemValue {
+	if kind == itemValueLocator {
+		return ItemValueLocator(text)
+	}
+	return ItemValueText(text)
 }
 
 // Insert inserts a generic [TagItem]. Pictures are stored for APE_PICTURE_TYPES keys.
@@ -277,7 +301,7 @@ func (t *ApeTag) GetText(key string) (string, bool) {
 // SetText replaces an item's text value (invalid keys are ignored).
 func (t *ApeTag) SetText(key, value string) {
 	if item, err := NewApeItem(key, ItemValueText(value)); err == nil {
-		t.Push(item)
+		t.insert(item)
 	}
 }
 
@@ -471,22 +495,31 @@ func (t *ApeTag) Tag() *Tag {
 			continue
 		}
 		ik := itemKeyOrUnknown(TagTypeApe, item.Key)
-		// "Track"/"Disc" items may hold "N/T" pairs; split them
-		if text, ok := item.Value.IntoString(); ok {
-			var curKey, totKey ItemKey
-			switch ik {
-			case ItemKeyTrackNumber, ItemKeyTrackTotal:
-				curKey, totKey = ItemKeyTrackNumber, ItemKeyTrackTotal
-			case ItemKeyDiscNumber, ItemKeyDiscTotal:
-				curKey, totKey = ItemKeyDiscNumber, ItemKeyDiscTotal
-			}
-			if totKey != 0 || ik == ItemKeyTrackNumber {
-				parts := strings.SplitN(text, "/", 2)
-				tag.PushUnchecked(NewTagItem(curKey, ItemValueText(parts[0])))
-				if len(parts) > 1 {
-					tag.PushUnchecked(NewTagItem(totKey, ItemValueText(parts[1])))
+		if ik != ItemKeyUnknown {
+			if text, ok := item.Value.IntoString(); ok {
+				var curKey, totKey ItemKey
+				switch ik {
+				case ItemKeyTrackNumber, ItemKeyTrackTotal:
+					curKey, totKey = ItemKeyTrackNumber, ItemKeyTrackTotal
+				case ItemKeyDiscNumber, ItemKeyDiscTotal:
+					curKey, totKey = ItemKeyDiscNumber, ItemKeyDiscTotal
 				}
-				continue
+				// "Track"/"Disc" items may hold "N/T" pairs; split them
+				if totKey != 0 {
+					parts := strings.SplitN(text, "/", 2)
+					tag.PushUnchecked(NewTagItem(curKey, ItemValueText(parts[0])))
+					if len(parts) > 1 {
+						tag.PushUnchecked(NewTagItem(totKey, ItemValueText(parts[1])))
+					}
+					continue
+				}
+				// Multi-value text/locator items split on NUL (Rust `split_tag`)
+				if strings.Contains(text, "\x00") {
+					for _, value := range strings.Split(text, "\x00") {
+						tag.PushUnchecked(NewTagItem(ik, itemValueFromKind(item.Value.kind, value)))
+					}
+					continue
+				}
 			}
 		}
 		tagItem := NewTagItem(ik, item.Value)
@@ -550,21 +583,6 @@ var apeNumberPairKeys = map[ItemKey]bool{
 	ItemKeyDiscNumber: true, ItemKeyDiscTotal: true,
 }
 
-// apeFormatNumberPair formats an optional number/total pair ("N", "N/T", "0/T").
-func apeFormatNumberPair(number, total Option[string]) Option[string] {
-	n, hasN := number.Get()
-	tot, hasT := total.Get()
-	switch {
-	case hasN && !hasT:
-		return Some(n)
-	case !hasN && hasT:
-		return Some("0/" + tot)
-	case hasN && hasT:
-		return Some(n + "/" + tot)
-	}
-	return None[string]()
-}
-
 // TagFromApe converts a generic [Tag] to an [ApeTag].
 func ApeTagFromTag(input *Tag) *ApeTag {
 	apeTag := NewApeTag()
@@ -579,19 +597,24 @@ func ApeTagFromTag(input *Tag) *ApeTag {
 		{ItemKeyTrackNumber, ItemKeyTrackTotal},
 		{ItemKeyDiscNumber, ItemKeyDiscTotal},
 	} {
-		n, _ := input.GetString(pair[0])
-		tot, _ := input.GetString(pair[1])
-		var nOpt, tOpt Option[string]
-		if input.Contains(pair[0]) {
-			nOpt = Some(n)
+		parseNum := func(key ItemKey) Option[uint32] {
+			for _, item := range input.GetItems(key) {
+				if text, ok := item.Value().IntoString(); ok {
+					if n, err := strconv.ParseUint(strings.TrimSpace(text), 10, 32); err == nil {
+						return Some(uint32(n))
+					}
+				}
+				// Rust `set_number` skips unparseable text
+				return None[uint32]()
+			}
+			return None[uint32]()
 		}
-		if input.Contains(pair[1]) {
-			tOpt = Some(tot)
+		n, tot := parseNum(pair[0]), parseNum(pair[1])
+		if n.IsNone() && tot.IsNone() {
+			continue
 		}
-		if v, ok := apeFormatNumberPair(nOpt, tOpt).Get(); ok {
-			key, _ := pair[0].MapKey(TagTypeApe)
-			apeTag.Push(&ApeItem{Key: key, Value: ItemValueText(v)})
-		}
+		key, _ := pair[0].MapKey(TagTypeApe)
+		apeTag.insertNumberPair(key, n, tot)
 	}
 	for _, pic := range input.Pictures() {
 		if key, ok := pic.PicType().AsApeKey(); ok {
@@ -696,7 +719,7 @@ func readApeTagWithHeader(reader io.ReadSeeker, header *ApeHeader, parseOptions 
 			return nil, err
 		}
 		remainingSize -= valueSize
-		tag.Push(item)
+		tag.insert(item)
 	}
 	if _, err := reader.Seek(32, io.SeekCurrent); err != nil {
 		return nil, &ApeTagParseError{Source: err}
@@ -1241,8 +1264,13 @@ func (f *ApeFile) ContainsTagType(tagType TagType) bool {
 }
 
 // Tags implements TaggedFileAccessor-style conversion via TaggedFileFromFile.
+// TaggedFile converts to a [TaggedFile]. Tag order follows the Rust struct
+// declaration order: ID3v1, ID3v2, Ape (both APE variants share one slot).
 func (f *ApeFile) TaggedFile() *TaggedFile {
 	var tags []*Tag
+	if t, ok := f.ID3v1.Get(); ok {
+		tags = append(tags, t.Tag())
+	}
 	if t, ok := f.ID3v2.Get(); ok {
 		tags = append(tags, t)
 	}
@@ -1250,9 +1278,6 @@ func (f *ApeFile) TaggedFile() *TaggedFile {
 		tags = append(tags, t.Tag())
 	}
 	if t, ok := f.APEv1.Get(); ok {
-		tags = append(tags, t.Tag())
-	}
-	if t, ok := f.ID3v1.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
 	return NewTaggedFile(FileTypeApe, tags, *f.GetProperties())

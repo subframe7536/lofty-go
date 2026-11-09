@@ -38,7 +38,7 @@ grouped by prefix:
 |-----------|:----:|:-----:|------------------------|---------------------------------|
 | MPEG (MP3)|  ✅  |  ✅   | `mpeg/`                | `files/mpeg.rs` — 6 tests ✅    |
 | ID3v1     |  ✅  |  ✅   | `id3/v1/`              | covered by mpeg/ape tests       |
-| ID3v2     |  ✅  |  ✅   | `id3/v2/` (bogem)      | `id3v2_tag_test.go` — 41 pass, 4 known-gap skips |
+| ID3v2     |  ✅  |  ✅   | `id3/v2/` (bogem)      | `id3v2_tag_test.go` — 45+ pass, no skips |
 | Lyrics3   |  ✅  |  ✅   | `id3/lyrics3/`         | `lyrics3_test.go` — 13 ✅      |
 | APE file  |  ✅  |  ✅   | `ape/`                 | `files/ape.rs` — 2 tests ✅     |
 | APE tag   |  ✅  |  ✅   | `ape/tag/`             | covered by mpeg/ape tests       |
@@ -111,19 +111,92 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | `lyrics3/v1` + `v2`         | 13       | ✅ `Lyrics3Tag` (v1) + `Lyrics3v2Tag` (v2) concrete models on `MpegFile`; IND flags, IMG images (`filename\|\|desc\|\|[mm:ss]`), field truncation limits, strict/lenient parse modes, companion round-trip, 0xFF char rejection, reverse-search `findLyrics3` |
 | `id3/v2/header.rs`          | 6        | ✅ `Id3v2Header` extended-header fields (`ExtendedSize`, `Crc`, `Restrictions`/`TagRestrictions`); v3 CRC + v4 restriction parsing; strict/best-attempt malformed-header tests |
 | `util/text.rs`              | 2        | ✅ UTF-16 decode (BOM/BE/LE/no-BOM), UTF-16/UTF-8 encode |
-| `id3/v2/tag/tests.rs`       | 45       | ✅ 41 pass, 4 skipped known-gaps (below). `from_tag` merge matrix ported: multi-TXXX keys merge `\0` by desc, ReplayGain last-wins, COMM/USLT merge `\0` by (lang,desc), generic `T*` merge `\0` by frame ID, TBPM/`W*`/flags/UFID/POPM dedup first-wins (POPM by email, UFID by owner, TXXX by desc), flags normalized to 0/1, ITUNESADVISORY validated u8→AdvisoryRating, MB-recording-id ASCII check, Movement\*→MVIN text-merge (nonstandard frame IDs), `0/total` pair defaults. Parse side: COMM/USLT `\0`-split + lang, TXXX empty-desc retained as binary, unknown `T*` frames decoded as text, invalid timestamps retained, pair frames retained on `split_pair` failure |
+| `id3/v2/tag/tests.rs`       | 45       | ✅ all passing (see below). `from_tag` merge matrix ported: multi-TXXX keys merge `\0` by desc, ReplayGain last-wins, COMM/USLT merge `\0` by (lang,desc), generic `T*` merge `\0` by frame ID, TBPM/`W*`/flags/UFID/POPM dedup first-wins (POPM by email, UFID by owner, TXXX by desc), flags normalized to 0/1, ITUNESADVISORY validated u8→AdvisoryRating, MB-recording-id ASCII check, Movement\*→MVIN text-merge (nonstandard frame IDs), `0/total` pair defaults. Parse side: COMM/USLT `\0`-split + lang, TXXX empty-desc retained as binary, unknown `T*` frames decoded as text, invalid timestamps retained, pair frames retained on `split_pair` failure |
 
-## Known gaps (skipped tests — bogem delegation limits)
+## Behavioral parity fixes (test-audit, round 2)
 
-- `TestFlagItemConversion` (PCST): flag value `"0"` doesn't round-trip through
-  bogem's frame handling.
-- `TestRemoveId3v24FramesOnId3v23Save`: when every frame is discarded for
-  v2.3 output, bogem serializes < 10 bytes (no valid empty-tag header).
-- `TestUndersizedFrames`: Rust's frame walker skips undersized COMM and
-  reaches trailing TPE1; bogem's parse aborts — a manual v2.3/v2.4 frame
-  walk (like the v2.2 path) would be needed for full parity.
-- `TestTrimEndNullsWhenReadingFrameContent`: trailing-NUL trim not applied
-  to the `TEXT` (writer) frame's decoded text.
+Second-pass audit (matching `#[test_log::test]` — the first pass missed the
+entire `tests/` tree) surfaced two real bugs and more ported coverage:
+
+- **bogem `ReadText` UTF-16 bug**: `bufReader.ReadText` reads one byte past
+  the `00 00` terminator for encoding 1 (and can detect a misaligned
+  terminator for encoding 2), corrupting whatever field follows the
+  description — APIC picture data lost its first byte, COMM/USLT/TXXX text
+  lost its BOM. `id3v2SanitizeTag` now holds APIC/COMM/USLT/TXXX frames with
+  encoding ∈ {1,2} out of bogem and `id3v2ManualDescFrame` converts them
+  (same conversions as the bogem cases, BOM-aware pair-aligned terminator
+  scan per Rust `read_to_terminator`).
+- **Tag order in `TaggedFile()`**: AAC (`[ID3v2, ID3v1]` not `[ID3v1,
+  ID3v2]`), MPEG (APE was second; now ID3v2→ID3v1→Lyrics3→Lyrics3v2→APE),
+  APE (`[ID3v1, ID3v2, APEv2, APEv1]`), FLAC (`[ID3v2, VC]`), MPC
+  (`[ID3v2, ID3v1, APE]`) — now all follow the Rust struct declaration
+  order, which `tags()[0]` assertions rely on.
+- **Fuzz corpus sweep**: `TestFuzzCorpusReadFrom` replays all ~55 files in
+  `tests/fuzz/assets/` through each format's `ReadFrom` — panics recovered
+  per file, 3-second bound per Rust `oom_test`.
+- Ported/extended: `TestTaglibId3v2SaveStripNoId3v1Migration` (empty tag →
+  splice-removal, no ID3v1 migration), `TestTaglibId3v2ParseApicUtf16Bom`,
+  synchdata `test_decode{1..4}` cases, `mac-399-id3v2.ape` properties
+  variant, AAC junk-between-frames EncoderSettings + ID3v1 album/title.
+
+## Behavioral parity fixes (test-audit driven)
+
+Audit method: every `#[test]` in `lofty-rs/` cross-referenced against Go
+tests (word-set matching); non-ignored unmatched tests were ported or
+classified. Divergences found and fixed:
+
+- **APIC empty description**: parsed APIC desc now uses Rust `text_or_none`
+  — empty → `None`, not `Some("")`.
+- **APE numbers**: `ApeTagFromTag` normalizes N/T pairs via `Insert` (Rust
+  `set_number`) — unparseable/empty values are dropped, not kept verbatim.
+- **APE push/insert/split**: `ApeTag.Push` merges same-type text values
+  with `\0` (Rust `push`); `Insert`/setters replace (Rust `insert`);
+  `ApeTag.Tag()` splits `\0` text into multiple items for mapped keys.
+- **ilst `intPayload`**: signed ints always 4 bytes, unsigned never emits
+  3 bytes (Rust `bytes_to_occupy_uint` semantics).
+- **TIPL/TMCL** (`tag_id3v2.go`): supported TIPL roles map to generic
+  items; unmapped pairs held back as `ItemKeyUnknown` binary items
+  (desc `TIPL`/`TMCL`). TMCL is fully retained (Rust never maps it).
+  v2.4 writes TIPL+TMCL separately; v2.3 merges both into `IPLS`.
+- **`TaggedFile.Save`**: `ConflictingTagError` on conflicting tag types
+  (Rust `tagged_file.rs:443`); non-writable tags skipped per TagSupport.
+- **`writeTag`**: read-only TagSupport rejects non-empty writes (Rust
+  `tag_ext::save_to`) — e.g. FLAC + ID3v2.
+- **`FlacFile.SaveFile`**: `None` VC field + no pictures → no-op (Rust
+  `write_to` parity — removal is in-memory only, disk block survives).
+- **APE/ID3v1 collision**: Rust `test_id3v1_collision` is `#[ignore]`d
+  upstream ("we currently fall for this collision") — Go matches the
+  false-positive; not a defect.
+
+Tests ported beyond those above: `TestTiplRoundTrip`,
+`TestPopmCustomProvider` (global set-once provider; placed in
+`taglib_test.go` so all other POPM reads run first),
+`TestTaglibMp4PropertiesWithoutBitrate` (zeroed-bitrate fallback),
+`TestTaglibMp4ZeroLengthAtom`, `TestLyrics3v1Remove` + vacuous-assertion
+fix in the v2 variant, `TestLyrics3TagsConflict`,
+`TestLyrics3v2RequiresId3v1`, `TestId3v2Full` (v2.2/2.3/2.4 fixtures),
+`TestFlacStripTags`, `TestFlacRemoveId3v2`/`TestFlacWriteId3v2ReadOnly`,
+`TestOpusIssue499` (real asserts incl. unmapped `track=a5` item) +
+vinyl variant, WAV/AIFF `growing_trailing_id3v2_updates_stream_size`,
+`TestTagSaveWithParseOptions` (MaxJunkBytes), APE header-only/footer-only
+parse tests, `TestSpecialItemsRoundtrip` (RVA2), `TestReadSv5`
+(3-tag MPC), `TestIoSaveToVec`, FLAC preferred-padding ×4,
+`integer_shrinking` ilst test, `retain_known_idents`, `zero_size_id3v2`,
+`find_id3v2_seek_back`, ID3v1 parse/re-read/convert/year suite.
+
+## Formerly-known gaps (now closed)
+
+- `TestFlagItemConversion` (PCST): flag value `"0"` round-trips — the manual
+  v2.3/v2.4 frame walker decodes textual unknown frames such as `PCST` and
+  maps them via the standard key map.
+- `TestRemoveId3v24FramesOnId3v23Save`: `id3v2Serialize` emits a bare
+  10-byte ID3 header when every frame is discarded for v2.3 output (Rust
+  `dump_to` parity).
+- `TestUndersizedFrames`: the manual frame walker (`id3v2SanitizeTag`)
+  enforces Rust's `ParsedFrame::read` semantics — undersized/invalid frames
+  are skipped in relaxed mode and parsing continues to later frames.
+- `TestTrimEndNullsWhenReadingFrameContent`: trailing-NUL trim applies and
+  the TXXX `"Writer"` description maps to `ItemKeyWriter`.
 
 ## Not ported (Rust-internal, no portable equivalent)
 
@@ -136,9 +209,15 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 
 ## Notes
 
-- `bogem/id3v2` lacks ID3v2 padding support — tags are written without
-  `WriteOptions.PreferredPadding` for now.
+- ID3v2 padding: `id3v2Serialize` appends `WriteOptions.PreferredPadding`
+  (Rust `verify_tag_size`: `min(padding, SYNCHSAFE_MAX - len)`).
 - ID3v2 unknown frames round-trip as `ItemKeyUnknown` binary items keyed by
   frame ID in `TagItem.Description`.
 - ~~`Lyrics3v2` write path~~ — implemented (before ID3v1, replace/strip).
-- MP4 write replaces/creates `ilst` but does not relocate `mdat`/`moov`.
+- MP4 write replaces/creates `ilst` and relocates chunk offsets — Rust's
+  `update_offsets`: after a size-changing splice, `stco`/`co64` entries and
+  `moof`/`tfhd` base offsets at/after the edit point shift by the delta
+  (`mp4UpdateChunkOffsets`). Created `udta`/`meta` atoms go at their
+  parent's data start like Rust; `free`-atom padding (0x01-filled) absorbs
+  shrinkage ≥8 or replaces a removed `ilst` when padding is enabled;
+  non-full `meta` atoms are detected (`mp4MetaIsFull`).

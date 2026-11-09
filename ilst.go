@@ -5,9 +5,10 @@ package lofty
 import (
 	"bytes"
 	"encoding/binary"
-	"unicode/utf8"
 	"io"
+	"math"
 	"strings"
+	"unicode/utf8"
 )
 
 // AtomDataKind identifies the payload variant of an [AtomData], mirroring
@@ -471,20 +472,27 @@ func encodeIlst(ilst *Ilst) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-// intPayload packs a big-endian integer in the smallest of 1/2/4/8 bytes and
-// returns the matching data-type code (21 signed / 22 unsigned BE).
+// intPayload packs a big-endian integer following Rust's writers: signed ints
+// are always 4 bytes (`write_signed_int`), unsigned ints occupy the smallest
+// of 1/2/4 bytes (`bytes_to_occupy_uint` — 3-byte values round up to 4).
 func intPayload(v int64, signed bool) (uint8, []byte) {
-	code := uint8(22)
-	if signed {
-		code = 21
-	}
 	var b [8]byte
 	binary.BigEndian.PutUint64(b[:], uint64(v))
+	if signed {
+		// Rust stores i32; wider Go values take 8 bytes (unrepresentable in Rust)
+		if v > math.MaxInt32 || v < math.MinInt32 {
+			return 21, append([]byte(nil), b[:]...)
+		}
+		return 21, append([]byte(nil), b[4:]...)
+	}
 	out := b[:]
-	for len(out) > 1 && out[0] == 0 && (!signed || out[1]&0x80 == 0) {
+	for len(out) > 1 && out[0] == 0 {
 		out = out[1:]
 	}
-	return code, out
+	if len(out) == 3 {
+		out = b[4:]
+	}
+	return 22, append([]byte(nil), out...)
 }
 
 func u16FromStringOpt(s string) Option[uint16] {

@@ -3,9 +3,11 @@ package lofty
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -104,6 +106,52 @@ func TestWavRemoveRiffInfo(t *testing.T) {
 	removeTagTest(t, testAsset("minimal", "wav_format_pcm.wav"), TagTypeRiffInfo)
 }
 
+// Ported from wav.rs::growing_trailing_id3v2_updates_stream_size — when a
+// trailing ID3v2 grows the file, the RIFF chunk size must be updated.
+func TestWavGrowingTrailingId3v2UpdatesStreamSize(t *testing.T) {
+	f := tempFile(t, testAsset("minimal", "wav_format_pcm.wav"))
+	defer f.Close()
+
+	vf, err := newVerifiedFile(NewOSFile(f), NewParseOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := removeTag(TagTypeRiffInfo, vf, NewWriteOptions()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	btf, err := NewProbe(f).Options(noProps).ReadBound(NewOSFile(f))
+	if err != nil {
+		t.Fatalf("read_bound failed: %v", err)
+	}
+	tag := btf.Tag(TagTypeID3v2)
+	if tag == nil {
+		t.Fatal("expected an ID3v2 tag")
+	}
+	tag.SetArtist(strings.Repeat("A much longer artist name", 100))
+	if err := btf.Save(NewWriteOptions()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	var hdr [8]byte
+	if _, err := io.ReadFull(f, hdr[:]); err != nil {
+		t.Fatal(err)
+	}
+	fileLen, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := int64(binary.LittleEndian.Uint32(hdr[4:])) + 8; got != fileLen {
+		t.Fatalf("riff size + 8 = %d, want %d", got, fileLen)
+	}
+}
+
 // --- ported from lofty-rs lofty/tests/files/aiff.rs ---
 
 func TestAiffWrite(t *testing.T) {
@@ -135,6 +183,41 @@ func TestAiffRemoveTextChunks(t *testing.T) {
 
 func TestAiffRemoveId3v2(t *testing.T) {
 	removeTagTest(t, testAsset("minimal", "full_test.aiff"), TagTypeID3v2)
+}
+
+// Ported from aiff.rs::growing_trailing_id3v2_updates_stream_size — when a
+// trailing ID3v2 grows the file, the FORM chunk size must be updated.
+func TestAiffGrowingTrailingId3v2UpdatesStreamSize(t *testing.T) {
+	f := tempFile(t, testAsset("minimal", "full_test.aiff"))
+	defer f.Close()
+
+	btf, err := NewProbe(f).Options(noProps).ReadBound(NewOSFile(f))
+	if err != nil {
+		t.Fatalf("read_bound failed: %v", err)
+	}
+	tag := btf.Tag(TagTypeID3v2)
+	if tag == nil {
+		t.Fatal("expected an ID3v2 tag")
+	}
+	tag.SetArtist(strings.Repeat("A much longer artist name", 100))
+	if err := btf.Save(NewWriteOptions()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	var hdr [8]byte
+	if _, err := io.ReadFull(f, hdr[:]); err != nil {
+		t.Fatal(err)
+	}
+	fileLen, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := int64(binary.BigEndian.Uint32(hdr[4:])) + 8; got != fileLen {
+		t.Fatalf("form size + 8 = %d, want %d", got, fileLen)
+	}
 }
 
 // --- ported from lofty-rs lofty/tests/files/mp4.rs ---
@@ -475,6 +558,30 @@ func TestFlacWithId3v2(t *testing.T) {
 	}
 }
 
+// Ported from ogg.rs::flac_remove_id3v2.
+func TestFlacRemoveId3v2(t *testing.T) {
+	removeTagTest(t, testAsset("flac_with_id3v2.flac"), TagTypeID3v2)
+}
+
+// Ported from ogg.rs::flac_try_write_non_empty_id3v2 — ID3v2 is read-only in
+// FLAC, so only removal (empty tag writes) is permitted.
+func TestFlacTryWriteNonEmptyId3v2(t *testing.T) {
+	tag := NewTag(TagTypeID3v2)
+	tag.InsertText(ItemKeyTrackArtist, "Foo artist")
+
+	data, err := os.ReadFile(testAsset("flac_with_id3v2.flac"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "flac_with_id3v2.flac")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := tag.SaveToPath(path, NewWriteOptions()); err == nil {
+		t.Fatal("expected an error writing a non-empty ID3v2 tag to a FLAC file")
+	}
+}
+
 func TestFlacStreamInfoLast(t *testing.T) {
 	// STREAMINFO may appear after other metadata blocks
 	file := probeRead(t, testAsset("stream_info_last.flac"), NewParseOptions())
@@ -490,6 +597,217 @@ func TestFlacApplicationBlockLast(t *testing.T) {
 	file := probeRead(t, testAsset("application_block_last.flac"), NewParseOptions())
 	if !file.FileType().Equal(FileTypeFlac) {
 		t.Fatalf("expected Flac, got %s", file.FileType())
+	}
+}
+
+// --- Ports of tests/files/resize.rs FLAC padding tests ---
+
+func flacResizeTag(size int) *Tag {
+	tag := NewTag(TagTypeVorbisComments)
+	tag.SetTitle(strings.Repeat("Test", size))
+	tag.SetArtist(strings.Repeat("Serial-ATA", size))
+	tag.SetAlbum(strings.Repeat("Lofty", size))
+	tag.SetComment(strings.Repeat("Size test", size))
+	return tag
+}
+
+// flacMetadataEnd mirrors resize.rs::flac_metadata_end — returns the offset
+// after the last metadata block and the sizes of all PADDING blocks.
+func flacMetadataEnd(t *testing.T, f *os.File) (int64, []int) {
+	t.Helper()
+	if _, err := f.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data[:4]) != "fLaC" {
+		t.Fatal("missing fLaC magic")
+	}
+	var padding []int
+	offset := 4
+	for {
+		hdr := data[offset : offset+4]
+		isLast := hdr[0]&0x80 != 0
+		blockType := hdr[0] & 0x7F
+		contentLen := int(hdr[1])<<16 | int(hdr[2])<<8 | int(hdr[3])
+		if blockType == 1 {
+			padding = append(padding, contentLen)
+		}
+		offset += 4 + contentLen
+		if isLast {
+			break
+		}
+	}
+	return int64(offset), padding
+}
+
+// flacWithLargeTag mirrors resize.rs::flac_with_large_tag — writes a large
+// tag with no preferred padding to a copy of stream_info_last.flac.
+func flacWithLargeTag(t *testing.T) *os.File {
+	t.Helper()
+	f := tempFile(t, testAsset("stream_info_last.flac"))
+	wo := NewWriteOptions()
+	wo.PreferredPadding = 0
+	if err := flacResizeTag(1000).SaveTo(NewOSFile(f), wo); err != nil {
+		t.Fatalf("initial write failed: %v", err)
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// Ported from resize.rs::flac_preferred_padding_is_written_when_metadata_grows
+func TestFlacPreferredPaddingWrittenWhenMetadataGrows(t *testing.T) {
+	f := tempFile(t, testAsset("stream_info_last.flac"))
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalLen := fi.Size()
+
+	wo := NewWriteOptions()
+	wo.PreferredPadding = 16
+	if err := flacResizeTag(1000).SaveTo(NewOSFile(f), wo); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+
+	_, padding := flacMetadataEnd(t, f)
+	fi, err = f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Size() <= originalLen {
+		t.Fatalf("file len = %d, want > %d", fi.Size(), originalLen)
+	}
+	sum := 0
+	for _, p := range padding {
+		sum += p
+	}
+	if sum < 16 {
+		t.Fatalf("padding = %d, want >= 16", sum)
+	}
+
+	if _, err := f.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := FlacFileReadFrom(f, NewParseOptions()); err != nil {
+		t.Fatalf("re-read failed: %v", err)
+	}
+}
+
+// Ported from resize.rs::flac_preferred_padding_keeps_a_larger_shrink_gap
+func TestFlacPreferredPaddingKeepsLargerShrinkGap(t *testing.T) {
+	f := flacWithLargeTag(t)
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalLen := fi.Size()
+	originalMetaEnd, _ := flacMetadataEnd(t, f)
+	if _, err := f.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	wo := NewWriteOptions()
+	wo.PreferredPadding = 16
+	if err := flacResizeTag(1).SaveTo(NewOSFile(f), wo); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+
+	metaEnd, padding := flacMetadataEnd(t, f)
+	fi, err = f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Size() != originalLen {
+		t.Fatalf("file len = %d, want unchanged %d", fi.Size(), originalLen)
+	}
+	if metaEnd != originalMetaEnd {
+		t.Fatalf("metadata end = %d, want %d", metaEnd, originalMetaEnd)
+	}
+	sum := 0
+	for _, p := range padding {
+		sum += p
+	}
+	if sum <= 16 {
+		t.Fatalf("padding = %d, want > 16", sum)
+	}
+
+	if _, err := f.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := FlacFileReadFrom(f, NewParseOptions()); err != nil {
+		t.Fatalf("re-read failed: %v", err)
+	}
+}
+
+// Ported from resize.rs::flac_preferred_padding_grows_when_shrink_gap_is_smaller
+func TestFlacPreferredPaddingGrowsWhenShrinkGapIsSmaller(t *testing.T) {
+	f := flacWithLargeTag(t)
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalLen := fi.Size()
+
+	wo := NewWriteOptions()
+	wo.PreferredPadding = 100000
+	if err := flacResizeTag(1).SaveTo(NewOSFile(f), wo); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+
+	_, padding := flacMetadataEnd(t, f)
+	fi, err = f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Size() <= originalLen {
+		t.Fatalf("file len = %d, want > %d", fi.Size(), originalLen)
+	}
+	sum := 0
+	for _, p := range padding {
+		sum += p
+	}
+	if sum < 100000 {
+		t.Fatalf("padding = %d, want >= 100000", sum)
+	}
+
+	if _, err := f.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := FlacFileReadFrom(f, NewParseOptions()); err != nil {
+		t.Fatalf("re-read failed: %v", err)
+	}
+}
+
+// Ported from resize.rs::flac_without_preferred_padding_still_shrinks
+func TestFlacWithoutPreferredPaddingStillShrinks(t *testing.T) {
+	f := flacWithLargeTag(t)
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalLen := fi.Size()
+
+	wo := NewWriteOptions()
+	wo.PreferredPadding = 0
+	if err := flacResizeTag(1).SaveTo(NewOSFile(f), wo); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+
+	fi, err = f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Size() >= originalLen {
+		t.Fatalf("file len = %d, want < %d", fi.Size(), originalLen)
 	}
 }
 
@@ -514,10 +832,94 @@ func TestOggIssue37(t *testing.T) {
 	oggRead(t, testAsset("issue_37.ogg"), FileTypeVorbis)
 }
 
+// Ported from ogg.rs::opus_issue_499 — TRACKNUMBER=11/22 (<current>/<total>).
 func TestOpusIssue499(t *testing.T) {
-	file := probeRead(t, testAsset("issue_499.opus"), noProps)
-	if !file.FileType().Equal(FileTypeOpus) {
-		t.Fatalf("expected Opus, got %s", file.FileType())
+	f, err := os.Open(testAsset("issue_499.opus"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	of, err := OggOpusFileReadFrom(f, NewParseOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	vc, ok := of.VorbisComments.Get()
+	if !ok {
+		t.Fatal("no vorbis comments")
+	}
+	if track, ok := vc.Track(); !ok || track != 11 {
+		t.Fatalf("track = %v (ok=%v), want 11", track, ok)
+	}
+	if total, ok := vc.TrackTotal(); !ok || total != 22 {
+		t.Fatalf("track_total = %v (ok=%v), want 22", total, ok)
+	}
+}
+
+// Ported from ogg.rs::opus_issue_499_vinyl_track_number — TRACKNUMBER=a5
+// (vinyl format) is left for the caller, not parsed as a number.
+func TestOpusIssue499VinylTrackNumber(t *testing.T) {
+	f, err := os.Open(testAsset("issue_499_vinyl_track_number.opus"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	of, err := OggOpusFileReadFrom(f, NewParseOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	vc, ok := of.VorbisComments.Get()
+	if !ok {
+		t.Fatal("no vorbis comments")
+	}
+	if track, ok := vc.Track(); ok {
+		t.Fatalf("track = %v, want None for vinyl track number", track)
+	}
+	if s, ok := vc.Get("TRACKNUMBER"); !ok || s != "a5" {
+		t.Fatalf("TRACKNUMBER = %q (ok=%v), want a5", s, ok)
+	}
+}
+
+// Ported from tag/tests.rs::issue_130_huge_picture — an 81KB picture surpasses
+// the max Ogg page size; the comment packet must continue across pages and the
+// file must stay parseable. Rust also validates with `opusinfo`; we assert the
+// round-trip survives instead.
+func TestOpusIssue130HugePicture(t *testing.T) {
+	f := tempFile(t, testAsset("minimal", "full_test.opus"))
+	defer f.Close()
+
+	data, err := os.ReadFile(testAsset("issue_37.jpg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	picture, err := PictureFromReader(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	picture.SetPicType(PictureTypeCoverFront)
+
+	tag := NewTag(TagTypeVorbisComments)
+	tag.PushPicture(*picture)
+	if err := tag.SaveTo(NewOSFile(f), NewWriteOptions()); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+
+	if _, err := f.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	of, err := OggOpusFileReadFrom(f, NewParseOptions())
+	if err != nil {
+		t.Fatalf("file no longer parseable after huge picture write: %v", err)
+	}
+	vc, ok := of.VorbisComments.Get()
+	if !ok {
+		t.Fatal("no vorbis comments")
+	}
+	pics := vc.Pictures()
+	if len(pics) != 1 {
+		t.Fatalf("picture count = %d, want 1", len(pics))
+	}
+	if !bytes.Equal(pics[0].Picture.Data(), data) {
+		t.Fatal("picture data does not match")
 	}
 }
 
@@ -885,9 +1287,236 @@ func TestFlacPictureIsLast(t *testing.T) {
 	}
 }
 
-// Ported from mpeg.rs::stripping_id3v1_removes_lyrics3 — Lyrics3 cannot exist
-// without ID3v1.
-func TestStrippingId3v1RemovesLyrics3(t *testing.T) {
+// Ported from mpeg.rs::remove_lyrics3 / remove_lyrics3v2.
+func TestMpegRemoveLyrics3(t *testing.T) {
+	removeTagTest(t, testAsset("lyrics3.mp3"), TagTypeLyrics3)
+}
+
+func TestMpegRemoveLyrics3v2(t *testing.T) {
+	removeTagTest(t, testAsset("lyrics3v2.mp3"), TagTypeLyrics3v2)
+}
+
+// Ported from mpeg.rs::lyrics3_tags_conflict — Lyrics3 and Lyrics3v2 cannot
+// co-exist; saving a TaggedFile containing both must fail.
+func TestLyrics3TagsConflict(t *testing.T) {
+	conflictErr := func(t *testing.T, f *os.File, have, insert TagType) {
+		t.Helper()
+		btf, err := NewProbe(f).Options(noProps).ReadBound(NewOSFile(f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !btf.ContainsTag(have) {
+			t.Fatalf("expected a %s tag", have)
+		}
+		btf.InsertTag(NewTag(insert))
+		err = btf.Save(NewWriteOptions())
+		if err == nil {
+			t.Fatalf("expected a conflicting-tag error saving %s + %s", have, insert)
+		}
+		var cte *ConflictingTagError
+		if !errors.As(err, &cte) && !strings.Contains(err.Error(), "conflicts with") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+
+	f := tempFile(t, testAsset("lyrics3v2.mp3"))
+	defer f.Close()
+	conflictErr(t, f, TagTypeLyrics3v2, TagTypeLyrics3)
+
+	f2 := tempFile(t, testAsset("lyrics3.mp3"))
+	defer f2.Close()
+	conflictErr(t, f2, TagTypeLyrics3, TagTypeLyrics3v2)
+}
+
+// Ported from mpeg.rs::lyrics3_requires_id3v1 — a Lyrics3 tag can only be
+// saved to a file that contains an ID3v1 tag.
+func TestLyrics3RequiresId3v1(t *testing.T) {
+	f := tempFile(t, testAsset("minimal", "full_test.mp3"))
+	defer f.Close()
+	vf := NewOSFile(f)
+	lyrics := &Lyrics3Tag{Lyrics: "[00:00]Serial-ATA was here"}
+
+	// Has an ID3v1 tag, should work
+	if err := lyrics3v1WriteTo(vf, lyrics, NewWriteOptions()); err != nil {
+		t.Fatalf("save with ID3v1 present: %v", err)
+	}
+
+	if err := TagTypeID3v1.RemoveFrom(vf, NewWriteOptions()); err != nil {
+		t.Fatal(err)
+	}
+
+	err := lyrics3v1WriteTo(vf, lyrics, NewWriteOptions())
+	var l3err *Lyrics3ParseError
+	if !errors.As(err, &l3err) || l3err.Message != "the destination file must contain an ID3v1 tag" {
+		t.Fatalf("expected ID3v1-required error, got %v", err)
+	}
+}
+
+// Ported from mpeg.rs::save_number_of_track_and_disk_to_id3v2 /
+// save_total_of_track_and_disk_to_id3v2 / save_number_pair_of_track_and_disk_to_id3v2.
+func TestMpegSaveTrackAndDiskToId3v2(t *testing.T) {
+	reread := func(t *testing.T, f *os.File) *Tag {
+		t.Helper()
+		vf := NewOSFile(f)
+		if _, err := vf.Seek(0, io.SeekStart); err != nil {
+			t.Fatal(err)
+		}
+		btf, err := NewProbe(vf).Options(noProps).ReadBound(NewOSFile(f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		tag := btf.Tag(TagTypeID3v2)
+		if tag == nil {
+			t.Fatal("no id3v2 tag")
+		}
+		return tag
+	}
+	assertNum := func(tag *Tag, get func() (uint32, bool), name string, want uint32, wantOk bool) {
+		got, ok := get()
+		if ok != wantOk || (ok && got != want) {
+			t.Errorf("%s = %v (ok=%v), want %v (ok=%v)", name, got, ok, want, wantOk)
+		}
+	}
+
+	t.Run("number only", func(t *testing.T) {
+		f := tempFile(t, testAsset("minimal", "full_test.mp3"))
+		defer f.Close()
+		tag := NewTag(TagTypeID3v2)
+		tag.SetTrack(1)
+		tag.SetDisk(2)
+		if err := tag.SaveTo(NewOSFile(f), NewWriteOptions()); err != nil {
+			t.Fatal(err)
+		}
+		tag = reread(t, f)
+		assertNum(tag, tag.Track, "track", 1, true)
+		assertNum(tag, tag.TrackTotal, "track_total", 0, false)
+		assertNum(tag, tag.Disk, "disk", 2, true)
+		assertNum(tag, tag.DiskTotal, "disk_total", 0, false)
+	})
+
+	t.Run("total only", func(t *testing.T) {
+		f := tempFile(t, testAsset("minimal", "full_test.mp3"))
+		defer f.Close()
+		tag := NewTag(TagTypeID3v2)
+		tag.SetTrackTotal(2)
+		tag.SetDiskTotal(3)
+		if err := tag.SaveTo(NewOSFile(f), NewWriteOptions()); err != nil {
+			t.Fatal(err)
+		}
+		tag = reread(t, f)
+		// Rust writes "0/total" when only a total exists
+		assertNum(tag, tag.Track, "track", 0, true)
+		assertNum(tag, tag.TrackTotal, "track_total", 2, true)
+		assertNum(tag, tag.Disk, "disk", 0, true)
+		assertNum(tag, tag.DiskTotal, "disk_total", 3, true)
+	})
+
+	t.Run("number pair", func(t *testing.T) {
+		f := tempFile(t, testAsset("minimal", "full_test.mp3"))
+		defer f.Close()
+		tag := NewTag(TagTypeID3v2)
+		tag.SetTrack(1)
+		tag.SetTrackTotal(2)
+		tag.SetDisk(3)
+		tag.SetDiskTotal(4)
+		if err := tag.SaveTo(NewOSFile(f), NewWriteOptions()); err != nil {
+			t.Fatal(err)
+		}
+		tag = reread(t, f)
+		assertNum(tag, tag.Track, "track", 1, true)
+		assertNum(tag, tag.TrackTotal, "track_total", 2, true)
+		assertNum(tag, tag.Disk, "disk", 3, true)
+		assertNum(tag, tag.DiskTotal, "disk_total", 4, true)
+	})
+}
+
+// Ported from mpeg.rs::test_bound_tagged_into_inner — a BoundTaggedFile's
+// tags are editable in place, saved, and the underlying FileLike recovered
+// with IntoInner.
+func TestBoundTaggedIntoInner(t *testing.T) {
+	f := tempFile(t, testAsset("minimal", "full_test.mp3"))
+	defer f.Close()
+
+	btf, err := NewProbe(f).Options(noProps).ReadBound(NewOSFile(f))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag := btf.Tag(TagTypeID3v2)
+	if tag == nil {
+		t.Fatal("couldn't get ref to tag")
+	}
+	tag.SetDisk(123)
+	if err := btf.Save(NewWriteOptions()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reread the file
+	inner := btf.IntoInner()
+	if _, err := inner.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	btf, err = NewProbe(inner).Options(noProps).ReadBound(inner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag = btf.Tag(TagTypeID3v2)
+	if tag == nil {
+		t.Fatal("no id3v2 tag")
+	}
+	if disk, ok := tag.Disk(); !ok || disk != 123 {
+		t.Fatalf("disk = %v (ok=%v), want 123", disk, ok)
+	}
+}
+
+// Ported from mpeg.rs::remove_id3v2_by_path (issue #750).
+func TestMpegRemoveId3v2ByPath(t *testing.T) {
+	data, err := os.ReadFile(testAsset("minimal", "full_test.mp3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.CreateTemp(t.TempDir(), "named-*.mp3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	path := f.Name()
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+
+	btf, err := NewProbe(f).Options(noProps).ReadBound(NewOSFile(f))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !btf.ContainsTag(TagTypeID3v2) {
+		t.Fatal("expected an id3v2 tag")
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := TagTypeID3v2.RemoveFromPath(path, NewWriteOptions()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+
+	btf, err = NewProbe(f).Options(noProps).ReadBound(NewOSFile(f))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if btf.ContainsTag(TagTypeID3v2) {
+		t.Fatal("id3v2 tag should be removed")
+	}
+}
+
+// Ported from mpeg.rs::stripping_id3v1_removes_lyrics3v2 — Lyrics3v2 cannot
+// exist without ID3v1.
+func TestStrippingId3v1RemovesLyrics3v2(t *testing.T) {
 	f := tempFile(t, testAsset("minimal", "full_test.mp3"))
 	defer f.Close()
 
@@ -902,7 +1531,49 @@ func TestStrippingId3v1RemovesLyrics3(t *testing.T) {
 		t.Fatalf("lyrics3 write failed: %v", err)
 	}
 
-	// Removing ID3v1 must strip the Lyrics3 tag too
+	// Removing ID3v1 must strip the Lyrics3v2 tag too
+	if _, err := f.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	vf, err = newVerifiedFile(NewOSFile(f), NewParseOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := removeTag(TagTypeID3v1, vf, NewWriteOptions()); err != nil {
+		t.Fatalf("id3v1 remove failed: %v", err)
+	}
+
+	if _, err := f.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	mf, err := MpegFileReadFrom(f, NewParseOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mf.Lyrics3v2.IsSome() {
+		t.Fatal("lyrics3v2 still present after id3v1 removal")
+	}
+	if mf.ID3v1.IsSome() {
+		t.Fatal("id3v1 still present after removal")
+	}
+}
+
+// Ported from mpeg.rs::stripping_id3v1_removes_lyrics3
+func TestStrippingId3v1RemovesLyrics3(t *testing.T) {
+	f := tempFile(t, testAsset("minimal", "full_test.mp3"))
+	defer f.Close()
+
+	// Lyrics3 is an extension of ID3v1 and cannot exist alone
+	vf, err := newVerifiedFile(NewOSFile(f), NewParseOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag := NewTag(TagTypeLyrics3)
+	tag.InsertText(ItemKeyLyrics, "[00:00]Serial-ATA was here")
+	if err := lyrics3v1WriteTo(vf.File(), Lyrics3TagFromTag(tag), NewWriteOptions()); err != nil {
+		t.Fatalf("lyrics3 write failed: %v", err)
+	}
+
 	if _, err := f.Seek(0, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -926,6 +1597,62 @@ func TestStrippingId3v1RemovesLyrics3(t *testing.T) {
 	}
 	if mf.ID3v1.IsSome() {
 		t.Fatal("id3v1 still present after removal")
+	}
+}
+
+// Ported from mpeg.rs::test_tag_save_with_parse_options — a tag can be saved
+// to a file that only parses with non-default ParseOptions.
+func TestMpegTagSaveWithParseOptions(t *testing.T) {
+	data, err := os.ReadFile(taglibPath("xing.mp3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.CreateTemp(t.TempDir(), "xing-prefixed-*.mp3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.Write(make([]byte, 2048)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	po := NewParseOptions()
+	po.MaxJunkBytes = 3000
+	if _, err := MpegFileReadFrom(f, po); err != nil {
+		t.Fatal(err)
+	}
+
+	tag := NewTag(TagTypeID3v2)
+	tag.SetTitle("Title B")
+
+	if _, err := f.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	wo := NewWriteOptions()
+	wo.ParseOptions = po
+	if err := tag.SaveTo(NewOSFile(f), wo); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+
+	if _, err := f.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	mf, err := MpegFileReadFrom(f, po)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id3v2, ok := mf.ID3v2.Get()
+	if !ok {
+		t.Fatal("no id3v2 tag")
+	}
+	if s, _ := id3v2.Title(); s != "Title B" {
+		t.Fatalf("title = %q, want Title B", s)
 	}
 }
 
@@ -1055,6 +1782,156 @@ func TestMp4ExtendedAtoms(t *testing.T) {
 	} else if s, ok := tag.GetString(ItemKeyTrackArtist); !ok || s != artist {
 		t.Fatalf("artist = %q", s)
 	}
+}
+
+// mp4TestChunkOffsets reads every entry of all `stco`/`co64` atoms reachable
+// through the moov container chain.
+func mp4TestChunkOffsets(t *testing.T, f *os.File, fourcc string) []uint64 {
+	t.Helper()
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	content, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []uint64
+	var walk func(start, end int)
+	walk = func(start, end int) {
+		for p := start; p+8 <= end; {
+			sz := int(binary.BigEndian.Uint32(content[p:]))
+			hdr := 8
+			if sz == 1 {
+				sz = int(binary.BigEndian.Uint64(content[p+8:]))
+				hdr = 16
+			}
+			if sz <= 0 || p+sz > end {
+				break
+			}
+			name := string(content[p+4 : p+8])
+			if name == fourcc {
+				switch fourcc {
+				case "stco":
+					for i := 16; i+4 <= sz; i += 4 {
+						out = append(out, uint64(binary.BigEndian.Uint32(content[p+i:])))
+					}
+				case "co64":
+					for i := 16; i+8 <= sz; i += 8 {
+						out = append(out, binary.BigEndian.Uint64(content[p+i:]))
+					}
+				}
+			}
+			switch name {
+			case "moov", "trak", "mdia", "minf", "stbl", "udta", "moof":
+				walk(p+hdr, p+sz)
+			}
+			p += sz
+		}
+	}
+	walk(0, len(content))
+	return out
+}
+
+// When an `ilst` write changes the file length, media data moves and the
+// `stco`/`co64` chunk offsets (and `moof`/`tfhd` base offsets) must follow —
+// Rust `AtomWriterCompanion::update_offsets`.
+func TestMp4ChunkOffsetUpdate(t *testing.T) {
+	writeArtist := func(t *testing.T, f *os.File, artist string) int64 {
+		t.Helper()
+		start, err := f.Seek(0, io.SeekEnd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			t.Fatal(err)
+		}
+		vf, err := newVerifiedFile(NewOSFile(f), noProps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ilst := NewTag(TagTypeMp4Ilst)
+		ilst.InsertText(ItemKeyTrackArtist, artist)
+		wo := NewWriteOptions()
+		wo.PreferredPadding = 0
+		if err := writeTag(ilst, vf, wo); err != nil {
+			t.Fatal(err)
+		}
+		end, err := f.Seek(0, io.SeekEnd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return end - start
+	}
+	rereadArtist := func(t *testing.T, f *os.File, want string) {
+		t.Helper()
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			t.Fatal(err)
+		}
+		mf, err := Mp4FileReadFrom(f, noProps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tag := mf.TaggedFile().Tag(TagTypeMp4Ilst)
+		if tag == nil {
+			t.Fatal("no ilst after write")
+		}
+		if s, ok := tag.GetString(ItemKeyTrackArtist); !ok || s != want {
+			t.Fatalf("artist = %q", s)
+		}
+	}
+
+	t.Run("co64 shifts with mdat", func(t *testing.T) {
+		// moov precedes mdat here; creating udta inside moov moves mdat, so
+		// every co64 entry must shift by the file growth.
+		f := tempFile(t, testAsset("issue_746_extended_mdat.m4a"))
+		defer f.Close()
+		orig := mp4TestChunkOffsets(t, f, "co64")
+		if len(orig) == 0 {
+			t.Fatal("no co64 offsets in fixture")
+		}
+		delta := writeArtist(t, f, "Foo artist with a much longer value to force growth")
+		if delta <= 0 {
+			t.Fatalf("expected file growth, got %d", delta)
+		}
+		got := mp4TestChunkOffsets(t, f, "co64")
+		if len(got) != len(orig) {
+			t.Fatalf("co64 count = %d, want %d", len(got), len(orig))
+		}
+		for i := range orig {
+			if want := orig[i] + uint64(delta); got[i] != want {
+				t.Fatalf("co64[%d] = %d, want %d", i, got[i], want)
+			}
+		}
+		rereadArtist(t, f, "Foo artist with a much longer value to force growth")
+	})
+
+	t.Run("stco before moov is untouched", func(t *testing.T) {
+		// mdat precedes moov here, so a growing ilst inside meta must leave
+		// the stco entries pointing at the unmoved media data alone.
+		f := tempFile(t, testAsset("non_full_meta_atom.m4a"))
+		defer f.Close()
+		orig := mp4TestChunkOffsets(t, f, "stco")
+		if len(orig) == 0 {
+			t.Fatal("no stco offsets in fixture")
+		}
+		// The fixture's `ilst` sits next to a ~1KB `free` atom — the tag has
+		// to outgrow it before the file actually grows.
+		artist := strings.Repeat("Foo artist ", 200)
+		delta := writeArtist(t, f, artist)
+		if delta <= 0 {
+			t.Fatalf("expected file growth, got %d", delta)
+		}
+		got := mp4TestChunkOffsets(t, f, "stco")
+		if len(got) != len(orig) {
+			t.Fatalf("stco count = %d, want %d", len(got), len(orig))
+		}
+		for i := range orig {
+			if got[i] != orig[i] {
+				t.Fatalf("stco[%d] = %d, want %d", i, got[i], orig[i])
+			}
+		}
+		rereadArtist(t, f, artist)
+	})
 }
 
 // Ported from mpeg.rs::read_and_write_tpil_frame — TIPL role/name pairs
