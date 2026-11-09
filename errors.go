@@ -29,15 +29,6 @@ func (e *FileParseError) Error() string {
 
 func (e *FileParseError) Unwrap() error { return e.Source }
 
-func newFileParseError(ty FileType, source error) *FileParseError {
-	return &FileParseError{FileType: ty, Source: source}
-}
-
-func (e *FileParseError) withFormat(ty FileType) *FileParseError {
-	e.FileType = ty
-	return e
-}
-
 // FileEncodingError is returned when writing a file fails.
 type FileEncodingError struct {
 	// FileType is the type of the file that failed to write.
@@ -54,10 +45,6 @@ func (e *FileEncodingError) Error() string {
 }
 
 func (e *FileEncodingError) Unwrap() error { return e.Source }
-
-func newFileEncodingError(ty FileType, source error) *FileEncodingError {
-	return &FileEncodingError{FileType: ty, Source: source}
-}
 
 func (e *FileEncodingError) withFormat(ty FileType) *FileEncodingError {
 	e.FileType = ty
@@ -94,14 +81,6 @@ func (e *TagParseError) Error() string {
 
 func (e *TagParseError) Unwrap() error { return e.Source }
 
-func newTagParseError(ty TagType, source error) *TagParseError {
-	return &TagParseError{TagType: ty, HasTagType: true, Source: source}
-}
-
-func tagParseErrorUnknown(source error) *TagParseError {
-	return &TagParseError{Source: source}
-}
-
 // TagEncodingError is returned when writing a tag fails.
 type TagEncodingError struct {
 	// TagType is the type of tag that failed to write.
@@ -120,14 +99,6 @@ func (e *TagEncodingError) Error() string {
 }
 
 func (e *TagEncodingError) Unwrap() error { return e.Source }
-
-func newTagEncodingError(ty TagType, source error) *TagEncodingError {
-	return &TagEncodingError{TagType: ty, HasTagType: true, Source: source}
-}
-
-func tagEncodingErrorUnknown(source error) *TagEncodingError {
-	return &TagEncodingError{Source: source}
-}
 
 // FakeTagError arises when a tag is expected (e.g. an "ID3 " chunk in a WAV file), but isn't found.
 type FakeTagError struct{}

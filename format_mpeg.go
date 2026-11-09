@@ -83,25 +83,22 @@ var mpegBitrateL1 = [2][16]uint32{
 	{0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 0},
 	{0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 0},
 }
+
 var mpegBitrateL2 = [2][16]uint32{
 	{0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 0},
 	{0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256, 0},
 }
+
 var mpegBitrateL3 = [2][16]uint32{
 	{0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0},
 	{0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0},
 }
+
 var mpegSampleRates = [3][4]uint32{
 	{44100, 48000, 32000, 0}, // V1
 	{22050, 24000, 16000, 0}, // V2
 	{11025, 12000, 8000, 0},  // V2.5
 }
-
-const (
-	mpegEmphasisNone = 0
-	mpegEmphasis5015 = 1
-	mpegEmphasisCCIT = 3
-)
 
 var errBadHeader = &MpegParseError{Message: "invalid MPEG header"}
 
@@ -163,9 +160,10 @@ func parseMpegHeader(b []byte, firstHeader *mpegHeader) (*mpegHeader, error) {
 
 	srIdx := int((h >> 10) & 3)
 	srVerIdx := 0
-	if h2.version == MpegVersion2 {
+	switch h2.version {
+	case MpegVersion2:
 		srVerIdx = 1
-	} else if h2.version == MpegVersion25 {
+	case MpegVersion25:
 		srVerIdx = 2
 	}
 	h2.sampleRate = mpegSampleRates[srVerIdx][srIdx]
@@ -186,17 +184,17 @@ func parseMpegHeader(b []byte, firstHeader *mpegHeader) (*mpegHeader, error) {
 	// frame length and samples per frame
 	switch h2.layer {
 	case MpegLayer1:
-		h2.frameLen = (12*h2.bitrate*1000/h2.sampleRate + uint32(padding)) * 4
+		h2.frameLen = (12*h2.bitrate*1000/h2.sampleRate + padding) * 4
 		h2.samples = 384
 	case MpegLayer2:
-		h2.frameLen = 144*h2.bitrate*1000/h2.sampleRate + uint32(padding)
+		h2.frameLen = 144*h2.bitrate*1000/h2.sampleRate + padding
 		h2.samples = 1152
 	default:
 		var coeff uint32 = 144
 		if h2.version != MpegVersion1 {
 			coeff = 72
 		}
-		h2.frameLen = coeff*h2.bitrate*1000/h2.sampleRate + uint32(padding)
+		h2.frameLen = coeff*h2.bitrate*1000/h2.sampleRate + padding
 		if h2.version == MpegVersion1 {
 			h2.samples = 1152
 		} else {
@@ -388,8 +386,7 @@ func mpegReadProperties(
 	firstFrameOffset uint64,
 	streamLen uint64,
 	fileLength uint64,
-	parseMode ParsingMode,
-) (*MpegProperties, error) {
+) *MpegProperties {
 	p := &MpegProperties{
 		Version:     firstHeader.version,
 		Layer:       firstHeader.layer,
@@ -432,12 +429,12 @@ func mpegReadProperties(
 			p.OverallBitrate = uint32(fileLength * 8 / length)
 			p.AudioBitrate = uint32(vbr.bytes * 8 / length)
 		}
-		return p, nil
+		return p
 	}
 
 	// Nothing more we can do
 	if firstHeader.bitrate == 0 {
-		return p, nil
+		return p
 	}
 
 	// CBR (or a VBR stream treated as CBR): estimate duration from the
@@ -466,12 +463,12 @@ func mpegReadProperties(
 	}
 
 	if lastFrame == nil {
-		return p, nil
+		return p
 	}
 
 	streamEnd := lastFrameOffset + uint64(lastFrame.frameLen)
 	if streamEnd < firstFrameOffset {
-		return p, nil
+		return p
 	}
 
 	p.AudioBitrate = firstHeader.bitrate
@@ -480,7 +477,7 @@ func mpegReadProperties(
 	if length > 0 {
 		p.OverallBitrate = uint32(fileLength * 8 / length)
 	}
-	return p, nil
+	return p
 }
 
 // revSearchForFrameHeader scans backwards from pos (bounded by
@@ -703,14 +700,14 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*MpegFil
 	}
 
 	// Lyrics3
-	if start, _, version, t, found, err := findLyrics3(reader, parseOptions.ReadTags, parseOptions); err == nil && found {
+	if start, _, t, found, err := findLyrics3(reader, parseOptions.ReadTags, parseOptions); err == nil && found {
 		switch v := t.(type) {
 		case *Lyrics3Tag:
 			file.Lyrics3 = Some(v)
 		case *Lyrics3v2Tag:
 			file.Lyrics3v2 = Some(v)
 		}
-		_ = version
+
 		if uint64(start) < endOffset {
 			endOffset = uint64(start)
 		}
@@ -739,20 +736,7 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*MpegFil
 		if _, err := reader.Seek(int64(firstFrameOffset), io.SeekStart); err != nil {
 			return nil, &FileParseError{Source: err}
 		}
-		properties, err = mpegReadProperties(reader, firstHeader, firstFrameOffset, streamLen, uint64(streamEnd), parseOptions.ParsingMode)
-		if err != nil {
-			if parseOptions.ParsingMode == ParsingModeStrict {
-				return nil, &FileParseError{Source: err}
-			}
-			properties = &MpegProperties{
-				Version:      firstHeader.version,
-				Layer:        firstHeader.layer,
-				SampleRate:   firstHeader.sampleRate,
-				Channels:     firstHeader.channels,
-				ChannelMode:  firstHeader.channelMode,
-				AudioBitrate: firstHeader.bitrate,
-			}
-		}
+		properties = mpegReadProperties(reader, firstHeader, firstFrameOffset, streamLen, uint64(streamEnd))
 	} else {
 		properties = &MpegProperties{}
 	}
@@ -866,7 +850,7 @@ func (f *MpegFile) SaveFile(file FileLike, writeOptions WriteOptions) error {
 
 // RemoveFromPath removes a tag type.
 func (f *MpegFile) RemoveFromPath(path string, tagType TagType) error {
-	return removeTagFromPath(path, FileTypeMpeg, tagType)
+	return removeTagFromPath(path, tagType)
 }
 
 func init() {

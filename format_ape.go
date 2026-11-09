@@ -85,10 +85,6 @@ type ApeHeader struct {
 	Flags     uint32
 }
 
-func (h *ApeHeader) containsFooter() bool { return h.Flags&apeHeaderContainsFooter > 0 }
-func (h *ApeHeader) containsHeader() bool { return h.Flags&apeHeaderContainsHeader > 0 }
-func (h *ApeHeader) isHeader() bool       { return h.Flags&apeHeaderIsHeader > 0 }
-
 // readApeHeader reads an APE header/footer's fields after the preamble.
 // If `footer` is set, the just-read 32 bytes were a footer and the reader is
 // seeked back to the start of the tag's items (or header).
@@ -598,16 +594,19 @@ func ApeTagFromTag(input *Tag) *ApeTag {
 		{ItemKeyDiscNumber, ItemKeyDiscTotal},
 	} {
 		parseNum := func(key ItemKey) Option[uint32] {
+			// Rust `set_number` runs per item; each parseable value
+			// overwrites via the setter, so the last parseable wins.
+			var n Option[uint32]
 			for _, item := range input.GetItems(key) {
-				if text, ok := item.Value().IntoString(); ok {
-					if n, err := strconv.ParseUint(strings.TrimSpace(text), 10, 32); err == nil {
-						return Some(uint32(n))
-					}
+				text, ok := item.Value().IntoString()
+				if !ok {
+					continue
 				}
-				// Rust `set_number` skips unparseable text
-				return None[uint32]()
+				if parsed, err := strconv.ParseUint(strings.TrimSpace(text), 10, 32); err == nil {
+					n = Some(uint32(parsed))
+				}
 			}
-			return None[uint32]()
+			return n
 		}
 		n, tot := parseNum(pair[0]), parseNum(pair[1])
 		if n.IsNone() && tot.IsNone() {
@@ -753,12 +752,6 @@ func readApeTag(reader io.ReadSeeker, footer bool, parseOptions ParseOptions) (*
 
 // --- write ---
 
-type apeTagRefItem struct {
-	key      string
-	value    ItemValue
-	readOnly bool
-}
-
 func apeWriteTo(file FileLike, tag *ApeTag, writeOptions WriteOptions) error {
 	type apeTags struct {
 		readOnly      *ApeTag
@@ -825,7 +818,7 @@ func apeWriteTo(file FileLike, tag *ApeTag, writeOptions WriteOptions) error {
 				return nil, err
 			}
 		}
-		if _, _, _, _, found, err := findLyrics3(file, false, writeOptions.ParseOptions); err != nil {
+		if _, _, _, found, err := findLyrics3(file, false, writeOptions.ParseOptions); err != nil {
 			return nil, err
 		} else if !found && !id3v1Found {
 			if _, err := file.Seek(0, io.SeekEnd); err != nil {
@@ -920,8 +913,8 @@ func apeWriteTo(file FileLike, tag *ApeTag, writeOptions WriteOptions) error {
 		if item.ReadOnly {
 			itemFlags |= 1
 		}
-		binary.Write(&content, binary.LittleEndian, valueLen)
-		binary.Write(&content, binary.LittleEndian, itemFlags)
+		_ = binary.Write(&content, binary.LittleEndian, valueLen)
+		_ = binary.Write(&content, binary.LittleEndian, itemFlags)
 		content.WriteString(item.Key)
 		content.WriteByte(0)
 		switch item.Value.kind {
@@ -1021,8 +1014,8 @@ func init() {
 			if item.ReadOnly {
 				itemFlags |= 1
 			}
-			binary.Write(&content, binary.LittleEndian, valueLen)
-			binary.Write(&content, binary.LittleEndian, itemFlags)
+			_ = binary.Write(&content, binary.LittleEndian, valueLen)
+			_ = binary.Write(&content, binary.LittleEndian, itemFlags)
 			content.WriteString(item.Key)
 			content.WriteByte(0)
 			switch item.Value.kind {
@@ -1147,17 +1140,14 @@ func ApeFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*ApeFile,
 			streamLen = newLen
 		}
 	} else if err != nil {
-		// seek back 8 (preamble was consumed)
-		data.Seek(start, io.SeekStart)
-		if _, _, f, e := findId3v2(data, false, parseOptions); e == nil && f {
-			// skip past
-		} else {
-			data.Seek(start, io.SeekStart)
+		// The failed APE preamble read consumed bytes. Rewind to start and
+		// re-skip a possible ID3v2 tag: findId3v2 leaves the reader after a
+		// found tag, or back at start when absent.
+		if _, err := data.Seek(start, io.SeekStart); err != nil {
+			return nil, &FileParseError{Source: err}
 		}
-		// reset to start position
-		data.Seek(start, io.SeekStart)
-		if _, _, _, e := findId3v2(data, false, parseOptions); e == nil {
-			// already past it
+		if _, _, _, err := findId3v2(data, false, parseOptions); err != nil {
+			return nil, &FileParseError{Source: err}
 		}
 	}
 
@@ -1172,7 +1162,7 @@ func ApeFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*ApeFile,
 	}
 
 	// Find Lyrics3
-	if _, _, _, _, foundL, err := findLyrics3(data, false, parseOptions); err == nil && foundL {
+	if _, _, _, foundL, err := findLyrics3(data, false, parseOptions); err == nil && foundL {
 		// Lyrics3 consumed: the reader sits at its start
 		pos, _ := data.Seek(0, io.SeekCurrent)
 		if pos-start < int64(streamLen) {
@@ -1321,7 +1311,7 @@ func (f *ApeFile) SaveFile(file FileLike, writeOptions WriteOptions) error {
 
 // RemoveFromPath removes a tag type from the file at `path`.
 func (f *ApeFile) RemoveFromPath(path string, tagType TagType) error {
-	return removeTagFromPath(path, FileTypeApe, tagType)
+	return removeTagFromPath(path, tagType)
 }
 
 // apeFindMacHeader scans for the "MAC " magic with a strict 4-byte window,

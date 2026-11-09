@@ -117,7 +117,9 @@ func mp4ReadBox(reader io.ReadSeeker) (*mp4BoxHeader, error) {
 			return nil, err
 		}
 		size = uint64(end - h.pos)
-		reader.Seek(h.pos, io.SeekStart)
+		if _, err := reader.Seek(h.pos, io.SeekStart); err != nil {
+			return nil, err
+		}
 	case 1:
 		var ls [8]byte
 		if _, err := io.ReadFull(reader, ls[:]); err != nil {
@@ -151,7 +153,7 @@ func mp4MetaIsFull(reader io.ReadSeeker, h *mp4BoxHeader) bool {
 	if _, err := io.ReadFull(reader, b[:]); err != nil {
 		return true
 	}
-	reader.Seek(h.pos, io.SeekStart)
+	_, _ = reader.Seek(h.pos, io.SeekStart)
 	switch string(b[4:8]) {
 	case "hdlr", "ilst", "mhdr", "ctry", "lang":
 		return false
@@ -181,12 +183,6 @@ func mp4FindBox(reader io.ReadSeeker, end int64, name string) (*mp4BoxHeader, er
 
 // mp4IlstKeyToItemKey maps an ilst atom name to a freeform key string.
 // Returns (key, isIntPair) where key is "" for data-only atoms.
-var mp4IlstKeys = map[string]string{
-	"trkn": "TRACKNUMBER", "disk": "DISCNUMBER",
-	"tmpo": "BPM", "cpil": "FLAGCOMPILATION", "gnre": "GENRE",
-	"covr": "PICTURE", "stik": "MEDIATYPE",
-}
-
 var mp4Genres = []string{
 	"", "Blues", "Classic Rock", "Country", "Dance", "Disco", "Funk", "Grunge",
 	"Hip-Hop", "Jazz", "Metal", "New Age", "Oldies", "Other", "Pop", "R&B",
@@ -209,7 +205,7 @@ var mp4Genres = []string{
 // is skipped. Returns nil if not found.
 func mp4BoxPayload(reader io.ReadSeeker, end int64, name string) []byte {
 	start, _ := reader.Seek(0, io.SeekCurrent)
-	defer reader.Seek(start, io.SeekStart)
+	defer func() { _, _ = reader.Seek(start, io.SeekStart) }()
 	box, err := mp4FindBox(reader, end, name)
 	if err != nil || box == nil {
 		return nil
@@ -308,7 +304,9 @@ func Mp4FileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*Mp4File,
 				ilstTag = t
 			}
 		}
-		reader.Seek(boxEnd, io.SeekStart)
+		if _, err := reader.Seek(boxEnd, io.SeekStart); err != nil {
+			return nil, &FileParseError{Source: err}
+		}
 	}
 
 	if parseOptions.ReadProperties {
@@ -325,7 +323,9 @@ func Mp4FileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*Mp4File,
 // mp4Children calls fn for each child box of container h; fn returning false stops.
 func mp4Children(reader io.ReadSeeker, h *mp4BoxHeader, fn func(c *mp4BoxHeader) bool) {
 	end := h.pos + int64(h.size)
-	reader.Seek(h.pos, io.SeekStart)
+	if _, err := reader.Seek(h.pos, io.SeekStart); err != nil {
+		return
+	}
 	for {
 		pos, _ := reader.Seek(0, io.SeekCurrent)
 		if pos >= end {
@@ -338,7 +338,9 @@ func mp4Children(reader io.ReadSeeker, h *mp4BoxHeader, fn func(c *mp4BoxHeader)
 		if !fn(c) {
 			return
 		}
-		reader.Seek(c.pos+int64(c.size), io.SeekStart)
+		if _, err := reader.Seek(c.pos+int64(c.size), io.SeekStart); err != nil {
+			return
+		}
 	}
 }
 
@@ -371,9 +373,10 @@ func mp4ReadProperties(reader io.ReadSeeker, traks []*mp4BoxHeader, fileLen, mda
 			case "hdlr":
 				if c.size >= 12 {
 					var hb [12]byte
-					reader.Seek(c.pos, io.SeekStart)
-					if _, err := io.ReadFull(reader, hb[:]); err == nil && string(hb[8:]) == "soun" {
-						isAudio = true
+					if _, err := reader.Seek(c.pos, io.SeekStart); err == nil {
+						if _, err := io.ReadFull(reader, hb[:]); err == nil && string(hb[8:]) == "soun" {
+							isAudio = true
+						}
 					}
 				}
 			}
@@ -436,22 +439,26 @@ func mp4ReadProperties(reader io.ReadSeeker, traks []*mp4BoxHeader, fileLen, mda
 		switch string(c.name[:]) {
 		case "stsd":
 			stsdData = make([]byte, c.size)
-			reader.Seek(c.pos, io.SeekStart)
-			io.ReadFull(reader, stsdData)
+			if _, err := reader.Seek(c.pos, io.SeekStart); err != nil {
+				stsdData = nil
+			} else if _, err := io.ReadFull(reader, stsdData); err != nil {
+				stsdData = nil
+			}
 		case "stts":
 			sttsPresent = true
 			var fb [8]byte
-			reader.Seek(c.pos, io.SeekStart)
-			if _, err := io.ReadFull(reader, fb[:]); err == nil {
-				count := binary.BigEndian.Uint32(fb[4:])
-				if count == 1 {
-					var eb [8]byte
-					if _, err := io.ReadFull(reader, eb[:]); err == nil && binary.BigEndian.Uint32(eb[4:]) == 1 {
-						sttsSpecifies = false
-						return true
+			if _, err := reader.Seek(c.pos, io.SeekStart); err == nil {
+				if _, err := io.ReadFull(reader, fb[:]); err == nil {
+					count := binary.BigEndian.Uint32(fb[4:])
+					if count == 1 {
+						var eb [8]byte
+						if _, err := io.ReadFull(reader, eb[:]); err == nil && binary.BigEndian.Uint32(eb[4:]) == 1 {
+							sttsSpecifies = false
+							return true
+						}
 					}
+					sttsSpecifies = count > 0
 				}
-				sttsSpecifies = count > 0
 			}
 		}
 		return true
@@ -552,11 +559,12 @@ func mp4ParseStsd(stsd []byte, p *Mp4Properties) error {
 			return &Mp4ParseError{Source: err}
 		}
 		p.SampleRate = binary.BigEndian.Uint32(sb[:]) >> 16
-		if stsdVersion == 1 {
+		switch stsdVersion {
+		case 1:
 			if _, err := r.Seek(16, io.SeekCurrent); err != nil {
 				return &Mp4ParseError{Source: err}
 			}
-		} else if stsdVersion == 2 {
+		case 2:
 			var eb [4]byte
 			if _, err := io.ReadFull(r, eb[:]); err != nil {
 				return &Mp4ParseError{Source: err}
@@ -570,9 +578,9 @@ func mp4ParseStsd(stsd []byte, p *Mp4Properties) error {
 		case "mp4a":
 			mp4aProperties(r, entryEnd, p)
 		case "alac":
-			mp4AlacProperties(r, entryEnd, int64(len(stsd)), p)
+			mp4AlacProperties(r, int64(len(stsd)), p)
 		case "fLaC":
-			mp4FlacProperties(r, entryEnd, p)
+			mp4FlacProperties(r, p)
 		case "drms":
 			p.IsDrmProtected = true
 			continue
@@ -684,10 +692,11 @@ func mp4aProperties(r *bytes.Reader, entryEnd int64, p *Mp4Properties) {
 					if err := binary.Read(r, binary.BigEndian, &rate); err == nil {
 						p.SampleRate = rate
 					}
-					r.Seek(4, io.SeekCurrent)
-					var ch uint16
-					if err := binary.Read(r, binary.BigEndian, &ch); err == nil {
-						p.Channels = uint8(ch) + 1
+					if _, err := r.Seek(4, io.SeekCurrent); err == nil {
+						var ch uint16
+						if err := binary.Read(r, binary.BigEndian, &ch); err == nil {
+							p.Channels = uint8(ch) + 1
+						}
 					}
 				}
 			}
@@ -700,7 +709,7 @@ func mp4aProperties(r *bytes.Reader, entryEnd int64, p *Mp4Properties) {
 }
 
 // mp4AlacProperties parses the inner "alac" box of an alac sample entry.
-func mp4AlacProperties(r *bytes.Reader, entryEnd, stsdLen int64, p *Mp4Properties) {
+func mp4AlacProperties(r *bytes.Reader, stsdLen int64, p *Mp4Properties) {
 	// The entire stsd buffer must be exactly 80 bytes
 	if stsdLen != 80 {
 		return
@@ -744,7 +753,7 @@ func mp4AlacProperties(r *bytes.Reader, entryEnd, stsdLen int64, p *Mp4Propertie
 }
 
 // mp4FlacProperties parses the dfLa STREAMINFO of a fLaC sample entry.
-func mp4FlacProperties(r *bytes.Reader, entryEnd int64, p *Mp4Properties) {
+func mp4FlacProperties(r *bytes.Reader, p *Mp4Properties) {
 	p.Codec = Mp4CodecFLAC
 	dfla, err := mp4ReadBox(r)
 	if err != nil || string(dfla.name[:]) != "dfLa" {
@@ -790,12 +799,18 @@ func mp4WalkUdta(reader io.ReadSeeker, end int64, parseOptions ParseOptions) (*I
 			// child to decide.
 			childStart, _ := reader.Seek(0, io.SeekCurrent)
 			hdrPos := childStart + 4
-			reader.Seek(hdrPos, io.SeekStart)
+			if _, err := reader.Seek(hdrPos, io.SeekStart); err != nil {
+				return nil, err
+			}
 			child, err := mp4ReadBox(reader)
 			if err != nil || child.size > h.size || child.hdr > h.size {
-				reader.Seek(childStart, io.SeekStart)
+				if _, err := reader.Seek(childStart, io.SeekStart); err != nil {
+					return nil, err
+				}
 			} else {
-				reader.Seek(hdrPos, io.SeekStart)
+				if _, err := reader.Seek(hdrPos, io.SeekStart); err != nil {
+					return nil, err
+				}
 			}
 			for {
 				pos, _ := reader.Seek(0, io.SeekCurrent)
@@ -809,10 +824,14 @@ func mp4WalkUdta(reader io.ReadSeeker, end int64, parseOptions ParseOptions) (*I
 				if string(mh.name[:]) == "ilst" {
 					return parseIlst(reader, mh.pos+int64(mh.size), parseOptions)
 				}
-				reader.Seek(mh.pos+int64(mh.size), io.SeekStart)
+				if _, err := reader.Seek(mh.pos+int64(mh.size), io.SeekStart); err != nil {
+					return nil, err
+				}
 			}
 		}
-		reader.Seek(boxEnd, io.SeekStart)
+		if _, err := reader.Seek(boxEnd, io.SeekStart); err != nil {
+			return nil, err
+		}
 	}
 }
 
@@ -858,7 +877,7 @@ func (f *Mp4File) SaveFile(file FileLike, wo WriteOptions) error {
 
 // RemoveFromPath implements AudioFile.
 func (f *Mp4File) RemoveFromPath(path string, t TagType) error {
-	return removeTagFromPath(path, FileTypeMp4, t)
+	return removeTagFromPath(path, t)
 }
 
 // mp4UpdateBoxSize adjusts a box's size field after its payload changed by
@@ -1143,7 +1162,9 @@ func mp4WriteIlstData(file FileLike, ilst *Ilst, writeOptions WriteOptions) erro
 		case "moof":
 			moof = h
 		}
-		mp4SkipBox(file, h)
+		if err := mp4SkipBox(file, h); err != nil {
+			return &FileEncodingError{Source: err}
+		}
 	}
 	if moov == nil {
 		return &FileEncodingError{Source: &Mp4ParseError{Message: "no moov box"}}
@@ -1173,7 +1194,9 @@ func mp4WriteIlstData(file FileLike, ilst *Ilst, writeOptions WriteOptions) erro
 		if string(h.name[:]) == "udta" {
 			udtaBox = h
 		}
-		file.Seek(h.pos+int64(h.size), io.SeekStart)
+		if _, err := file.Seek(h.pos+int64(h.size), io.SeekStart); err != nil {
+			return &FileEncodingError{Source: err}
+		}
 	}
 
 	if udtaBox == nil {
@@ -1231,7 +1254,9 @@ func mp4WriteIlstData(file FileLike, ilst *Ilst, writeOptions WriteOptions) erro
 			// children), but a non-full `meta` nests children immediately
 			// (Rust `meta_is_full`).
 			if mp4MetaIsFull(file, h) {
-				file.Seek(4, io.SeekCurrent)
+				if _, err := file.Seek(4, io.SeekCurrent); err != nil {
+					return &FileEncodingError{Source: err}
+				}
 			}
 			metaEnd := h.pos + int64(h.size)
 			for {
@@ -1247,10 +1272,14 @@ func mp4WriteIlstData(file FileLike, ilst *Ilst, writeOptions WriteOptions) erro
 				if string(mh.name[:]) == "ilst" {
 					ilstBox = mh
 				}
-				file.Seek(mh.pos+int64(mh.size), io.SeekStart)
+				if _, err := file.Seek(mh.pos+int64(mh.size), io.SeekStart); err != nil {
+					return &FileEncodingError{Source: err}
+				}
 			}
 		}
-		file.Seek(h.pos+int64(h.size), io.SeekStart)
+		if _, err := file.Seek(h.pos+int64(h.size), io.SeekStart); err != nil {
+			return &FileEncodingError{Source: err}
+		}
 	}
 
 	if ilstBox != nil {

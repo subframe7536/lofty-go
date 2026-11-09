@@ -111,8 +111,10 @@ func (t *Lyrics3Tag) encode(writeOptions WriteOptions) ([]byte, error) {
 		return nil, nil // Stripping
 	}
 	if strings.Contains(lyrics, "LYRICSBEGIN") || strings.Contains(lyrics, "LYRICSEND") {
-		return nil, &TagEncodingError{TagType: TagTypeLyrics3, HasTagType: true,
-			Source: &Lyrics3ParseError{Message: "lyrics text contains tag markers"}}
+		return nil, &TagEncodingError{
+			TagType: TagTypeLyrics3, HasTagType: true,
+			Source: &Lyrics3ParseError{Message: "lyrics text contains tag markers"},
+		}
 	}
 	enc, err := writeLatin1Field(lyrics, lyrics3v1MaxLyricsLen, writeOptions,
 		&Lyrics3ParseError{Message: "lyrics text contains invalid characters"})
@@ -168,14 +170,14 @@ type Lyrics3v2Image struct {
 
 // Lyrics3v2Tag is a Lyrics3 v2 tag.
 type Lyrics3v2Tag struct {
-	Flags               Lyrics3v2TagFlags
-	Lyrics              Option[string]
-	Info                Option[string]
-	Author              Option[string]
-	ExtendedAlbumName   Option[string]
-	ExtendedArtistName  Option[string]
-	ExtendedTrackTitle  Option[string]
-	Images              []Lyrics3v2Image
+	Flags              Lyrics3v2TagFlags
+	Lyrics             Option[string]
+	Info               Option[string]
+	Author             Option[string]
+	ExtendedAlbumName  Option[string]
+	ExtendedArtistName Option[string]
+	ExtendedTrackTitle Option[string]
+	Images             []Lyrics3v2Image
 }
 
 // ParseLyrics3v2Tag parses a complete Lyrics3v2 tag
@@ -555,7 +557,7 @@ func (t *Lyrics3v2Tag) encode(writeOptions WriteOptions) ([]byte, error) {
 		}
 		contentLen := min(len([]rune(v)), maxSize)
 		buf.WriteString(id)
-		buf.WriteString(fmt.Sprintf("%05d", contentLen))
+		fmt.Fprintf(&buf, "%05d", contentLen)
 		enc, err := writeLatin1Field(v, maxSize, writeOptions,
 			&Lyrics3v2ParseError{Message: id + " contains invalid characters"})
 		if err != nil {
@@ -614,11 +616,11 @@ func (t *Lyrics3v2Tag) encode(writeOptions WriteOptions) ([]byte, error) {
 			return nil, &TagEncodingError{TagType: TagTypeLyrics3v2, HasTagType: true, Source: &TooMuchDataError{}}
 		}
 		buf.WriteString("IMG")
-		buf.WriteString(fmt.Sprintf("%05d", imgBuf.Len()))
+		fmt.Fprintf(&buf, "%05d", imgBuf.Len())
 		buf.Write(imgBuf.Bytes())
 	}
 
-	buf.WriteString(fmt.Sprintf("%06d", tagContentLen))
+	fmt.Fprintf(&buf, "%06d", tagContentLen)
 	buf.Write(lyrics3v2Footer)
 	return buf.Bytes(), nil
 }
@@ -626,20 +628,20 @@ func (t *Lyrics3v2Tag) encode(writeOptions WriteOptions) ([]byte, error) {
 // findLyrics3 searches for a Lyrics3 tag ending right before the current
 // position. On success the reader is positioned at the start of the tag.
 // Returns (start, end, version, tag, found, err) where version is 1 or 2.
-func findLyrics3(reader io.ReadSeeker, read bool, parseOptions ParseOptions) (int64, int64, int, any, bool, error) {
+func findLyrics3(reader io.ReadSeeker, read bool, parseOptions ParseOptions) (int64, int64, any, bool, error) {
 	end, err := reader.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return 0, 0, 0, nil, false, err
+		return 0, 0, nil, false, err
 	}
 	if end < int64(len(lyrics3v1Footer)) {
-		return 0, 0, 0, nil, false, nil
+		return 0, 0, nil, false, nil
 	}
 	if _, err := reader.Seek(end-int64(len(lyrics3v1Footer)), io.SeekStart); err != nil {
-		return 0, 0, 0, nil, false, err
+		return 0, 0, nil, false, err
 	}
 	var footer [9]byte
 	if _, err := io.ReadFull(reader, footer[:]); err != nil {
-		return 0, 0, 0, nil, false, err
+		return 0, 0, nil, false, err
 	}
 
 	var maxSize int64
@@ -649,7 +651,7 @@ func findLyrics3(reader io.ReadSeeker, read bool, parseOptions ParseOptions) (in
 	case bytes.Equal(footer[:], lyrics3v1Footer):
 		maxSize = int64(len(lyrics3v2Header)) + lyrics3v1MaxLyricsLen + int64(len(lyrics3v1Footer))
 	default:
-		return 0, 0, 0, nil, false, nil
+		return 0, 0, nil, false, nil
 	}
 	version := 1
 	if bytes.Equal(footer[:], lyrics3v2Footer) {
@@ -666,53 +668,43 @@ func findLyrics3(reader io.ReadSeeker, read bool, parseOptions ParseOptions) (in
 		withEnd(revSearchEndAtPos(uint64(lowerBound))).
 		search()
 	if err != nil || !found {
-		return 0, 0, 0, nil, false, nil
+		return 0, 0, nil, false, nil
 	}
 	start, err := reader.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return 0, 0, 0, nil, false, err
+		return 0, 0, nil, false, err
 	}
 	if start < lowerBound || start > end-int64(len(lyrics3v2Header)) {
-		return 0, 0, 0, nil, false, nil
+		return 0, 0, nil, false, nil
 	}
 
 	var tag any
 	if read && parseOptions.ReadTags {
 		content := make([]byte, end-start)
 		if _, err := reader.Seek(start, io.SeekStart); err != nil {
-			return 0, 0, 0, nil, false, err
+			return 0, 0, nil, false, err
 		}
 		if _, err := io.ReadFull(reader, content); err != nil {
-			return 0, 0, 0, nil, false, err
+			return 0, 0, nil, false, err
 		}
 		if version == 2 {
 			t, err := ParseLyrics3v2Tag(content, parseOptions)
 			if err != nil {
-				return 0, 0, 0, nil, false, err
+				return 0, 0, nil, false, err
 			}
 			tag = t
 		} else {
 			t, err := ParseLyrics3Tag(content)
 			if err != nil {
-				return 0, 0, 0, nil, false, err
+				return 0, 0, nil, false, err
 			}
 			tag = t
 		}
 	}
 	if _, err := reader.Seek(start, io.SeekStart); err != nil {
-		return 0, 0, 0, nil, false, err
+		return 0, 0, nil, false, err
 	}
-	return start, end, version, tag, true, nil
-}
-
-// byteReaderAt adapts an io.ReadSeeker to io.ReaderAt.
-type byteReaderAt struct{ rs io.ReadSeeker }
-
-func (b byteReaderAt) ReadAt(p []byte, off int64) (int, error) {
-	if _, err := b.rs.Seek(off, io.SeekStart); err != nil {
-		return 0, err
-	}
-	return io.ReadFull(b.rs, p)
+	return start, end, tag, true, nil
 }
 
 // lyrics3v2WriteTo writes a Lyrics3v2 tag into a file. The file must contain
@@ -731,7 +723,7 @@ func lyrics3v2WriteTo(file FileLike, tag *Lyrics3v2Tag, writeOptions WriteOption
 	if _, err := file.Seek(id3v1Start, io.SeekStart); err != nil {
 		return &FileEncodingError{Source: err}
 	}
-	if l3start, l3end, _, _, l3found, err := findLyrics3(file, false, writeOptions.ParseOptions); err == nil && l3found {
+	if l3start, l3end, _, l3found, err := findLyrics3(file, false, writeOptions.ParseOptions); err == nil && l3found {
 		existingStart, existingEnd = l3start, l3end
 	}
 	encoded, err := tag.encode(writeOptions)
@@ -754,7 +746,7 @@ func lyrics3v1WriteTo(file FileLike, tag *Lyrics3Tag, writeOptions WriteOptions)
 	if _, err := file.Seek(id3v1Start, io.SeekStart); err != nil {
 		return &FileEncodingError{Source: err}
 	}
-	if l3start, l3end, _, _, l3found, err := findLyrics3(file, false, writeOptions.ParseOptions); err == nil && l3found {
+	if l3start, l3end, _, l3found, err := findLyrics3(file, false, writeOptions.ParseOptions); err == nil && l3found {
 		existingStart, existingEnd = l3start, l3end
 	}
 	encoded, err := tag.encode(writeOptions)

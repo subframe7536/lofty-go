@@ -9,27 +9,25 @@ import (
 )
 
 var (
-	riffPreamble   = []byte("RIFF")
-	wavePreamble   = []byte("WAVE")
-	formPreamble   = []byte("FORM")
-	aiffPreamble   = []byte("AIFF")
-	aifcPreamble   = []byte("AIFC")
-	listPreamble   = []byte("LIST")
-	infoPreamble   = []byte("INFO")
-	fmtPreamble    = []byte("fmt ")
-	dataPreamble   = []byte("data")
-	commPreamble   = []byte("COMM")
-	ssndPreamble   = []byte("SSND")
-	id3ChunkName   = []byte("ID3 ")
-	id3ChunkName2  = []byte("id3 ")
-	aiffNameChunk  = []byte("NAME")
-	aiffAuthChunk  = []byte("AUTH")
-	aiffCpyChunk   = []byte("(c) ")
-	aiffAnnoChunk  = []byte("ANNO")
-	aiffComtChunk  = []byte("COMT")
-	waveFormatPCM  = 0x0001
-	waveFormatIEEE = 0x0003
-	waveFormatExt  = 0xFFFE
+	riffPreamble  = []byte("RIFF")
+	wavePreamble  = []byte("WAVE")
+	formPreamble  = []byte("FORM")
+	aiffPreamble  = []byte("AIFF")
+	aifcPreamble  = []byte("AIFC")
+	listPreamble  = []byte("LIST")
+	infoPreamble  = []byte("INFO")
+	fmtPreamble   = []byte("fmt ")
+	dataPreamble  = []byte("data")
+	commPreamble  = []byte("COMM")
+	ssndPreamble  = []byte("SSND")
+	id3ChunkName  = []byte("ID3 ")
+	id3ChunkName2 = []byte("id3 ")
+	aiffNameChunk = []byte("NAME")
+	aiffAuthChunk = []byte("AUTH")
+	aiffCpyChunk  = []byte("(c) ")
+	aiffAnnoChunk = []byte("ANNO")
+	aiffComtChunk = []byte("COMT")
+	waveFormatExt = 0xFFFE
 )
 
 // IffParseError is returned when an IFF file fails to parse.
@@ -463,7 +461,7 @@ func WavFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*WavFile,
 					return nil, &FileParseError{Source: err}
 				}
 				if bytes.Equal(sub[:], infoPreamble) {
-					if t, err := parseRiffInfoList(reader, int64(size)-4, parseOptions); err == nil {
+					if t := parseRiffInfoList(reader, int64(size)-4, parseOptions); t != nil {
 						info = t
 					}
 				}
@@ -541,9 +539,9 @@ func iffCorrectPosition(reader io.ReadSeeker, chunkSize uint32, streamEnd int64)
 		fc := [4]byte{pad[0], nb[0], nb[1], nb[2]}
 		if validFourCC(fc) {
 			// Eating into the next chunk; the "padding" was already consumed
-			reader.Seek(-4, io.SeekCurrent)
+			_, _ = reader.Seek(-4, io.SeekCurrent)
 		} else {
-			reader.Seek(-3, io.SeekCurrent)
+			_, _ = reader.Seek(-3, io.SeekCurrent)
 		}
 	}
 }
@@ -630,7 +628,7 @@ func wavReadProperties(fmt []byte, totalSamples, streamLen uint32, fileLength ui
 
 // parseRiffInfoList parses the contents of a LIST/INFO chunk.
 // Chunks with sizes exceeding the list bounds stop parsing, like Rust.
-func parseRiffInfoList(reader io.Reader, size int64, parseOptions ParseOptions) (*RiffInfoTag, error) {
+func parseRiffInfoList(reader io.Reader, size int64, _ ParseOptions) *RiffInfoTag {
 	tag := &RiffInfoTag{}
 	remaining := size
 	for remaining >= 8 {
@@ -658,7 +656,7 @@ func parseRiffInfoList(reader io.Reader, size int64, parseOptions ParseOptions) 
 			}
 		}
 	}
-	return tag, nil
+	return tag
 }
 
 // FileType implements AudioFile.
@@ -715,7 +713,7 @@ func (f *WavFile) SaveFile(file FileLike, wo WriteOptions) error {
 
 // RemoveFromPath implements AudioFile.
 func (f *WavFile) RemoveFromPath(path string, t TagType) error {
-	return removeTagFromPath(path, FileTypeWav, t)
+	return removeTagFromPath(path, t)
 }
 
 // wavWriteRiffInfo replaces or adds a LIST/INFO chunk in a WAV file.
@@ -726,7 +724,7 @@ func wavWriteTag(file FileLike, tag *Tag, writeOptions WriteOptions) error {
 	return wavWriteRiffInfo(file, tag, writeOptions)
 }
 
-func wavWriteRiffInfo(file FileLike, tag *Tag, writeOptions WriteOptions) error {
+func wavWriteRiffInfo(file FileLike, tag *Tag, _ WriteOptions) error {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return &FileEncodingError{Source: err}
 	}
@@ -770,11 +768,7 @@ func wavWriteRiffInfo(file FileLike, tag *Tag, writeOptions WriteOptions) error 
 	var encoded []byte
 	if !tag.IsEmpty() {
 		info := RiffInfoTagFromTag(tag)
-		var err error
-		encoded, err = riffInfoListBytes(info)
-		if err != nil {
-			return &FileEncodingError{Source: err}
-		}
+		encoded = riffInfoListBytes(info)
 	}
 
 	if err := wavInsertChunk(file, listStart, listEnd, encoded); err != nil {
@@ -785,7 +779,7 @@ func wavWriteRiffInfo(file FileLike, tag *Tag, writeOptions WriteOptions) error 
 
 // riffInfoListBytes encodes the tag as a `LIST<size>INFO` chunk (empty if the
 // tag has no items), matching Rust's `RiffInfoList::dump_to`.
-func riffInfoListBytes(info *RiffInfoTag) ([]byte, error) {
+func riffInfoListBytes(info *RiffInfoTag) []byte {
 	var payload bytes.Buffer
 	payload.WriteString("INFO")
 	for _, item := range info.items {
@@ -802,7 +796,7 @@ func riffInfoListBytes(info *RiffInfoTag) ([]byte, error) {
 		}
 	}
 	if payload.Len() <= 4 {
-		return nil, nil
+		return nil
 	}
 	var encoded bytes.Buffer
 	size := uint32(payload.Len())
@@ -814,16 +808,13 @@ func riffInfoListBytes(info *RiffInfoTag) ([]byte, error) {
 	if size&1 == 1 {
 		encoded.WriteByte(0)
 	}
-	return encoded.Bytes(), nil
+	return encoded.Bytes()
 }
 
 // DumpTo writes the tag as a `LIST<size>INFO` chunk to a writer.
 func (t *RiffInfoTag) DumpTo(writer io.Writer, writeOptions WriteOptions) error {
-	data, err := riffInfoListBytes(t)
-	if err != nil {
-		return &FileEncodingError{Source: err}
-	}
-	_, err = writer.Write(data)
+	data := riffInfoListBytes(t)
+	_, err := writer.Write(data)
 	return err
 }
 
@@ -1206,7 +1197,7 @@ func (f *AiffFile) SaveFile(file FileLike, wo WriteOptions) error {
 
 // RemoveFromPath implements AudioFile.
 func (f *AiffFile) RemoveFromPath(path string, t TagType) error {
-	return removeTagFromPath(path, FileTypeAiff, t)
+	return removeTagFromPath(path, t)
 }
 
 // aiffWriteTag writes NAME/AUTH/(c) /ANNO chunks in an AIFF file.
@@ -1305,7 +1296,7 @@ func (t *AiffTextTag) DumpTo(writer io.Writer, writeOptions WriteOptions) error 
 	return err
 }
 
-func aiffWriteText(file FileLike, tag *Tag, writeOptions WriteOptions) error {
+func aiffWriteText(file FileLike, tag *Tag, _ WriteOptions) error {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return &FileEncodingError{Source: err}
 	}
@@ -1489,8 +1480,12 @@ func init() {
 		}
 		var sz [4]byte
 		binary.LittleEndian.PutUint32(sz[:], uint32(payload.Len()))
-		writer.Write([]byte("LIST"))
-		writer.Write(sz[:])
+		if _, err := writer.Write([]byte("LIST")); err != nil {
+			return err
+		}
+		if _, err := writer.Write(sz[:]); err != nil {
+			return err
+		}
 		_, err := writer.Write(payload.Bytes())
 		return err
 	}
@@ -1515,16 +1510,24 @@ func init() {
 			return nil
 		}
 		if v, ok := text.Name.Get(); ok {
-			writeChunk([4]byte{'N', 'A', 'M', 'E'}, v)
+			if err := writeChunk([4]byte{'N', 'A', 'M', 'E'}, v); err != nil {
+				return err
+			}
 		}
 		if v, ok := text.Author.Get(); ok {
-			writeChunk([4]byte{'A', 'U', 'T', 'H'}, v)
+			if err := writeChunk([4]byte{'A', 'U', 'T', 'H'}, v); err != nil {
+				return err
+			}
 		}
 		if v, ok := text.Copyright.Get(); ok {
-			writeChunk([4]byte{'(', 'c', ')', ' '}, v)
+			if err := writeChunk([4]byte{'(', 'c', ')', ' '}, v); err != nil {
+				return err
+			}
 		}
 		for _, v := range text.Annotations {
-			writeChunk([4]byte{'A', 'N', 'N', 'O'}, v)
+			if err := writeChunk([4]byte{'A', 'N', 'N', 'O'}, v); err != nil {
+				return err
+			}
 		}
 		return nil
 	}

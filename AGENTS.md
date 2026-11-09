@@ -12,6 +12,15 @@ go build ./...          # single package at repo root
 go vet ./...
 go test ./...           # ~15s; all tests in package lofty
 go test -run TestX -v ./  # focused test
+
+# Quality tooling (all live in $GOPATH/bin)
+golangci-lint run ./... # .golangci.yml: standard linters + staticcheck,
+                        # misspell, unparam, unconvert, perfsprint,
+                        # copyloopvar, usestdlibvars; gofumpt+goimports fmt
+golangci-lint fmt ./... # auto-fix formatting (gofumpt is stricter gofmt)
+gopls check ./*.go      # language-server diagnostics
+staticcheck ./...
+govulncheck ./...
 ```
 
 No codegen, no cgo. Module: `github.com/subframe7536/lofty-go` (Go 1.27+).
@@ -37,9 +46,9 @@ unexported helpers, so files stay grouped by name prefix, not directories:
 
 - `github.com/bogem/id3v2/v2` — ID3v2 frame parse/write
 - `github.com/go-flac/go-flac/v2` — FLAC metadata blocks
-- `github.com/abema/go-mp4` — MP4 box traversal
-- `github.com/mccoyst/ogg` — Ogg page read/write
-- `golang.org/x/text` — charmaps (Latin-1 etc.)
+
+MP4 box traversal, Ogg page read/write, and Latin-1/UTF-16 codecs are all
+hand-rolled in `format_mp4.go`, `format_ogg.go`, and `util_text.go`.
 
 Manual code is used wherever Lofty semantics diverge from the dependency
 (e.g. `id3v2TextFrameNoTerm`, `popmFramer`, `urlFramer`, `wxxxFramer` custom

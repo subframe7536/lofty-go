@@ -270,7 +270,6 @@ func (f *FlacFile) SaveFile(file FileLike, writeOptions WriteOptions) error {
 	// mirroring Rust's `FlacFile::write_to`.
 	pics := make([]PictureInfoPair, 0, len(f.pictures)+len(g.Pictures()))
 	for _, p := range g.Pictures() {
-		p := p
 		info, err := PictureInformationFromPicture(&p)
 		if err != nil {
 			info = PictureInformation{}
@@ -283,7 +282,7 @@ func (f *FlacFile) SaveFile(file FileLike, writeOptions WriteOptions) error {
 
 // RemoveFromPath removes a tag type.
 func (f *FlacFile) RemoveFromPath(path string, tagType TagType) error {
-	return removeTagFromPath(path, FileTypeFlac, tagType)
+	return removeTagFromPath(path, tagType)
 }
 
 // flacWriteTag replaces the VORBIS_COMMENT + PICTURE blocks in a FLAC file,
@@ -291,7 +290,6 @@ func (f *FlacFile) RemoveFromPath(path string, tagType TagType) error {
 func flacWriteTag(file FileLike, tag *Tag, writeOptions WriteOptions) error {
 	pics := make([]PictureInfoPair, 0, len(tag.Pictures()))
 	for _, p := range tag.Pictures() {
-		p := p
 		info, err := PictureInformationFromPicture(&p)
 		if err != nil {
 			info = PictureInformation{}
@@ -437,10 +435,6 @@ func flacWriteTagPics(file FileLike, tag *Tag, pics []PictureInfoPair, writeOpti
 }
 
 // readVorbisCommentBlock parses a raw VORBIS_COMMENT block into a tag.
-func readVorbisCommentBlock(data []byte, parseOptions ParseOptions) (*VorbisCommentsTag, error) {
-	return parseVorbisComments(data, parseOptions)
-}
-
 // ensure binary import is used
 var _ = binary.LittleEndian
 

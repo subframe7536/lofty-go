@@ -292,9 +292,11 @@ func TestTaglibId3v2DowngradeTo23(t *testing.T) {
 		t.Fatalf("genres = %v", genres)
 	}
 	// v2.4-only frames are dropped, not written
-	for _, k := range []ItemKey{ItemKeyTaggingTime, ItemKeyMood,
+	for _, k := range []ItemKey{
+		ItemKeyTaggingTime, ItemKeyMood,
 		ItemKeyAlbumTitleSortOrder, ItemKeyTrackTitleSortOrder,
-		ItemKeyTrackArtistSortOrder, ItemKeySetSubtitle} {
+		ItemKeyTrackArtistSortOrder, ItemKeySetSubtitle,
+	} {
 		if item := tag.Get(k); item != nil {
 			t.Fatalf("%v not dropped", k)
 		}
@@ -464,9 +466,11 @@ func rawId3v2TagRaw(version byte, frames ...[2][]byte) []byte {
 }
 
 func TestTaglibId3v2Utf16beDelimiter(t *testing.T) {
-	body := []byte{0x02,
+	body := []byte{
+		0x02,
 		0, 'F', 0, 'o', 0, 'o', 0, 0,
-		0, 'B', 0, 'a', 0, 'r'}
+		0, 'B', 0, 'a', 0, 'r',
+	}
 	tag := parseRawId3v2(t, rawId3v2TagRaw(4, [2][]byte{[]byte("TIT2"), body}))
 	got := tag.GetStrings(ItemKeyTrackTitle)
 	if len(got) != 2 || got[0] != "Foo" || got[1] != "Bar" {
@@ -558,10 +562,7 @@ func TestTaglibTagToId3v2LangFrame(t *testing.T) {
 	tag.PushUnchecked(NewTagItem(ItemKeyUnsyncLyrics, ItemValueText("Test lyrics")))
 	tag.PushUnchecked(NewTagItem(ItemKeyComment, ItemValueText("Test comment")))
 
-	btag, err := genericTagToBogem(tag, false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	btag := genericTagToBogem(tag, false)
 	uslt := btag.GetFrames("USLT")
 	if len(uslt) != 1 {
 		t.Fatalf("USLT frames = %d", len(uslt))

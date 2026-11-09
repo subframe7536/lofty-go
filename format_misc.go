@@ -9,13 +9,12 @@ import (
 	"time"
 )
 
-var dsdPreamble = []byte("DSD ")
-var dsdFmtPreamble = []byte("fmt ")
-var dsdDataPreamble = []byte("data")
-var wvpkPreamble = []byte("wvpk")
-var mpckPreamble = []byte("MPCK")
-
-var dsfSampleRateIdx = [16]uint32{2822400, 5644800, 0}
+var (
+	dsdPreamble    = []byte("DSD ")
+	dsdFmtPreamble = []byte("fmt ")
+	wvpkPreamble   = []byte("wvpk")
+	mpckPreamble   = []byte("MPCK")
+)
 
 // readEndTags scans the end of a stream for ID3v1, Lyrics3, and APE tags.
 // Returns the adjusted stream length and any tags found.
@@ -27,7 +26,7 @@ func readEndTags(reader io.ReadSeeker, start int64, streamLen uint64, parseOptio
 	if foundI {
 		streamLen -= 128
 	}
-	if _, _, _, _, foundL, err := findLyrics3(reader, false, parseOptions); err == nil && foundL {
+	if _, _, _, foundL, err := findLyrics3(reader, false, parseOptions); err == nil && foundL {
 		pos, _ := reader.Seek(0, io.SeekCurrent)
 		if pos-start < int64(streamLen) {
 			streamLen = uint64(pos - start)
@@ -175,7 +174,7 @@ func DsfFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*DsfFile,
 			millis := divRound(sampleCount*1000, uint64(sampleFreq))
 			p.Duration = time.Duration(millis) * time.Millisecond
 			if millis > 0 {
-				p.OverallBitrate = uint32(divRound(uint64(streamLen)*8, millis))
+				p.OverallBitrate = uint32(divRound(streamLen*8, millis))
 			}
 		}
 	}
@@ -235,7 +234,7 @@ func (f *DsfFile) SaveFile(file FileLike, wo WriteOptions) error {
 
 // RemoveFromPath implements AudioFile.
 func (f *DsfFile) RemoveFromPath(path string, t TagType) error {
-	return removeTagFromPath(path, FileTypeDsf, t)
+	return removeTagFromPath(path, t)
 }
 
 // dsfWriteId3v2 writes an ID3v2 tag at the DSF metadata offset (EOF).
@@ -457,7 +456,7 @@ func (f *WavPackFile) SaveFile(file FileLike, wo WriteOptions) error {
 
 // RemoveFromPath implements AudioFile.
 func (f *WavPackFile) RemoveFromPath(path string, t TagType) error {
-	return removeTagFromPath(path, FileTypeWavPack, t)
+	return removeTagFromPath(path, t)
 }
 
 // --- Musepack ---
@@ -779,7 +778,7 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*Mus
 					totalSamples = uint64(frameCount)*mpcFrameLength - mpcDecoderSynthDelay
 				}
 				if totalSamples > 0 {
-					bitrate := uint32(uint64(streamLen) * 8 * uint64(p.SampleRate) / (totalSamples * 1000))
+					bitrate := uint32(streamLen * 8 * uint64(p.SampleRate) / (totalSamples * 1000))
 					p.OverallBitrate = bitrate
 					p.AudioBitrate = bitrate
 				}
@@ -939,7 +938,7 @@ func (f *MusepackFile) SaveFile(file FileLike, wo WriteOptions) error {
 
 // RemoveFromPath implements AudioFile.
 func (f *MusepackFile) RemoveFromPath(path string, t TagType) error {
-	return removeTagFromPath(path, FileTypeMpc, t)
+	return removeTagFromPath(path, t)
 }
 
 // --- AAC ---
@@ -1016,7 +1015,9 @@ func AacFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*AacFile,
 			}
 		}
 	} else {
-		reader.Seek(pos, io.SeekStart)
+		if _, err := reader.Seek(pos, io.SeekStart); err != nil {
+			return nil, &FileParseError{Source: err}
+		}
 	}
 
 	newLen, id3v1Tag, _, err := readEndTags(reader, start, streamLen, parseOptions)
@@ -1073,7 +1074,7 @@ func AacFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*AacFile,
 					}
 					p.AudioObjectType = AudioObjectType(((h[2] >> 6) & 0b11) + 1)
 					p.SampleRate = rate
-					p.Channels = uint8(((h[2] & 1) << 2) | (h[3] >> 6))
+					p.Channels = ((h[2] & 1) << 2) | (h[3] >> 6)
 					p.ChannelMask = ChannelMaskFromMp4Channels(p.Channels)
 					p.Original = (h[3]>>5)&1 == 1
 					p.Copyrighted = (h[3]>>4)&1 == 1
@@ -1169,7 +1170,7 @@ func (f *AacFile) SaveFile(file FileLike, wo WriteOptions) error {
 
 // RemoveFromPath implements AudioFile.
 func (f *AacFile) RemoveFromPath(path string, t TagType) error {
-	return removeTagFromPath(path, FileTypeAac, t)
+	return removeTagFromPath(path, t)
 }
 
 func init() {
@@ -1511,11 +1512,14 @@ func mpcReplayGain(gain uint16) int16 {
 	if gain == 0 {
 		return 0
 	}
-	g := int16((64.82-float64(gain)/100.0)*256.0 + 0.5)
-	if g < 0 || g >= 0x7FFF {
+	v := (64.82-float64(gain)/100.0)*256.0 + 0.5
+	// Rust `(x) as i16` saturates out-of-range floats before the range
+	// check; !(0..i16::MAX).contains(&gain) => 0. Comparing in f64 avoids
+	// Go's wrapping int16 conversion.
+	if v < 0 || v >= float64(math.MaxInt16) {
 		return 0
 	}
-	return g
+	return int16(v)
 }
 
 // mpcReplayPeak converts a raw SV7 peak value to a log-scale peak.

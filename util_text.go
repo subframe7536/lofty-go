@@ -1,7 +1,6 @@
 package lofty
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"unicode/utf16"
@@ -40,14 +39,6 @@ func (e *TextDecodingError) Error() string {
 }
 
 func (e *TextDecodingError) Unwrap() error { return e.Source }
-
-func utf16MissingBOMError() *TextDecodingError {
-	return &TextDecodingError{
-		Encoding:  TextEncodingUTF16,
-		ValidUpTo: Some(0),
-		Message:   "UTF-16 string has no byte order mark",
-	}
-}
 
 func utf16BadBOMError() *TextDecodingError {
 	return &TextDecodingError{
@@ -112,40 +103,9 @@ func (e TextEncoding) String() string {
 	return "unknown"
 }
 
-func textEncodingFromByte(v byte) (TextEncoding, error) {
-	switch v {
-	case 0:
-		return TextEncodingLatin1, nil
-	case 1:
-		return TextEncodingUTF16, nil
-	case 2:
-		return TextEncodingUTF16BE, nil
-	case 3:
-		return TextEncodingUTF8, nil
-	}
-	return 0, &BadTextEncodingError{}
-}
-
-func verifyLatin1(text string) bool {
-	for _, c := range text {
-		if c > 255 {
-			return false
-		}
-	}
-	return true
-}
-
 // ID3v2.4 introduced two new text encodings.
 //
 // When writing ID3v2.3, we just substitute with UTF-16.
-func (e TextEncoding) toID3v23() TextEncoding {
-	switch e {
-	case TextEncodingUTF8, TextEncodingUTF16BE:
-		return TextEncodingUTF16
-	}
-	return e
-}
-
 // Encode encodes `text` in this encoding. If `terminated`, a null terminator is appended.
 // If `lossy`, unrepresentable characters are replaced with '?'; otherwise a
 // [TextEncodingError] is returned.
@@ -216,13 +176,6 @@ type decodeTextResult struct {
 	Content   string
 	BytesRead int
 	BOM       [2]byte
-}
-
-func (d decodeTextResult) textOrNone() (string, bool) {
-	if d.Content == "" {
-		return "", false
-	}
-	return d.Content, true
 }
 
 // TextDecodeOptions specifies how to decode the provided text.
@@ -466,22 +419,6 @@ func utf16Valid(words []uint16) bool {
 //
 // If no BOM is present, the string will be decoded using `order`.
 // Returns (string, bytesRead).
-func utf16DecodeTerminatedMaybeBOM(reader io.Reader, order byteOrder) (string, int, error) {
-	rawText, terminatorLen := readToTerminator(reader, TextEncodingUTF16)
-	bytesRead := len(rawText) + terminatorLen
-
-	var orderToUse = order
-	if len(rawText) >= 2 && rawText[0] == 0xFF && rawText[1] == 0xFE {
-		rawText = rawText[2:]
-		orderToUse = littleEndian
-	} else if len(rawText) >= 2 && rawText[0] == 0xFE && rawText[1] == 0xFF {
-		rawText = rawText[2:]
-		orderToUse = bigEndian
-	}
-	d, err := utf16DecodeBytes(rawText, orderToUse)
-	return d, bytesRead, err
-}
-
 func trimEndNulls(text string) string {
 	end := len(text)
 	for end > 0 && text[end-1] == 0 {
@@ -509,5 +446,3 @@ func asciiNumber(input []byte) (int, uint64) {
 	}
 	return numDigits, product
 }
-
-var errInvalidUTF16 = errors.New("invalid UTF-16 sequence")

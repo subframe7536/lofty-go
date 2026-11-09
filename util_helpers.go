@@ -1,8 +1,6 @@
 package lofty
 
 import (
-	"encoding/binary"
-	"io"
 	"os"
 	"strconv"
 	"time"
@@ -90,7 +88,7 @@ func saveToPath(path string, f AudioFile, tagType TagType, writeOptions WriteOpt
 }
 
 // removeTagFromPath removes `tagType` from the file at `path`.
-func removeTagFromPath(path string, fTy FileType, tagType TagType) error {
+func removeTagFromPath(path string, tagType TagType) error {
 	osFile, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		return &FileEncodingError{Source: err}
@@ -106,10 +104,3 @@ func removeTagFromPath(path string, fTy FileType, tagType TagType) error {
 // --- generic MPEG-4 ftyp check used by AacFile too ---
 
 // readU32BE reads a big-endian u32.
-func readU32BE(reader io.Reader) (uint32, error) {
-	var b [4]byte
-	if _, err := io.ReadFull(reader, b[:]); err != nil {
-		return 0, err
-	}
-	return binary.BigEndian.Uint32(b[:]), nil
-}

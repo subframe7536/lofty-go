@@ -10,8 +10,8 @@ import (
 
 type myFileResolver struct{}
 
-func (myFileResolver) Extension() string          { return "myfile" }
-func (myFileResolver) PrimaryTagType() TagType    { return TagTypeID3v2 }
+func (myFileResolver) Extension() string       { return "myfile" }
+func (myFileResolver) PrimaryTagType() TagType { return TagTypeID3v2 }
 func (myFileResolver) TagSupport(t TagType) TagSupport {
 	if t == TagTypeID3v2 {
 		return TagSupportReadWrite

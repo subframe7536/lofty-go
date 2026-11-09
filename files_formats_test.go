@@ -109,7 +109,7 @@ func TestFlacWrite(t *testing.T) {
 
 // --- ported from lofty-rs lofty/tests/files/ogg.rs ---
 
-func oggRead(t *testing.T, path string, expected FileType) *TaggedFile {
+func oggRead(t *testing.T, path string, expected FileType) {
 	file := probeRead(t, path, noProps)
 	if !file.FileType().Equal(expected) {
 		t.Fatalf("expected %s, got %s", expected, file.FileType())
@@ -120,7 +120,6 @@ func oggRead(t *testing.T, path string, expected FileType) *TaggedFile {
 	}
 	// Expecting 2 items: vendor string (EncoderSoftware) and artist
 	verifyArtist(t, file, TagTypeVorbisComments, "Foo artist", 2)
-	return file
 }
 
 func TestOpusRead(t *testing.T) {

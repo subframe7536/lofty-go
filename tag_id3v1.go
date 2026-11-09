@@ -345,7 +345,7 @@ func writeId3v1(file FileLike, tag *Id3v1Tag, writeOptions WriteOptions) error {
 			return nil
 		}
 		// Strip Lyrics3 too — Lyrics3 is an extension of ID3v1.
-		lyrStart, _, _, _, lyrFound, err := findLyrics3(file, false, writeOptions.ParseOptions)
+		lyrStart, _, _, lyrFound, err := findLyrics3(file, false, writeOptions.ParseOptions)
 		if err == nil && lyrFound {
 			existingRange[0] = lyrStart
 		}

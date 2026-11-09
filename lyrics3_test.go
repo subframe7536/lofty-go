@@ -115,11 +115,11 @@ func lyrics3v2TagBytes() []byte {
 
 func lyrics3v2ExpectedConcrete() *Lyrics3v2Tag {
 	return &Lyrics3v2Tag{
-		Flags: Lyrics3v2TagFlags{SynchronizedLyrics: true, RandomSelection: false},
-		Lyrics: Some("[00:00]Awesome lyrics\r\n[00:10]Written by Lofty"),
-		Info: Some("This track has lots of interesting info.\r\nSo much in fact, that it spans multiple lines!"),
-		Author: Some("Serial-ATA"),
-		ExtendedAlbumName: Some("Lofty Stuff"),
+		Flags:              Lyrics3v2TagFlags{SynchronizedLyrics: true, RandomSelection: false},
+		Lyrics:             Some("[00:00]Awesome lyrics\r\n[00:10]Written by Lofty"),
+		Info:               Some("This track has lots of interesting info.\r\nSo much in fact, that it spans multiple lines!"),
+		Author:             Some("Serial-ATA"),
+		ExtendedAlbumName:  Some("Lofty Stuff"),
 		ExtendedArtistName: Some("Foo & the Bars"),
 		ExtendedTrackTitle: Some("BazLand"),
 		Images: []Lyrics3v2Image{

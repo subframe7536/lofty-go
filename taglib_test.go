@@ -3849,12 +3849,14 @@ type customRatingProvider struct{}
 func (customRatingProvider) SupportsEmail(email string) bool {
 	return email == "foo@example.com"
 }
+
 func (customRatingProvider) Rate(tagType TagType, rating StarRating) uint8 {
 	if tagType == TagTypeID3v2 && rating == StarRatingOne {
 		return 128
 	}
 	return DefaultRatingProvider{}.Rate(tagType, rating)
 }
+
 func (customRatingProvider) ConvertRaw(tagType TagType, rating uint8) StarRating {
 	if tagType == TagTypeID3v2 && rating == 128 {
 		return StarRatingOne

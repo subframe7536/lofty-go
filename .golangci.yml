@@ -1,0 +1,44 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - copyloopvar
+    - misspell
+    - perfsprint
+    - unconvert
+    - unparam
+    - usestdlibvars
+  exclusions:
+    presets:
+      - comments
+      - std-error-handling
+      - common-false-positives
+    rules:
+      # Rust-mirrored API surface: exported names follow lofty-rs, not Go doc conventions
+      - linters: [revive, staticcheck]
+        text: "exported .* should have comment"
+      # Test files reuse Rust fixture helpers and tolerate looser errcheck
+      - path: _test\.go$
+        linters: [errcheck]
+      # "Humour"/"theatre" are real Winamp ID3v1 genre names, not typos
+      - linters: [misspell]
+        text: "([Hh]umour|theatre)"
+  settings:
+    misspell:
+      locale: US
+    staticcheck:
+      checks: ["all", "-ST1000", "-ST1003", "-ST1020", "-ST1021", "-ST1022"]
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/subframe7536/lofty-go
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

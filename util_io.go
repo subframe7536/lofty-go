@@ -322,15 +322,6 @@ func streamLen(rs io.Seeker) (uint64, error) {
 }
 
 // readF80 reads a big-endian 80-bit extended precision float.
-func readF80(r io.Reader) (f80, error) {
-	var b [10]byte
-	_, err := io.ReadFull(r, b[:])
-	if err != nil {
-		return f80{}, err
-	}
-	return f80FromBEBytes(b), nil
-}
-
 // f80 is an 80-bit extended precision floating-point number, used in AIFF.
 type f80 struct {
 	signed   bool
@@ -382,10 +373,6 @@ func divRound(a, b uint64) uint64 {
 	return (a + (b >> 1)) / b
 }
 
-func divRound32(a, b uint32) uint32 {
-	return (a + (b >> 1)) / b
-}
-
 // revPatternSearcher searches for a pattern in a stream backwards.
 type revPatternSearcher struct {
 	start      revSearchStart
@@ -409,12 +396,8 @@ type revSearchEnd struct {
 	pos  uint64
 }
 
-var (
-	// revSearchEndStreamStart ends the search at the start of the stream.
-	revSearchEndStreamStart = revSearchEnd{kind: 0}
-	// revSearchEndFromCurrent ends the search at the current position.
-	revSearchEndFromCurrent = revSearchEnd{kind: 1}
-)
+// revSearchEndStreamStart ends the search at the start of the stream.
+var revSearchEndStreamStart = revSearchEnd{kind: 0}
 
 // revSearchEndAtPos ends the search at a specific position.
 func revSearchEndAtPos(p uint64) revSearchEnd { return revSearchEnd{kind: 2, pos: p} }
@@ -427,11 +410,6 @@ func newRevPatternSearcher(reader io.ReadSeeker, pattern []byte) *revPatternSear
 		pattern:    pattern,
 		reader:     reader,
 	}
-}
-
-func (r *revPatternSearcher) withBufferSize(n uint64) *revPatternSearcher {
-	r.bufferSize = n
-	return r
 }
 
 func (r *revPatternSearcher) withStart(s revSearchStart) *revPatternSearcher {

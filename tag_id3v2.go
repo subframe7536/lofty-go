@@ -180,17 +180,18 @@ func parseId3v2Header(reader io.Reader) (Id3v2Header, error) {
 	var h Id3v2Header
 	h.Version = version
 	flags := b[5]
-	if version == 2 {
+	switch version {
+	case 2:
 		// Bit 2 is the abandoned v2.2 compression flag — the spec says to ignore the tag.
 		if flags&0x40 != 0 {
 			return Id3v2Header{}, &Id3v2ParseError{Message: "ID3v2.2 compression is not supported"}
 		}
 		h.Flags.Unsynchronisation = flags&0x80 != 0
-	} else if version == 3 {
+	case 3:
 		h.Flags.Unsynchronisation = flags&0x80 != 0
 		h.Flags.ExtendedHeader = flags&0x40 != 0
 		h.Flags.Experimental = flags&0x20 != 0
-	} else {
+	default:
 		h.Flags.Unsynchronisation = flags&0x80 != 0
 		h.Flags.ExtendedHeader = flags&0x40 != 0
 		h.Flags.Experimental = flags&0x20 != 0
@@ -608,7 +609,7 @@ func handleUrlFrame(tag *Tag, id string, body []byte) {
 		descLen := 0
 		var desc string
 		if enc == TextEncodingUTF16 || enc == TextEncodingUTF16BE {
-			for descLen+1 < len(rest) && !(rest[descLen] == 0 && rest[descLen+1] == 0) {
+			for descLen+1 < len(rest) && (rest[descLen] != 0 || rest[descLen+1] != 0) {
 				descLen += 2
 			}
 			d, _ := utf16DecodeBytes(rest[:descLen], byteOrderForEncoding(enc))
@@ -761,14 +762,16 @@ func id3v23GenreValue(value string) string {
 		case i == len(genres)-1 && !isU8Num(genre):
 			b.WriteString(genre)
 		default:
-			b.WriteString("(" + genre + ")")
+			b.WriteByte('(')
+			b.WriteString(genre)
+			b.WriteByte(')')
 		}
 	}
 	return b.String()
 }
 
 // genericTagToBogem converts a generic [Tag] to a bogem tag.
-func genericTagToBogem(tag *Tag, useV23 bool) (*bogem.Tag, error) {
+func genericTagToBogem(tag *Tag, useV23 bool) *bogem.Tag {
 	btag := bogem.NewEmptyTag()
 	if useV23 {
 		btag.SetVersion(3)
@@ -1171,7 +1174,7 @@ func genericTagToBogem(tag *Tag, useV23 bool) (*bogem.Tag, error) {
 		})
 	}
 
-	return btag, nil
+	return btag
 }
 
 // langOrXxx returns the 3-char language or "XXX".
@@ -1415,10 +1418,7 @@ func parseDDMM(s string) (uint8, uint8, bool) {
 // `verify_tag_size`: the tag grows by min(PreferredPadding, SYNCHSAFE_MAX -
 // content size) zero bytes, included in the declared size.
 func id3v2Serialize(tag *Tag, writeOptions WriteOptions) ([]byte, error) {
-	btag, err := genericTagToBogem(tag, writeOptions.UseID3v23)
-	if err != nil {
-		return nil, err
-	}
+	btag := genericTagToBogem(tag, writeOptions.UseID3v23)
 	var buf bytes.Buffer
 	if _, err := btag.WriteTo(&buf); err != nil {
 		return nil, err
@@ -1936,8 +1936,8 @@ func parseId3v22(reader io.Reader, header Id3v2Header, parseOptions ParseOptions
 			}
 			tag.PushUnchecked(item)
 		default:
-			switch {
-			case v4id[0] == 'T':
+			switch v4id[0] {
+			case 'T':
 				text := id3v22DecodeText(body)
 				var enc byte
 				if len(body) > 0 {
@@ -1948,7 +1948,7 @@ func parseId3v22(reader io.Reader, header Id3v2Header, parseOptions ParseOptions
 				} else {
 					pushText(v4id, text, enc)
 				}
-			case v4id[0] == 'W':
+			case 'W':
 				ik, ok := ItemKeyFromKey(TagTypeID3v2, v4id)
 				if !ok {
 					ik = ItemKeyUnknown
@@ -2070,7 +2070,7 @@ func id3v2SanitizeTag(content []byte, header Id3v2Header, parseOptions ParseOpti
 			}
 		}
 		for i := 0; i < idLen; i++ {
-			if c := h[i]; !(c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+			if c := h[i]; (c < 'A' || c > 'Z') && (c < '0' || c > '9') {
 				// Bad frame ID — Strict errors; other modes skip `size`
 				// bytes and keep going (Rust `skip_frame`).
 				if strict {

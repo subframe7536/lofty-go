@@ -52,7 +52,7 @@ func (p *Probe) IntoInner() io.ReadSeeker { return p.inner }
 func (p *Probe) GuessFileType() (*Probe, error) {
 	maxJunkBytes := DefaultMaxJunkBytes
 	if o, ok := p.options.Get(); ok {
-		maxJunkBytes = int(o.MaxJunkBytes)
+		maxJunkBytes = o.MaxJunkBytes
 	}
 
 	fTy, err := p.guessInner(maxJunkBytes)

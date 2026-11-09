@@ -354,7 +354,7 @@ func PictureInformationFromJPEG(data []byte) (PictureInformation, error) {
 	if _, err := io.ReadFull(reader, frameMarker[:]); err != nil {
 		return PictureInformation{}, pictureParseError(err)
 	}
-	if !(frameMarker[0] == 0xFF && frameMarker[1] == 0xD8 && frameMarker[2] == 0xFF) {
+	if frameMarker[0] != 0xFF || frameMarker[1] != 0xD8 || frameMarker[2] != 0xFF {
 		return PictureInformation{}, pictureParseError(&UnknownImageFormatError{})
 	}
 

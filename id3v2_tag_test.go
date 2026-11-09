@@ -135,8 +135,10 @@ func TestId3v2SpecialItemsRoundtrip(t *testing.T) {
 	}
 	tpe1Body := append([]byte{0}, "Foo Artist"...)
 	frames := append(v4frame("TPE1", tpe1Body), v4frame("RVA2", rva2Body)...)
-	tagBytes := []byte{'I', 'D', '3', 4, 0, 0,
-		byte(len(frames) >> 21), byte(len(frames) >> 14), byte(len(frames) >> 7), byte(len(frames))}
+	tagBytes := []byte{
+		'I', 'D', '3', 4, 0, 0,
+		byte(len(frames) >> 21), byte(len(frames) >> 14), byte(len(frames) >> 7), byte(len(frames)),
+	}
 	tagBytes = append(tagBytes, frames...)
 
 	parse := func(t *testing.T, b []byte) *Tag {
@@ -319,11 +321,7 @@ func TestGenreIdMultipleJoined(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 	// Rust's genre() joins multiple values with " / "
-	joined := got[0]
-	for _, g := range got[1:] {
-		joined += " / " + g
-	}
-	if joined != "Techno-Industrial / Noise" {
+	if joined := strings.Join(got, " / "); joined != "Techno-Industrial / Noise" {
 		t.Fatalf("joined = %q", joined)
 	}
 }
@@ -508,8 +506,7 @@ func tagWithTrckTpos(content string) *Tag {
 		_ = id
 	}
 	// Direct pair-split semantics mirror split_pair on a TRCK/TPOS frame.
-	btag, _ := genericTagToBogem(raw, false)
-	_ = btag
+	_ = genericTagToBogem(raw, false)
 	// Build the generic tag the way a parsed TRCK/TPOS would.
 	num, tot, ok := splitNumPair(content)
 	if ok {

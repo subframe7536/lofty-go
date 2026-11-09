@@ -28,13 +28,13 @@ const (
 // AtomData is a single `data` atom payload inside an [Atom].
 type AtomData struct {
 	Kind AtomDataKind
-	Text string   // UTF8/UTF16
-	Bool bool     // Bool
-	Pic  Picture  // Picture
-	Int  int64    // SignedInt
-	Uint uint64   // UnsignedInt
-	Code uint8    // Unknown — the original data-type code
-	Data []byte   // Unknown — raw payload
+	Text string  // UTF8/UTF16
+	Bool bool    // Bool
+	Pic  Picture // Picture
+	Int  int64   // SignedInt
+	Uint uint64  // UnsignedInt
+	Code uint8   // Unknown — the original data-type code
+	Data []byte  // Unknown — raw payload
 }
 
 // AtomIdent is an atom identifier: either a four-byte code or a freeform
@@ -535,15 +535,8 @@ func advisoryRatingFromU8(v uint8) (uint8, bool) {
 	}
 }
 
-
-
 func utf16BEEncode(s string) []byte {
 	return utf16Encode(s, bigEndian, false, false)
-}
-
-func utf16BEDecode(b []byte) string {
-	s, _ := utf16DecodeBytes(b, bigEndian)
-	return s
 }
 
 // parseIlst parses the atoms inside an `ilst` atom body into an [Ilst].
@@ -575,7 +568,9 @@ func parseIlst(reader io.ReadSeeker, end int64, parseOptions ParseOptions) (*Ils
 		atomEnd := atom.pos + int64(atom.size)
 		// `free`/`skip` atoms inside ilst are ignored
 		if atom.name == [4]byte{'f', 'r', 'e', 'e'} || atom.name == [4]byte{'s', 'k', 'i', 'p'} {
-			reader.Seek(atomEnd, io.SeekStart)
+			if _, err := reader.Seek(atomEnd, io.SeekStart); err != nil {
+				break
+			}
 			continue
 		}
 		name := mp4AtomName(atom.name)
@@ -587,7 +582,9 @@ func parseIlst(reader io.ReadSeeker, end int64, parseOptions ParseOptions) (*Ils
 			mean := mp4BoxPayload(reader, atomEnd, "mean")
 			nameB := mp4BoxPayload(reader, atomEnd, "name")
 			if mean == nil || nameB == nil {
-				reader.Seek(atomEnd, io.SeekStart)
+				if _, err := reader.Seek(atomEnd, io.SeekStart); err != nil {
+					break
+				}
 				continue
 			}
 			ident = FreeformIdent(string(mean), string(nameB))
@@ -614,7 +611,9 @@ func parseIlst(reader io.ReadSeeker, end int64, parseOptions ParseOptions) (*Ils
 		fourcc := atom.name
 		isCovr := fourcc == [4]byte{'c', 'o', 'v', 'r'}
 		if isCovr && !parseOptions.ReadCoverArt {
-			reader.Seek(atomEnd, io.SeekStart)
+			if _, err := reader.Seek(atomEnd, io.SeekStart); err != nil {
+				break
+			}
 			continue
 		}
 		isBool := [4]byte{'c', 'p', 'i', 'l'} == fourcc || [4]byte{'h', 'd', 'v', 'd'} == fourcc ||
@@ -642,7 +641,9 @@ func parseIlst(reader io.ReadSeeker, end int64, parseOptions ParseOptions) (*Ils
 				if parseOptions.ParsingMode == ParsingModeStrict {
 					return nil, &Mp4ParseError{Message: `expected atom "data" to follow name`}
 				}
-				reader.Seek(childEnd, io.SeekStart)
+				if _, err := reader.Seek(childEnd, io.SeekStart); err != nil {
+					break
+				}
 				continue
 			}
 			var dh [8]byte
@@ -654,13 +655,17 @@ func parseIlst(reader io.ReadSeeker, end int64, parseOptions ParseOptions) (*Ils
 				if parseOptions.ParsingMode == ParsingModeStrict {
 					return nil, &Mp4ParseError{Message: "unknown type set in data atom"}
 				}
-				reader.Seek(childEnd, io.SeekStart)
+				if _, err := reader.Seek(childEnd, io.SeekStart); err != nil {
+					break
+				}
 				continue
 			}
 			code := dh[3]
 			contentLen := int(ch.size) - 8
 			if contentLen <= 0 {
-				reader.Seek(childEnd, io.SeekStart)
+				if _, err := reader.Seek(childEnd, io.SeekStart); err != nil {
+					break
+				}
 				continue
 			}
 			payload, err := tryByteSlice(contentLen)
@@ -713,7 +718,7 @@ func parseIlst(reader io.ReadSeeker, end int64, parseOptions ParseOptions) (*Ils
 					}
 					// Drop the whole atom (Rust `handle_error`)
 					datas = nil
-					reader.Seek(atomEnd, io.SeekStart)
+					_, _ = reader.Seek(atomEnd, io.SeekStart)
 					break
 				}
 				datas = append(datas, d)
@@ -722,7 +727,9 @@ func parseIlst(reader io.ReadSeeker, end int64, parseOptions ParseOptions) (*Ils
 				break
 			}
 		}
-		reader.Seek(atomEnd, io.SeekStart)
+		// The next iteration re-seeks to atom.pos, so a failed
+		// reposition is harmless here.
+		_, _ = reader.Seek(atomEnd, io.SeekStart)
 		if len(datas) > 0 {
 			// Upgraded `gnre` values are collected and pushed as ©gen after
 			// the loop (discarded if a ©gen atom already exists)
@@ -889,8 +896,10 @@ func (l *Ilst) SetComment(v string) { l.setText("©cmt", v) }
 // RemoveComment removes the "©cmt" atom.
 func (l *Ilst) RemoveComment() { l.Remove(FourccIdent("©cmt")) }
 
-var trknFourcc = [4]byte{'t', 'r', 'k', 'n'}
-var diskFourcc = [4]byte{'d', 'i', 's', 'k'}
+var (
+	trknFourcc = [4]byte{'t', 'r', 'k', 'n'}
+	diskFourcc = [4]byte{'d', 'i', 's', 'k'}
+)
 
 // Track returns the track number stored in `trkn`.
 func (l *Ilst) Track() (uint32, bool) {

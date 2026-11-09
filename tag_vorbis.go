@@ -458,11 +458,6 @@ func VorbisCommentsTagFromTag(input *Tag, vendor string) *VorbisCommentsTag {
 
 // --- codec ---
 
-// vorbisCommentSetupKeys are keys that store setup data, not metadata.
-var vorbisCommentSetupKeys = []string{
-	"METADATA_BLOCK_PICTURE", "COVERART", "COVERARTMIME", "BINARY",
-}
-
 // parseVorbisComments parses the vendor+comments content (no "vorbis"/"OpusTags"
 // signature, no framing bit — callers strip those).
 func parseVorbisComments(content []byte, parseOptions ParseOptions) (*VorbisCommentsTag, error) {
@@ -697,14 +692,6 @@ func pictureFromFlacBytes(data []byte) (Picture, PictureInformation, error) {
 }
 
 // flacBytes serializes a picture to a FLAC picture block body.
-func (p *Picture) flacBytes() ([]byte, error) {
-	info, err := PictureInformationFromPicture(p)
-	if err != nil {
-		info = PictureInformation{}
-	}
-	return p.AsFlacBytes(info, false), nil
-}
-
 // flagItem normalizes a flag item value ("0"/"1"/"true"/"false"), -1 if invalid.
 func flagItem(s string) int {
 	switch strings.ToLower(strings.TrimSpace(s)) {

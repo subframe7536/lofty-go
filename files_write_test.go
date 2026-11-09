@@ -60,16 +60,6 @@ func removeTagTest(t *testing.T, assetPath string, tagType TagType) {
 	}
 }
 
-// writeArtistReread saves a bound file, re-reads it, and verifies the artist.
-func writeArtistReread(t *testing.T, f *os.File, tagType TagType, expected, newValue string, count int) {
-	t.Helper()
-	btf, err := NewProbe(f).Options(noProps).ReadBound(NewOSFile(f))
-	if err != nil {
-		t.Fatalf("read_bound failed: %v", err)
-	}
-	setArtist(t, btf, tagType, expected, newValue, count)
-}
-
 // --- ported from lofty-rs lofty/tests/files/wav.rs ---
 
 func TestWavWrite(t *testing.T) {
@@ -487,10 +477,7 @@ func TestTagToId3v2LangFrame(t *testing.T) {
 	tag.InsertText(ItemKeyUnsyncLyrics, "Test lyrics")
 	tag.InsertText(ItemKeyComment, "Test comment")
 
-	btag, err := genericTagToBogem(tag, false)
-	if err != nil {
-		t.Fatalf("conversion failed: %v", err)
-	}
+	btag := genericTagToBogem(tag, false)
 	uslt := btag.GetFrames("USLT")
 	if len(uslt) != 1 || uslt[0].(bogem.UnsynchronisedLyricsFrame).Lyrics != "Test lyrics" {
 		t.Fatalf("expected one USLT frame with lyrics, got %+v", uslt)
@@ -944,7 +931,7 @@ func TestLyrics3v2Write(t *testing.T) {
 	if _, err := f.Seek(-128, io.SeekEnd); err != nil {
 		t.Fatal(err)
 	}
-	_, _, _, foundTag, ok, err := findLyrics3(f, true, NewParseOptions())
+	_, _, foundTag, ok, err := findLyrics3(f, true, NewParseOptions())
 	if err != nil || !ok {
 		t.Fatalf("lyrics3 not found after write: %v", err)
 	}
@@ -984,7 +971,7 @@ func TestLyrics3v2Remove(t *testing.T) {
 	if _, err := f.Seek(-128, io.SeekEnd); err != nil {
 		t.Fatal(err)
 	}
-	_, _, _, _, ok, err := findLyrics3(f, false, NewParseOptions())
+	_, _, _, ok, err := findLyrics3(f, false, NewParseOptions())
 	if err != nil {
 		t.Fatalf("find failed: %v", err)
 	}
@@ -1371,7 +1358,7 @@ func TestMpegSaveTrackAndDiskToId3v2(t *testing.T) {
 		}
 		return tag
 	}
-	assertNum := func(tag *Tag, get func() (uint32, bool), name string, want uint32, wantOk bool) {
+	assertNum := func(get func() (uint32, bool), name string, want uint32, wantOk bool) {
 		got, ok := get()
 		if ok != wantOk || (ok && got != want) {
 			t.Errorf("%s = %v (ok=%v), want %v (ok=%v)", name, got, ok, want, wantOk)
@@ -1388,10 +1375,10 @@ func TestMpegSaveTrackAndDiskToId3v2(t *testing.T) {
 			t.Fatal(err)
 		}
 		tag = reread(t, f)
-		assertNum(tag, tag.Track, "track", 1, true)
-		assertNum(tag, tag.TrackTotal, "track_total", 0, false)
-		assertNum(tag, tag.Disk, "disk", 2, true)
-		assertNum(tag, tag.DiskTotal, "disk_total", 0, false)
+		assertNum(tag.Track, "track", 1, true)
+		assertNum(tag.TrackTotal, "track_total", 0, false)
+		assertNum(tag.Disk, "disk", 2, true)
+		assertNum(tag.DiskTotal, "disk_total", 0, false)
 	})
 
 	t.Run("total only", func(t *testing.T) {
@@ -1405,10 +1392,10 @@ func TestMpegSaveTrackAndDiskToId3v2(t *testing.T) {
 		}
 		tag = reread(t, f)
 		// Rust writes "0/total" when only a total exists
-		assertNum(tag, tag.Track, "track", 0, true)
-		assertNum(tag, tag.TrackTotal, "track_total", 2, true)
-		assertNum(tag, tag.Disk, "disk", 0, true)
-		assertNum(tag, tag.DiskTotal, "disk_total", 3, true)
+		assertNum(tag.Track, "track", 0, true)
+		assertNum(tag.TrackTotal, "track_total", 2, true)
+		assertNum(tag.Disk, "disk", 0, true)
+		assertNum(tag.DiskTotal, "disk_total", 3, true)
 	})
 
 	t.Run("number pair", func(t *testing.T) {
@@ -1423,10 +1410,10 @@ func TestMpegSaveTrackAndDiskToId3v2(t *testing.T) {
 			t.Fatal(err)
 		}
 		tag = reread(t, f)
-		assertNum(tag, tag.Track, "track", 1, true)
-		assertNum(tag, tag.TrackTotal, "track_total", 2, true)
-		assertNum(tag, tag.Disk, "disk", 3, true)
-		assertNum(tag, tag.DiskTotal, "disk_total", 4, true)
+		assertNum(tag.Track, "track", 1, true)
+		assertNum(tag.TrackTotal, "track_total", 2, true)
+		assertNum(tag.Disk, "disk", 3, true)
+		assertNum(tag.DiskTotal, "disk_total", 4, true)
 	})
 }
 

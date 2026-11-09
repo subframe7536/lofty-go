@@ -12,9 +12,16 @@ import (
 
 func TestUtilDivRound(t *testing.T) {
 	for _, tc := range []struct{ lhs, rhs, want uint64 }{
-		{1, 1, 1}, {1, 2, 1}, {2, 2, 1}, {3, 2, 2}, {4, 2, 2}, {5, 2, 3},
-		{800, 1500, 1}, {1500, 3000, 1},
-		{0, 4000, 0}, {1500, 4000, 0},
+		{1, 1, 1},
+		{1, 2, 1},
+		{2, 2, 1},
+		{3, 2, 2},
+		{4, 2, 2},
+		{5, 2, 3},
+		{800, 1500, 1},
+		{1500, 3000, 1},
+		{0, 4000, 0},
+		{1500, 4000, 0},
 	} {
 		if got := divRound(tc.lhs, tc.rhs); got != tc.want {
 			t.Errorf("%d.divRound(%d) = %d, want %d", tc.lhs, tc.rhs, got, tc.want)

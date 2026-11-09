@@ -123,14 +123,6 @@ func oggPackets(reader io.ReadSeeker, serial uint32, count int) ([][]byte, int64
 }
 
 // oggFirstSerial returns the serial number of the first page's stream.
-func oggFirstSerial(reader io.ReadSeeker) (uint32, error) {
-	page, err := readOggPage(reader)
-	if err != nil {
-		return 0, err
-	}
-	return page.serial, nil
-}
-
 // oggFirstPage returns the serial and granule position of the first page.
 func oggFirstPage(reader io.ReadSeeker) (serial uint32, granule uint64, err error) {
 	page, err := readOggPage(reader)
@@ -574,7 +566,6 @@ func oggPaginate(packets [][]byte, serial uint32, abgp uint64, flags byte) []*og
 func oggWriteVorbisComments(file FileLike, ft FileType, tag *Tag, writeOptions WriteOptions) error {
 	pics := make([]PictureInfoPair, 0, len(tag.Pictures()))
 	for _, p := range tag.Pictures() {
-		p := p
 		info, err := PictureInformationFromPicture(&p)
 		if err != nil {
 			info = PictureInformation{}
@@ -705,6 +696,7 @@ func (f *OggVorbisFile) ContainsTag() bool { return f.VorbisComments.IsSome() }
 func (f *OggVorbisFile) ContainsTagType(t TagType) bool {
 	return t == TagTypeVorbisComments && f.VorbisComments.IsSome()
 }
+
 func (f *OggVorbisFile) TaggedFile() *TaggedFile {
 	var tags []*Tag
 	if t, ok := f.VorbisComments.Get(); ok {
@@ -712,17 +704,20 @@ func (f *OggVorbisFile) TaggedFile() *TaggedFile {
 	}
 	return NewTaggedFile(FileTypeVorbis, tags, *f.GetProperties())
 }
+
 func (f *OggVorbisFile) SavePath(path string, wo WriteOptions) error {
 	return saveToPath(path, f, TagTypeVorbisComments, wo)
 }
+
 func (f *OggVorbisFile) SaveFile(file FileLike, wo WriteOptions) error {
 	if t, ok := f.VorbisComments.Get(); ok {
 		return oggWriteVorbisCommentsImpl(file, f.FileType(), wo, func(string) *VorbisCommentsTag { return t })
 	}
 	return nil
 }
+
 func (f *OggVorbisFile) RemoveFromPath(path string, t TagType) error {
-	return removeTagFromPath(path, FileTypeVorbis, t)
+	return removeTagFromPath(path, t)
 }
 
 func (f *OggOpusFile) FileType() FileType { return FileTypeOpus }
@@ -734,6 +729,7 @@ func (f *OggOpusFile) ContainsTag() bool { return f.VorbisComments.IsSome() }
 func (f *OggOpusFile) ContainsTagType(t TagType) bool {
 	return t == TagTypeVorbisComments && f.VorbisComments.IsSome()
 }
+
 func (f *OggOpusFile) TaggedFile() *TaggedFile {
 	var tags []*Tag
 	if t, ok := f.VorbisComments.Get(); ok {
@@ -741,17 +737,20 @@ func (f *OggOpusFile) TaggedFile() *TaggedFile {
 	}
 	return NewTaggedFile(FileTypeOpus, tags, *f.GetProperties())
 }
+
 func (f *OggOpusFile) SavePath(path string, wo WriteOptions) error {
 	return saveToPath(path, f, TagTypeVorbisComments, wo)
 }
+
 func (f *OggOpusFile) SaveFile(file FileLike, wo WriteOptions) error {
 	if t, ok := f.VorbisComments.Get(); ok {
 		return oggWriteVorbisCommentsImpl(file, f.FileType(), wo, func(string) *VorbisCommentsTag { return t })
 	}
 	return nil
 }
+
 func (f *OggOpusFile) RemoveFromPath(path string, t TagType) error {
-	return removeTagFromPath(path, FileTypeOpus, t)
+	return removeTagFromPath(path, t)
 }
 
 func (f *OggSpeexFile) FileType() FileType { return FileTypeSpeex }
@@ -763,6 +762,7 @@ func (f *OggSpeexFile) ContainsTag() bool { return f.VorbisComments.IsSome() }
 func (f *OggSpeexFile) ContainsTagType(t TagType) bool {
 	return t == TagTypeVorbisComments && f.VorbisComments.IsSome()
 }
+
 func (f *OggSpeexFile) TaggedFile() *TaggedFile {
 	var tags []*Tag
 	if t, ok := f.VorbisComments.Get(); ok {
@@ -770,17 +770,20 @@ func (f *OggSpeexFile) TaggedFile() *TaggedFile {
 	}
 	return NewTaggedFile(FileTypeSpeex, tags, *f.GetProperties())
 }
+
 func (f *OggSpeexFile) SavePath(path string, wo WriteOptions) error {
 	return saveToPath(path, f, TagTypeVorbisComments, wo)
 }
+
 func (f *OggSpeexFile) SaveFile(file FileLike, wo WriteOptions) error {
 	if t, ok := f.VorbisComments.Get(); ok {
 		return oggWriteVorbisCommentsImpl(file, f.FileType(), wo, func(string) *VorbisCommentsTag { return t })
 	}
 	return nil
 }
+
 func (f *OggSpeexFile) RemoveFromPath(path string, t TagType) error {
-	return removeTagFromPath(path, FileTypeSpeex, t)
+	return removeTagFromPath(path, t)
 }
 
 // OggVorbisFileReadFrom reads an [OggVorbisFile].

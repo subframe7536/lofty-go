@@ -42,10 +42,7 @@ func TestRiffInfoParse(t *testing.T) {
 	data := readRiffAsset(t)
 	po := NewParseOptions()
 	po.ParsingMode = ParsingModeStrict
-	parsed, err := parseRiffInfoList(bytes.NewReader(data), int64(len(data)), po)
-	if err != nil {
-		t.Fatal(err)
-	}
+	parsed := parseRiffInfoList(bytes.NewReader(data), int64(len(data)), po)
 	riffInfoItemsEqual(t, expected, parsed)
 }
 
@@ -53,19 +50,13 @@ func TestRiffInfoReRead(t *testing.T) {
 	data := readRiffAsset(t)
 	po := NewParseOptions()
 	po.ParsingMode = ParsingModeStrict
-	parsed, err := parseRiffInfoList(bytes.NewReader(data), int64(len(data)), po)
-	if err != nil {
-		t.Fatal(err)
-	}
+	parsed := parseRiffInfoList(bytes.NewReader(data), int64(len(data)), po)
 	var buf bytes.Buffer
 	if err := parsed.DumpTo(&buf, NewWriteOptions()); err != nil {
 		t.Fatal(err)
 	}
 	// Skip the 12-byte LIST+size+INFO header
-	reParsed, err := parseRiffInfoList(bytes.NewReader(buf.Bytes()[12:]), int64(buf.Len()), po)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reParsed := parseRiffInfoList(bytes.NewReader(buf.Bytes()[12:]), int64(buf.Len()), po)
 	riffInfoItemsEqual(t, parsed, reParsed)
 }
 
@@ -73,10 +64,7 @@ func TestRiffInfoToTag(t *testing.T) {
 	data := readRiffAsset(t)
 	po := NewParseOptions()
 	po.ParsingMode = ParsingModeStrict
-	info, err := parseRiffInfoList(bytes.NewReader(data), int64(len(data)), po)
-	if err != nil {
-		t.Fatal(err)
-	}
+	info := parseRiffInfoList(bytes.NewReader(data), int64(len(data)), po)
 	tag := info.Tag()
 	verifyTagCommon(t, tag, true, false)
 }

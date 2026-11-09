@@ -41,8 +41,10 @@ func setupConsistencyTag(ty TagType) (*Tag, map[ItemKey]bool) {
 	for k := ItemKey(0); k < ItemKeyUnknown; k++ {
 		switch {
 		case k.IsTimestamp():
-			ts := Timestamp{Year: 2026, Month: Some(uint8(8)), Day: Some(uint8(31)),
-				Hour: Some(uint8(1)), Minute: Some(uint8(2)), Second: Some(uint8(3))}
+			ts := Timestamp{
+				Year: 2026, Month: Some(uint8(8)), Day: Some(uint8(31)),
+				Hour: Some(uint8(1)), Minute: Some(uint8(2)), Second: Some(uint8(3)),
+			}
 			tag.PushUnchecked(NewTagItem(k, ItemValueText(ts.String())))
 		case k.IsNumeric() || k.IsFlag():
 			tag.PushUnchecked(NewTagItem(k, ItemValueText("1")))
@@ -288,10 +290,7 @@ func TestOggIssue37Write(t *testing.T) {
 func TestId3v2SupportedItemsConsistent(t *testing.T) {
 	tag, supported := setupConsistencyTag(TagTypeID3v2)
 
-	btag, err := genericTagToBogem(tag, false)
-	if err != nil {
-		t.Fatalf("conversion failed: %v", err)
-	}
+	btag := genericTagToBogem(tag, false)
 	roundTripped := id3v2TagToGeneric(btag, NewParseOptions())
 
 	// Duplicate keys that map to the same frame as another key
@@ -382,10 +381,7 @@ func TestPopmConversions(t *testing.T) {
 		checkPlayCounter bool
 	}{
 		{TagTypeID3v2, func(tag *Tag) *Tag {
-			btag, err := genericTagToBogem(tag, false)
-			if err != nil {
-				t.Fatal(err)
-			}
+			btag := genericTagToBogem(tag, false)
 			return id3v2TagToGeneric(btag, NewParseOptions())
 		}, true},
 		{TagTypeMp4Ilst, func(tag *Tag) *Tag {
