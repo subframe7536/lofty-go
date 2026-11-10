@@ -290,8 +290,7 @@ func TestOggIssue37Write(t *testing.T) {
 func TestId3v2SupportedItemsConsistent(t *testing.T) {
 	tag, supported := setupConsistencyTag(TagTypeID3v2)
 
-	btag := genericTagToBogem(tag, false)
-	roundTripped := Id3v2TagToGeneric(btag, NewParseOptions())
+	roundTripped := id3v2TagToTag(id3v2TagFromTag(tag))
 
 	// Duplicate keys that map to the same frame as another key
 	dupes := map[ItemKey]bool{
@@ -381,8 +380,7 @@ func TestPopmConversions(t *testing.T) {
 		checkPlayCounter bool
 	}{
 		{TagTypeID3v2, func(tag *Tag) *Tag {
-			btag := genericTagToBogem(tag, false)
-			return Id3v2TagToGeneric(btag, NewParseOptions())
+			return id3v2TagToTag(id3v2TagFromTag(tag))
 		}, true},
 		{TagTypeMp4Ilst, func(tag *Tag) *Tag {
 			data, err := EncodeMp4Ilst(tag)
@@ -425,3 +423,4 @@ func TestPopmConversions(t *testing.T) {
 		}
 	}
 }
+

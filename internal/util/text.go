@@ -106,6 +106,25 @@ func (e TextEncoding) String() string {
 // ID3v2.4 introduced two new text encodings.
 //
 // When writing ID3v2.3, we just substitute with UTF-16.
+func (e TextEncoding) ToID3v23() TextEncoding {
+	switch e {
+	case TextEncodingUTF8, TextEncodingUTF16BE:
+		return TextEncodingUTF16
+	default:
+		return e
+	}
+}
+
+// VerifyLatin1 reports whether every character in text is representable in Latin-1.
+func VerifyLatin1(text string) bool {
+	for _, c := range text {
+		if c > 255 {
+			return false
+		}
+	}
+	return true
+}
+
 // Encode encodes `text` in this encoding. If `terminated`, a null terminator is appended.
 // If `lossy`, unrepresentable characters are replaced with '?'; otherwise a
 // [TextEncodingError] is returned.
@@ -176,6 +195,14 @@ type DecodeTextResult struct {
 	Content   string
 	BytesRead int
 	BOM       [2]byte
+}
+
+// TextOrNone returns the content, or an empty Option if it is empty.
+func (r DecodeTextResult) TextOrNone() Option[string] {
+	if r.Content == "" {
+		return None[string]()
+	}
+	return Some(r.Content)
 }
 
 // TextDecodeOptions specifies how to decode the provided text.
@@ -419,6 +446,26 @@ func Utf16Valid(words []uint16) bool {
 //
 // If no BOM is present, the string will be decoded using `order`.
 // Returns (string, bytesRead).
+func Utf16DecodeTerminatedMaybeBom(reader io.Reader, order ByteOrder) (string, int, error) {
+	rawText, terminatorLen := ReadToTerminator(reader, TextEncodingUTF16)
+
+	bytesRead := len(rawText) + terminatorLen
+	var decoded string
+	var err error
+	switch {
+	case len(rawText) >= 2 && rawText[0] == 0xFF && rawText[1] == 0xFE:
+		decoded, err = Utf16DecodeBytes(rawText[2:], LittleEndian)
+	case len(rawText) >= 2 && rawText[0] == 0xFE && rawText[1] == 0xFF:
+		decoded, err = Utf16DecodeBytes(rawText[2:], BigEndian)
+	default:
+		decoded, err = Utf16DecodeBytes(rawText, order)
+	}
+	if err != nil {
+		return "", 0, err
+	}
+	return decoded, bytesRead, nil
+}
+
 func TrimEndNulls(text string) string {
 	end := len(text)
 	for end > 0 && text[end-1] == 0 {

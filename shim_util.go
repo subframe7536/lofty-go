@@ -38,4 +38,7 @@ var (
 	removeTag  = meta.RemoveTag
 )
 
-var genericTagToBogem = id3v2.GenericTagToBogem
+var (
+	id3v2TagFromTag = id3v2.Id3v2TagFromTag
+	id3v2TagToTag   = id3v2.Id3v2TagToTag
+)

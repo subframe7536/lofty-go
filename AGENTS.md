@@ -38,7 +38,7 @@ unchanged — `lofty.X` resolves through generated aliases.
 | `internal/meta` | `tag/`, `file/`, `probe.rs`, `resolve.rs` | `Tag`/`TagItem`/`ItemKey`, `TaggedFile`, `FileType`, `Probe`, format/tag registries, read/write dispatch, `verifiedFile` |
 | `internal/tagpos` | — | ID3v1 tail-locator shared by `id3v1`/`lyrics3`/`mpeg` (breaks the id3v1↔lyrics3 cycle) |
 | `internal/testutil` | — | fixture path resolution + shared test helpers; tests live in the package whose internals they exercise |
-| `id3v1`, `id3v2`, `vorbis`, `lyrics3` | `id3/v1`, `id3/v2`, `ogg/tag`, `id3/lyrics3` | tag implementations (`id3v2` owns the bogem integration + `genericTagToBogem`) |
+| `id3v1`, `id3v2`, `vorbis`, `lyrics3` | `id3/v1`, `id3/v2`, `ogg/tag`, `id3/lyrics3` | tag implementations (`id3v2` is a native port: `tag.go` tag+header, `read.go`/`write.go` frame walk+serialize, `frame.go`/`framelist.go`/`items*.go` typed frames, `convert.go` generic-Tag split/merge) |
 | `ape`, `ogg`, `flac`, `mp4`, `iff`, `mpeg`, `dsf`, `wavpack`, `mpc`, `aac` | `<format>/` | file readers/writers; `mp4` includes `Ilst`/`Atom`/`AtomData` |
 | root (`package lofty`) | — | **pure facade**: `facade_gen.go` re-exports every moved public symbol (regenerate with `go run ./scripts/facadegen`); `shim_util.go` holds internal bridges for root tests |
 | `*_test.go` | Rust `tests/` + `src/**/tests.rs` | ported test cases, distributed to their owning package |
@@ -50,16 +50,12 @@ facade. Format packages never import the root; they register themselves in
 
 ## Dependencies (deliberate — reuse over reimplement)
 
-- `github.com/bogem/id3v2/v2` — ID3v2 frame parse/write
+- `github.com/bogem/id3v2/v2` — test-only parse oracle (`bogemFrames` in
+  tests); production ID3v2 read/write is the native `id3v2` package
 - `github.com/go-flac/go-flac/v2` — FLAC metadata blocks
 
 MP4 box traversal, Ogg page read/write, and Latin-1/UTF-16 codecs are all
-hand-rolled in `format_mp4.go`, `format_ogg.go`, and `util_text.go`.
-
-Manual code is used wherever Lofty semantics diverge from the dependency
-(e.g. `id3v2TextFrameNoTerm`, `popmFramer`, `urlFramer`, `wxxxFramer` custom
-Framers in `tag_id3v2.go`, `id3v2ManualDescFrame` for description-terminated
-UTF-16 frames bogem corrupts, and the whole Ogg page-rebuild writer).
+hand-rolled in the `mp4`, `ogg`, and `internal/util` packages.
 
 ## Port-parity rules that matter
 
@@ -69,13 +65,14 @@ most debugging:
 - **Companion tags.** `Tag` carries an unexported `companionTag` (`any`).
   Split/merge per format: on read, unconvertible frames stay in the
   companion (`PreserveFormatSpecificItems` global option); on write they
-  are replayed. Patterns to copy: `vorbisCommentsSplitTag` (tag_vorbis.go),
-  `Ilst.Tag()`/`IlstFromTag` (ilst.go), ID3v2 binary items (`tag_id3v2.go`).
+  are replayed. Patterns to copy: `vorbisCommentsSplitTag` (vorbis pkg),
+  `Ilst.Tag()`/`IlstFromTag` (mp4 pkg), `Id3v2Tag` remainder
+  (`id3v2/convert.go`).
 - **Merge vs dedup on write** (Rust `from_tag` + `Frame` eq semantics):
   multi-valued keys merge `\0` into one frame; single-valued keys dedup
-  by ID first-wins. See `id3v2MultiTxxxKeys`/`id3v2SingleTxxxKeys`/
-  `id3v2SingleTextKeys`/`langMerge`/`textMerge`/`seenFrame` in
-  `genericTagToBogem`. POPM dedups by email, UFID by owner, TXXX by desc.
+  by ID first-wins. See `id3v2/convert.go` (`multiTxxxKeys`/
+  `langMerge`/`textMerge`/`seenFrame` etc.). POPM dedups by email, UFID by
+  owner, TXXX by desc, COMM/USLT by lang+desc.
 - **N/T pair frames** (TRCK/TPOS/MVIN): `splitn(2, ['\0','/'])`, trim each,
   both must parse as u32 else the whole frame is retained (`splitNumPair`).
   Write uses `0/total` when only a total exists.
@@ -83,8 +80,8 @@ most debugging:
   change failure-vs-skip behavior, not just error wrapping.
 - **Trailing NULs / BOM**: strip per-encoding; each `\0`-separated segment
   may carry its own UTF-16 BOM (`utf16DecodeBytes` strips all of them).
-- **No trailing text terminator**: bogem appends one; Rust doesn't. Use
-  `id3v2TextFrameNoTerm` — this is required for byte-identical round-trips.
+- **No trailing text terminator**: Rust doesn't write one after the last
+  text value; the native writer matches so round-trips are byte-identical.
 - **Latin-1 byte 0xFF**: rejected/replaced exactly like Rust (see
   `latin1Encode` use in lyrics3/ape paths).
 - **Empty vendor**: `VorbisCommentsTag` default vendor is `""` (Rust
@@ -107,12 +104,12 @@ most debugging:
 
 ## Known gaps (see TODO.md)
 
-None currently — the former ID3v2 bogem-delegation gaps were closed by a
-manual v2.3/v2.4 frame walker (`id3v2SanitizeTag` in `tag_id3v2.go`,
-mirroring Rust `ParsedFrame::read`) plus `id3v2Serialize` (empty-tag
-headers + `PreferredPadding`). MP4 writes update `stco`/`co64`/`tfhd`
-chunk offsets via `mp4UpdateChunkOffsets` in `format_mp4.go` (Rust
-`AtomWriterCompanion::update_offsets` parity).
+ID3v2 is a full native port — `Id3v2Tag`/`FrameList`/`Frame`/`FrameId`/
+`FrameFlags`, typed frames, v2.2/v2.3/v2.4 headers, footer/CRC/
+restrictions, extended headers, unsynchronisation, v2.3↔v2.4 conversion,
+`Id3v2TagFlags`-aware writing (`create_tag`/`create_tag_v3` in
+`id3v2/write.go`). MP4 writes update `stco`/`co64`/`tfhd` chunk offsets
+(Rust `AtomWriterCompanion::update_offsets` parity).
 
 ## Conventions
 

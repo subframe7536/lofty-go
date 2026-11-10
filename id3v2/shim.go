@@ -124,6 +124,7 @@ var (
 	ItemKeyFromKey       = meta.ItemKeyFromKey
 	ItemValueBinary      = meta.ItemValueBinary
 	TimestampParseString = meta.TimestampParseString
+	TimestampParse       = util.TimestampParse
 	unsynchsafe32        = util.Unsynchsafe32
 )
 
@@ -143,8 +144,10 @@ var (
 )
 
 const (
+	TextEncodingLatin1  = meta.TextEncodingLatin1
 	TextEncodingUTF16   = meta.TextEncodingUTF16
 	TextEncodingUTF16BE = meta.TextEncodingUTF16BE
+	TextEncodingUTF8    = meta.TextEncodingUTF8
 )
 
 var (
@@ -167,6 +170,22 @@ const (
 )
 
 var PopularimeterFromStr = meta.PopularimeterFromStr
+
+var (
+	PopularimeterMusicBee           = meta.PopularimeterMusicBee
+	PopularimeterPicard             = meta.PopularimeterPicard
+	PopularimeterWindowsMediaPlayer = meta.PopularimeterWindowsMediaPlayer
+)
+
+type StarRating = meta.StarRating
+
+const (
+	StarRatingOne   = meta.StarRatingOne
+	StarRatingTwo   = meta.StarRatingTwo
+	StarRatingThree = meta.StarRatingThree
+	StarRatingFour  = meta.StarRatingFour
+	StarRatingFive  = meta.StarRatingFive
+)
 
 var (
 	itoa                 = util.Itoa
@@ -212,6 +231,14 @@ const (
 	ItemKeyTrackArtist    = meta.ItemKeyTrackArtist
 	ItemKeyTrackTitle     = meta.ItemKeyTrackTitle
 	PictureTypeCoverFront = meta.PictureTypeCoverFront
+	PictureTypeCoverBack  = meta.PictureTypeCoverBack
+	PictureTypeIcon       = meta.PictureTypeIcon
+	PictureTypeOtherIcon  = meta.PictureTypeOtherIcon
+)
+
+const (
+	ItemKeyMovement               = meta.ItemKeyMovement
+	ItemKeyAppleId3v2ContentGroup = meta.ItemKeyAppleId3v2ContentGroup
 )
 
 var (

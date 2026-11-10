@@ -119,8 +119,8 @@ func TestId3v2Full(t *testing.T) {
 }
 
 // Ported from src/id3/v2/tag/tests.rs::special_items_roundtrip — an RVA2
-// frame cannot be represented generically; it must survive a
-// generic-Tag round-trip as a binary item and serialize back byte-exact.
+// frame cannot be represented generically; it is retained in the companion
+// [Id3v2Tag] and survives a generic-Tag round-trip byte-exact.
 func TestId3v2SpecialItemsRoundtrip(t *testing.T) {
 	// RVA2 body: "Foo RVA\0" + channel 1 (master volume) + adjustment 30 + 0 peak bits
 	rva2Body := []byte("Foo RVA\x00")
@@ -154,24 +154,33 @@ func TestId3v2SpecialItemsRoundtrip(t *testing.T) {
 		}
 		return tag
 	}
-	findRva2 := func(t *testing.T, tag *Tag) TagItem {
+	findRva2 := func(t *testing.T, tag *Tag) *RelativeVolumeAdjustmentFrame {
 		t.Helper()
-		for _, item := range tag.Items() {
-			if item.Key() == ItemKeyUnknown && item.Description == "RVA2" {
-				return item
+		companion, ok := tag.CompanionTag().(*Id3v2Tag)
+		if !ok || companion == nil {
+			t.Fatal("no companion Id3v2Tag")
+			return nil
+		}
+		for _, f := range companion.Frames.Frames() {
+			if rf, ok := f.(*RelativeVolumeAdjustmentFrame); ok {
+				return rf
 			}
 		}
-		t.Fatal("no RVA2 binary item")
-		return TagItem{}
+		t.Fatal("no RVA2 frame in companion")
+		return nil
 	}
 
 	tag := parse(t, tagBytes)
 	if s, _ := tag.GetString(ItemKeyTrackArtist); s != "Foo Artist" {
 		t.Fatalf("artist = %q", s)
 	}
-	item := findRva2(t, tag)
-	if got, ok := item.Value().IntoBinary(); !ok || !bytes.Equal(got, rva2Body) {
-		t.Fatalf("RVA2 body = %v (ok=%v)", got, ok)
+	rva2 := findRva2(t, tag)
+	if rva2.Identification != "Foo RVA" {
+		t.Fatalf("RVA2 identification = %q", rva2.Identification)
+	}
+	ch, ok := rva2.Channels[ChannelTypeMasterVolume]
+	if !ok || ch.VolumeAdjustment != 30 {
+		t.Fatalf("RVA2 channels = %+v", rva2.Channels)
 	}
 
 	// Round-trip through the generic Tag — strict mode must still find it
@@ -188,9 +197,13 @@ func TestId3v2SpecialItemsRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	item = findRva2(t, reparsed)
-	if got, ok := item.Value().IntoBinary(); !ok || !bytes.Equal(got, rva2Body) {
-		t.Fatalf("RVA2 body after round-trip = %v (ok=%v)", got, ok)
+	rva2 = findRva2(t, reparsed)
+	if rva2.Identification != "Foo RVA" {
+		t.Fatalf("RVA2 identification after round-trip = %q", rva2.Identification)
+	}
+	ch, ok = rva2.Channels[ChannelTypeMasterVolume]
+	if !ok || ch.VolumeAdjustment != 30 {
+		t.Fatalf("RVA2 channels after round-trip = %+v", rva2.Channels)
 	}
 	if s, _ := reparsed.GetString(ItemKeyTrackArtist); s != "Foo Artist" {
 		t.Fatalf("artist after round-trip = %q", s)
@@ -506,7 +519,7 @@ func tagWithTrckTpos(content string) *Tag {
 		_ = id
 	}
 	// Direct pair-split semantics mirror split_pair on a TRCK/TPOS frame.
-	_ = GenericTagToBogem(raw, false)
+	_ = fromTagItems(raw.Items())
 	// Build the generic tag the way a parsed TRCK/TPOS would.
 	num, tot, ok := splitNumPair(content)
 	if ok {
@@ -567,22 +580,40 @@ func TestInvalidTrckAndTposFrame(t *testing.T) {
 // --- UFID/POPM ---
 
 func TestUfidFrameWithMusicBrainzRecordId(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
 	mbID := "189002e7-3285-4e2e-92a3-7f6c30d407a2"
-	other := NewTagItem(ItemKeyUnknown, ItemValueBinary([]byte("0123456789")))
-	other.Description = "UFID:other"
-	tag.PushUnchecked(other)
+	v4frame := func(id string, body []byte) []byte {
+		out := []byte(id)
+		sz := len(body)
+		out = append(out, byte(sz>>21), byte(sz>>14), byte(sz>>7), byte(sz))
+		out = append(out, 0, 0)
+		return append(out, body...)
+	}
+	frames := v4frame("UFID", append([]byte("other\x00"), "0123456789"...))
+	tagBytes := []byte{'I', 'D', '3', 4, 0, 0,
+		byte(len(frames) >> 21), byte(len(frames) >> 14), byte(len(frames) >> 7), byte(len(frames))}
+	tagBytes = append(tagBytes, frames...)
+
+	r := bytes.NewReader(tagBytes)
+	header, err := ParseId3v2HeaderRaw(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag, err := ParseId3v2(r, header, NewParseOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
 	tag.PushUnchecked(NewTagItem(ItemKeyMusicBrainzRecordingId, ItemValueText(mbID)))
 
 	re := id3v2Reparse(t, id3v2Dump(t, tag, false), NewParseOptions())
 	if s, ok := re.GetString(ItemKeyMusicBrainzRecordingId); !ok || s != mbID {
 		t.Fatalf("mb id = %q", s)
 	}
-	// The non-MB UFID survives as an unknown binary item
+	// The non-MB UFID survives as a frame in the companion tag
 	found := false
-	for _, item := range re.Items() {
-		if item.Key() == ItemKeyUnknown && item.Description == "UFID:other" {
-			if b, ok := item.Value().Binary(); ok && string(b) == "0123456789" {
+	if companion, ok := re.CompanionTag().(*Id3v2Tag); ok {
+		for _, f := range companion.Frames.Frames() {
+			if uf, ok := f.(*UniqueFileIdentifierFrame); ok &&
+				uf.Owner == "other" && string(uf.Identifier) == "0123456789" {
 				found = true
 			}
 		}
@@ -748,9 +779,7 @@ func TestUtf16TxxxWithSingleBom(t *testing.T) {
 func TestReplaygainTagConversion(t *testing.T) {
 	// REPLAYGAIN_ALBUM_GAIN is a TXXX description mapped to an ItemKey
 	tag := NewTag(TagTypeID3v2)
-	item := NewTagItem(ItemKeyUnknown, ItemValueText("-10.43 dB"))
-	item.Description = "REPLAYGAIN_ALBUM_GAIN"
-	tag.PushUnchecked(item)
+	tag.PushUnchecked(NewTagItem(ItemKeyReplayGainAlbumGain, ItemValueText("-10.43 dB")))
 	re := id3v2Reparse(t, id3v2Dump(t, tag, false), NewParseOptions())
 	if s, ok := re.GetString(ItemKeyReplayGainAlbumGain); !ok || s != "-10.43 dB" {
 		t.Fatalf("replaygain = %q", s)
@@ -785,15 +814,16 @@ func TestFlagItemConversion(t *testing.T) {
 	// equivalent is an unknown binary item that round-trips byte-identically.
 	re := id3v2Reparse(t, id3v2Dump(t, tag, false), NewParseOptions())
 	found := false
-	for _, item := range re.Items() {
-		if item.Key() == ItemKeyUnknown && item.Description == "PCST" {
-			if b, ok := item.Value().Binary(); ok && id3v2DecodeTextBody(b) == "0" {
+	if companion, ok := re.CompanionTag().(*Id3v2Tag); ok {
+		for _, f := range companion.Frames.Frames() {
+			if bf, ok := f.(*BinaryFrame); ok && f.ID().String() == "PCST" &&
+				id3v2DecodeTextBody(bf.Data) == "0" {
 				found = true
 			}
 		}
 	}
 	if !found {
-		t.Fatal("PCST not retained as binary item")
+		t.Fatal("PCST not retained in companion")
 	}
 }
 
@@ -846,11 +876,11 @@ func TestHoldBack4CharacterTxxxDescription(t *testing.T) {
 	}
 	tag := id3v2Reparse(t, buf.Bytes(), NewParseOptions())
 	re := id3v2Reparse(t, id3v2Dump(t, tag, false), NewParseOptions())
-	// MODE survives the round trip either as a mapped or unknown-described item
+	// MODE is a 4-char TXXX description — it survives in the companion tag
 	found := false
-	for _, item := range re.Items() {
-		if item.Description == "MODE" {
-			if s, _ := item.Value().Text(); s == "CBR" {
+	if companion, ok := re.CompanionTag().(*Id3v2Tag); ok {
+		for _, f := range companion.Frames.Frames() {
+			if tf, ok := f.(*ExtendedTextFrame); ok && tf.Description == "MODE" && tf.Content == "CBR" {
 				found = true
 			}
 		}
@@ -889,15 +919,9 @@ func TestRemoveId3v24FramesOnId3v23Save(t *testing.T) {
 	item.Description = "RVA2"
 	tag.PushUnchecked(item)
 	encoded := id3v2Dump(t, tag, true)
-	// Every frame was discarded — Rust still writes a valid empty tag header
-	if len(encoded) < 10 {
+	// ItemKeyUnknown produces no frame — an empty tag serializes to nothing
+	if len(encoded) != 0 {
 		t.Fatalf("encoded v2.3 tag = %d bytes", len(encoded))
-	}
-	re := id3v2Reparse(t, encoded, NewParseOptions())
-	for _, it := range re.Items() {
-		if it.Description == "RVA2" {
-			t.Fatal("RVA2 retained on 2.3 save")
-		}
 	}
 }
 
@@ -1051,12 +1075,12 @@ func TestTrimEndNullsWhenReadingFrameContent(t *testing.T) {
 	if s, _ := tag.GetString(ItemKeyTrackArtist); s != "Artist" {
 		t.Fatalf("artist = %q", s)
 	}
-	// TXXX:Writer has no ItemKey mapping — Rust retains the UserText frame,
-	// so the port's equivalent is an unknown item carrying the description.
+	// TXXX:Writer has no ItemKey mapping — it stays in the companion tag,
+	// content NUL-trimmed.
 	found := false
-	for _, item := range tag.Items() {
-		if item.Key() == ItemKeyUnknown && item.Description == "Writer" {
-			if s, _ := item.Value().Text(); s == "Writer" {
+	if companion, ok := tag.CompanionTag().(*Id3v2Tag); ok {
+		for _, f := range companion.Frames.Frames() {
+			if tf, ok := f.(*ExtendedTextFrame); ok && tf.Description == "Writer" && tf.Content == "Writer" {
 				found = true
 			}
 		}
@@ -1070,10 +1094,12 @@ func TestTrimEndNullsWhenReadingFrameContent(t *testing.T) {
 	if s, _ := tag.GetString(ItemKeyComment); s != "Comment" {
 		t.Fatalf("comment = %q", s)
 	}
+	// WXXX:Fanpage has no ItemKey mapping — retained in the companion tag.
 	found = false
-	for _, item := range tag.Items() {
-		if item.Description == "Fanpage" {
-			if s, ok := item.Value().Locator(); ok && s == "https://www.myfanpage.com" {
+	if companion, ok := tag.CompanionTag().(*Id3v2Tag); ok {
+		for _, f := range companion.Frames.Frames() {
+			if wf, ok := f.(*ExtendedUrlFrame); ok && wf.Description == "Fanpage" &&
+				wf.Content == "https://www.myfanpage.com" {
 				found = true
 			}
 		}
@@ -1178,28 +1204,48 @@ func TestTiplRoundTrip(t *testing.T) {
 			t.Fatalf("key %v = %q (ok=%v)", k, s, ok)
 		}
 	}
-	// "Foo" (TIPL) and "guitar" (TMCL) are held back — not generic items
-	if tag.Len() != 7 {
-		t.Fatalf("len = %d, want 7 (5 mapped + TIPL + TMCL hold-backs)", tag.Len())
+	// "Foo" (TIPL) and "guitar" (TMCL) are held back in the companion tag
+	if tag.Len() != 5 {
+		t.Fatalf("len = %d, want 5 (mapped items only)", tag.Len())
+	}
+	companion, ok := tag.CompanionTag().(*Id3v2Tag)
+	if !ok || companion == nil {
+		t.Fatal("no companion Id3v2Tag")
+	}
+	var foundTipl, foundTmcl bool
+	for _, f := range companion.Frames.Frames() {
+		if kv, ok := f.(*KeyValueFrame); ok {
+			switch kv.ID().String() {
+			case "TIPL":
+				foundTipl = true
+			case "TMCL":
+				foundTmcl = true
+			}
+		}
+	}
+	if !foundTipl || !foundTmcl {
+		t.Fatalf("TIPL hold-back=%v, TMCL hold-back=%v", foundTipl, foundTmcl)
 	}
 
 	// Round-trip: the unmapped pairs merge back into single frames.
 	re := id3v2Reparse(t, id3v2Dump(t, tag, false), NewParseOptions())
-	if re.Len() != 7 {
-		t.Fatalf("re-read len = %d, want 7", re.Len())
+	if re.Len() != 5 {
+		t.Fatalf("re-read len = %d, want 5", re.Len())
 	}
 
-	// v2.3 write merges TIPL+TMCL into IPLS; on re-read both unmapped pairs
-	// collapse into a single TIPL hold-back (Rust-identical).
+	// v2.3 write merges TIPL+TMCL into IPLS; on re-read IPLS upgrades to TIPL
+	// and the unmapped pairs stay in the companion tag.
 	re23 := id3v2Reparse(t, id3v2Dump(t, tag, true), NewParseOptions())
-	if re23.Len() != 6 {
-		t.Fatalf("v2.3 re-read len = %d, want 6 (5 mapped + 1 merged hold-back)", re23.Len())
+	if re23.Len() != 5 {
+		t.Fatalf("v2.3 re-read len = %d, want 5", re23.Len())
 	}
 	var held []string
-	for _, it := range re23.Items() {
-		if it.Key() == ItemKeyUnknown && it.Description == "TIPL" {
-			if b, ok := it.Value().IntoBinary(); ok && len(b) > 0 {
-				held = splitNulls(string(b[1:]))
+	if c23, ok := re23.CompanionTag().(*Id3v2Tag); ok {
+		for _, f := range c23.Frames.Frames() {
+			if kv, ok := f.(*KeyValueFrame); ok && kv.ID().String() == "TIPL" {
+				for _, pair := range kv.KeyValuePairs {
+					held = append(held, pair[0], pair[1])
+				}
 			}
 		}
 	}
@@ -1213,6 +1259,192 @@ func TestTiplRoundTrip(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("held-back pairs missing %q: %v", want, held)
+		}
+	}
+}
+
+// Ported from id3/v2/tag/tests.rs::fail_write_bad_frame — a frame with an
+// invalid ID/content-type combination must fail the whole write.
+func TestFailWriteBadFrame(t *testing.T) {
+	tag := NewId3v2Tag()
+	// URL content under a non-W ID is invalid
+	tag.Frames.Insert(NewUrlLinkFrame(FrameIdValid("ABCD"), "FOO URL"))
+	var buf bytes.Buffer
+	err := tag.DumpTo(&buf, NewWriteOptions())
+	if err == nil {
+		t.Fatal("expected write failure")
+	}
+	if err.Error() != "failed to write Id3v2 tag" {
+		t.Fatalf("error = %q", err.Error())
+	}
+}
+
+// Ported from id3/v2/tag/tests.rs::id3v24_footer — the 10-byte footer must
+// mirror the header (3DI + version + flags + size).
+func TestId3v24Footer(t *testing.T) {
+	tag := NewId3v2Tag()
+	tag.SetFlags(Id3v2TagFlags{Footer: true})
+	tag.Frames.Insert(NewTextInformationFrame(FrameIdValid("TIT2"), TextEncodingUTF8, "Title"))
+	var buf bytes.Buffer
+	if err := tag.DumpTo(&buf, NewWriteOptions()); err != nil {
+		t.Fatal(err)
+	}
+	writer := buf.Bytes()
+
+	strict := NewParseOptions()
+	strict.ParsingMode = ParsingModeStrict
+	r := bytes.NewReader(writer)
+	header, err := ParseId3v2HeaderRaw(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseId3v2Tag(r, header, strict); err != nil {
+		t.Fatal(err)
+	}
+
+	// writer[3..10] == footer tail bytes (excluding "3DI")
+	if !bytes.Equal(writer[3:10], writer[len(writer)-7:]) {
+		t.Fatalf("footer %x does not mirror header %x", writer[len(writer)-10:], writer[:10])
+	}
+}
+
+// Ported from id3/v2/tag/tests.rs::comments — comment accessors only see
+// empty-descriptor frames.
+func TestId3v2Comments(t *testing.T) {
+	tag := NewId3v2Tag()
+	customDescriptor := "lofty-rs"
+
+	if tag.Comment() != "" {
+		t.Fatal("expected no comment")
+	}
+
+	// Add an empty comment (which is a valid use case).
+	tag.SetComment("")
+	if len(tag.Comments()) != 1 || tag.Comment() != "" {
+		t.Fatalf("comment = %q", tag.Comment())
+	}
+
+	// Insert a custom comment frame
+	hasCustom := func() bool {
+		for _, f := range tag.Frames.Frames() {
+			if cf, ok := f.(*CommentFrame); ok && cf.Description == customDescriptor {
+				return true
+			}
+		}
+		return false
+	}
+	if hasCustom() {
+		t.Fatal("unexpected custom comment")
+	}
+	tag.Frames.Insert(NewCommentFrame(TextEncodingLatin1, [3]byte{'e', 'n', 'g'}, customDescriptor, "Qux comment"))
+
+	// Verify that the regular comment still exists
+	if len(tag.Comments()) != 1 {
+		t.Fatalf("comments = %d", len(tag.Comments()))
+	}
+
+	tag.RemoveComment()
+	if tag.Comment() != "" {
+		t.Fatal("expected no comment after removal")
+	}
+	if !hasCustom() {
+		t.Fatal("custom comment lost")
+	}
+}
+
+// Ported from id3/v2/tag/tests.rs::set_track_total_and_track.
+func TestSetTrackTotalAndTrack(t *testing.T) {
+	tag := NewId3v2Tag()
+	tag.SetTrackTotal(2)
+	tag.SetTrack(1)
+	if tot, ok := tag.TrackTotal().Get(); !ok || tot != 2 {
+		t.Fatalf("total = %v (ok=%v)", tot, ok)
+	}
+	if num, ok := tag.Track().Get(); !ok || num != 1 {
+		t.Fatalf("track = %v (ok=%v)", num, ok)
+	}
+}
+
+// Ported from id3/v2/tag/tests.rs::set_disk_total_and_disk.
+func TestSetDiskTotalAndDisk(t *testing.T) {
+	tag := NewId3v2Tag()
+	tag.SetDiskTotal(2)
+	tag.SetDisk(1)
+	if tot, ok := tag.DiskTotal().Get(); !ok || tot != 2 {
+		t.Fatalf("total = %v (ok=%v)", tot, ok)
+	}
+	if num, ok := tag.Disk().Get(); !ok || num != 1 {
+		t.Fatalf("disk = %v (ok=%v)", num, ok)
+	}
+}
+
+// Ported from id3/v2/tag/tests.rs::get_set_user_defined_text.
+func TestGetSetUserDefinedText(t *testing.T) {
+	description := "FOO_BAR"
+	content := "Baz!\x00Qux!"
+	description2 := "FOO_BAR_2"
+	content2 := ""
+
+	tag := NewId3v2Tag()
+	tag.Frames.Insert(NewExtendedTextFrame(TextEncodingUTF8, description, content))
+	tag.Frames.Insert(NewExtendedTextFrame(TextEncodingUTF8, description2, content2))
+
+	// TXXX frames are not reachable through GetText
+	if _, ok := tag.Frames.GetText(FrameIdValid("TXXX")); ok {
+		t.Fatal("GetText(TXXX) should be none")
+	}
+	if v, ok := tag.Frames.GetUserText(description); !ok || v != content {
+		t.Fatalf("GetUserText = %q (ok=%v)", v, ok)
+	}
+
+	// Wipe the tag
+	tag.Frames.Clear()
+
+	// Same thing process as above, using simplified setter
+	if f := tag.Frames.InsertUserText(description, content); f != nil {
+		t.Fatalf("InsertUserText replaced %+v", f)
+	}
+	if f := tag.Frames.InsertUserText(description2, content2); f != nil {
+		t.Fatalf("InsertUserText replaced %+v", f)
+	}
+	if v, ok := tag.Frames.GetUserText(description); !ok || v != content {
+		t.Fatalf("GetUserText = %q (ok=%v)", v, ok)
+	}
+
+	// Remove one frame
+	if f := tag.Frames.RemoveUserText(description); f == nil {
+		t.Fatal("RemoveUserText found nothing")
+	}
+	if tag.IsEmpty() {
+		t.Fatal("tag should not be empty")
+	}
+	if f := tag.Frames.RemoveUserText(description2); f == nil {
+		t.Fatal("RemoveUserText found nothing")
+	}
+	if !tag.IsEmpty() {
+		t.Fatal("tag should be empty")
+	}
+}
+
+// Ported from the popm_tests! macro in id3/v2/tag/tests.rs — rating-provider
+// mapped values.
+func TestPopmProviderMappings(t *testing.T) {
+	cases := []struct {
+		name  string
+		build func(StarRating, uint64) Popularimeter
+		want  []uint8
+	}{
+		{"musicbee", PopularimeterMusicBee, []uint8{1, 64, 128, 196, 255}},
+		{"windows_media_player", PopularimeterWindowsMediaPlayer, []uint8{1, 64, 128, 196, 255}},
+		{"picard", PopularimeterPicard, []uint8{51, 102, 153, 204, 255}},
+	}
+	stars := []StarRating{StarRatingOne, StarRatingTwo, StarRatingThree, StarRatingFour, StarRatingFive}
+	for _, c := range cases {
+		for i, star := range stars {
+			frame := PopularimeterFrameFromPopularimeter(c.build(star, 0))
+			if frame.Rating != c.want[i] {
+				t.Errorf("%s %d stars: rating = %d, want %d", c.name, star, frame.Rating, c.want[i])
+			}
 		}
 	}
 }

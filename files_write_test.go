@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	bogem "github.com/bogem/id3v2/v2"
+	"github.com/subframe7536/lofty-go/id3v2"
 )
 
 // removeTagTest mirrors Rust util::remove_tag_test: copy the asset, verify the
@@ -477,13 +477,21 @@ func TestTagToId3v2LangFrame(t *testing.T) {
 	tag.InsertText(ItemKeyUnsyncLyrics, "Test lyrics")
 	tag.InsertText(ItemKeyComment, "Test comment")
 
-	btag := genericTagToBogem(tag, false)
-	uslt := btag.GetFrames("USLT")
-	if len(uslt) != 1 || uslt[0].(bogem.UnsynchronisedLyricsFrame).Lyrics != "Test lyrics" {
+	itag := id3v2TagFromTag(tag)
+	var uslt []id3v2.Frame
+	var comm []id3v2.Frame
+	for _, f := range itag.Frames.Frames() {
+		switch f.ID().String() {
+		case "USLT":
+			uslt = append(uslt, f)
+		case "COMM":
+			comm = append(comm, f)
+		}
+	}
+	if len(uslt) != 1 || uslt[0].(*id3v2.UnsynchronizedTextFrame).Content != "Test lyrics" {
 		t.Fatalf("expected one USLT frame with lyrics, got %+v", uslt)
 	}
-	comm := btag.GetFrames("COMM")
-	if len(comm) != 1 || comm[0].(bogem.CommentFrame).Text != "Test comment" {
+	if len(comm) != 1 || comm[0].(*id3v2.CommentFrame).Content != "Test comment" {
 		t.Fatalf("expected one COMM frame with comment, got %+v", comm)
 	}
 }

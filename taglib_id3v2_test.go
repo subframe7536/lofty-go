@@ -6,7 +6,7 @@ import (
 	"io"
 	"testing"
 
-	bogem "github.com/bogem/id3v2/v2"
+	"github.com/subframe7536/lofty-go/id3v2"
 )
 
 // --- tests/taglib/test_id3v2.rs ---
@@ -151,12 +151,14 @@ func TestTaglibId3v2W000(t *testing.T) {
 		t.Fatal("no id3v2")
 	}
 	var found bool
-	for _, item := range tag.Items() {
-		if item.Key() == ItemKeyUnknown && item.Description == "W000" {
-			if v, ok := item.Value().IntoString(); !ok || v != "lukas.lalinsky@example.com____" {
-				t.Fatalf("W000 = %q", v)
+	if companion, ok := tag.CompanionTag().(*id3v2.Id3v2Tag); ok {
+		for _, f := range companion.Frames.Frames() {
+			if wf, ok := f.(*id3v2.UrlLinkFrame); ok && wf.ID().String() == "W000" {
+				if wf.Content != "lukas.lalinsky@example.com____" {
+					t.Fatalf("W000 = %q", wf.Content)
+				}
+				found = true
 			}
-			found = true
 		}
 	}
 	if !found {
@@ -336,7 +338,8 @@ func TestTaglibId3v2DowngradeTo23(t *testing.T) {
 	enc, payload := content[idx+10], content[idx+11:idx+10+int(binary.BigEndian.Uint32(content[idx+4:idx+8]))]
 	var tcon string
 	if enc == 1 {
-		s, err := utf16DecodeBytes(payload[2:], bigEndian)
+		// Decode per the payload's BOM (UTF-16 may be LE or BE)
+		s, err := utf16DecodeBytes(payload, littleEndian)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -445,9 +448,14 @@ func TestTaglibId3v2TocManyChildren(t *testing.T) {
 	if !ok {
 		t.Fatal("no id3v2")
 	}
-	// Rust sees 130 frames: 1 CTOC + 129 CHAP
-	if tag.Len() != 130 {
-		t.Fatalf("frames = %d", tag.Len())
+	// Rust sees 130 frames: 1 CTOC + 129 CHAP — all retained in the companion
+	// tag (chapters have no generic-ItemKey mapping).
+	companion, ok := tag.CompanionTag().(*id3v2.Id3v2Tag)
+	if !ok || companion == nil {
+		t.Fatal("no companion Id3v2Tag")
+	}
+	if companion.Frames.Len() != 130 {
+		t.Fatalf("frames = %d", companion.Frames.Len())
 	}
 }
 
@@ -562,27 +570,34 @@ func TestTaglibTagToId3v2LangFrame(t *testing.T) {
 	tag.PushUnchecked(NewTagItem(ItemKeyUnsyncLyrics, ItemValueText("Test lyrics")))
 	tag.PushUnchecked(NewTagItem(ItemKeyComment, ItemValueText("Test comment")))
 
-	btag := genericTagToBogem(tag, false)
-	uslt := btag.GetFrames("USLT")
+	itag := id3v2TagFromTag(tag)
+	var uslt, comm []id3v2.Frame
+	for _, f := range itag.Frames.Frames() {
+		switch f.ID().String() {
+		case "USLT":
+			uslt = append(uslt, f)
+		case "COMM":
+			comm = append(comm, f)
+		}
+	}
 	if len(uslt) != 1 {
 		t.Fatalf("USLT frames = %d", len(uslt))
 	}
-	lf, ok := uslt[0].(bogem.UnsynchronisedLyricsFrame)
+	lf, ok := uslt[0].(*id3v2.UnsynchronizedTextFrame)
 	if !ok {
 		t.Fatalf("USLT type = %T", uslt[0])
 	}
-	if lf.Language != "XXX" || lf.ContentDescriptor != "" || lf.Lyrics != "Test lyrics" {
+	if lf.Language != [3]byte{'X', 'X', 'X'} || lf.Description != "" || lf.Content != "Test lyrics" {
 		t.Fatalf("USLT = %+v", lf)
 	}
-	comm := btag.GetFrames("COMM")
 	if len(comm) != 1 {
 		t.Fatalf("COMM frames = %d", len(comm))
 	}
-	cf, ok := comm[0].(bogem.CommentFrame)
+	cf, ok := comm[0].(*id3v2.CommentFrame)
 	if !ok {
 		t.Fatalf("COMM type = %T", comm[0])
 	}
-	if cf.Language != "XXX" || cf.Description != "" || cf.Text != "Test comment" {
+	if cf.Language != [3]byte{'X', 'X', 'X'} || cf.Description != "" || cf.Content != "Test comment" {
 		t.Fatalf("COMM = %+v", cf)
 	}
 }
