@@ -268,9 +268,8 @@ func (t *Id3v2Tag) MergeTag(tag *Tag) *Id3v2Tag {
 		t.Frames.Push(frame)
 	}
 	for _, pic := range tag.Pictures() {
-		if replaced := t.Frames.Insert(NewAttachedPictureFrame(util.TextEncodingUTF8, pic)); replaced != nil {
-			// deduplicated
-		}
+		// Insert all pictures as single frames and deduplicate as needed
+		t.Frames.Insert(NewAttachedPictureFrame(util.TextEncodingUTF8, pic))
 	}
 	return t
 }
@@ -279,9 +278,7 @@ func (t *Id3v2Tag) MergeTag(tag *Tag) *Id3v2Tag {
 func tagFrames(tag *Tag) []Frame {
 	frames := fromTagItems(tag.Items())
 	if companion, ok := tag.CompanionTag().(*Id3v2Tag); ok {
-		for _, f := range companion.Frames.CloneFrames() {
-			frames = append(frames, f)
-		}
+		frames = append(frames, companion.Frames.CloneFrames()...)
 	}
 	for _, pic := range tag.Pictures() {
 		frames = append(frames, NewAttachedPictureFrame(util.TextEncodingUTF8, pic))
@@ -295,8 +292,6 @@ func fromTagItems(items []TagItem) []Frame {
 		lyrics     bool
 		lang, desc string
 	}
-	type kvPairs = [][2]string
-
 	var tipl KeyValueFrame
 	tiplInit := false
 	textFrames := map[string]string{}

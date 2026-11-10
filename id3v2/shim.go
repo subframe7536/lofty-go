@@ -128,8 +128,6 @@ var (
 	unsynchsafe32        = util.Unsynchsafe32
 )
 
-type byteOrder = util.ByteOrder
-
 const (
 	ItemKeyComment                = meta.ItemKeyComment
 	ItemKeyMusicBrainzRecordingId = meta.ItemKeyMusicBrainzRecordingId
@@ -189,7 +187,6 @@ const (
 
 var (
 	itoa                 = util.Itoa
-	latin1EncodeMust     = util.Latin1EncodeMust
 	advisoryRatingFromU8 = util.AdvisoryRatingFromU8
 )
 
@@ -214,16 +211,6 @@ var (
 )
 
 func tryByteSlice(size int) ([]byte, error) { return util.TryByteSlice(size) }
-
-var (
-	utf16Encode  = util.Utf16Encode
-	latin1Encode = util.Latin1Encode
-)
-
-var (
-	splitNulls = util.SplitNulls
-	joinNulls  = util.JoinNulls
-)
 
 const (
 	ItemKeyAlbumTitle     = meta.ItemKeyAlbumTitle

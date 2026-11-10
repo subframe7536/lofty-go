@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"io"
 	"time"
+
+	"github.com/subframe7536/lofty-go/internal/util"
 )
 
 // MpegParseError is returned when an MPEG file fails to parse.
@@ -314,29 +316,26 @@ func findNextFrame(reader io.ReadSeeker) (*mpegHeader, int64, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	var window [4]byte
-	var b [1]byte
-	read := 0
-	for {
-		_, err := reader.Read(b[:])
-		if err != nil {
-			if err == io.EOF {
-				return nil, 0, nil
-			}
-			return nil, 0, err
-		}
-		window[0] = window[1]
-		window[1] = window[2]
-		window[2] = window[3]
-		window[3] = b[0]
-		read++
-		if read >= 4 {
-			if h, err := parseMpegHeader(window[:], nil); err == nil {
-				offset := start + int64(read) - 4
-				return h, offset, nil
+	var foundHeader *mpegHeader
+	offset, found, err := util.ChunkedScan(reader, 3, -1, func(window []byte) int {
+		for i := 0; i+4 <= len(window); i++ {
+			if h, err := parseMpegHeader(window[i:i+4], nil); err == nil {
+				foundHeader = h
+				return i
 			}
 		}
+		return -1
+	})
+	if err != nil {
+		return nil, 0, err
 	}
+	if !found {
+		return nil, 0, nil
+	}
+	if _, err := reader.Seek(start+offset+4, io.SeekStart); err != nil {
+		return nil, 0, err
+	}
+	return foundHeader, start + offset, nil
 }
 
 // MpegProperties are the audio properties of an MPEG file.
@@ -533,16 +532,25 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*MpegFil
 	var firstHeader *mpegHeader
 
 	// Skip zero padding at the start
-	var one [1]byte
-	for {
-		if _, err := reader.Read(one[:]); err != nil {
-			return nil, &FileParseError{Source: &MpegParseError{Source: err}}
-		}
-		if one[0] != 0 {
-			break
-		}
+	startPos, err := reader.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return nil, &FileParseError{Source: &MpegParseError{Source: err}}
 	}
-	if _, err := reader.Seek(-1, io.SeekCurrent); err != nil {
+	firstNonZero, foundNonZero, err := util.ChunkedScan(reader, 0, -1, func(window []byte) int {
+		for i, b := range window {
+			if b != 0 {
+				return i
+			}
+		}
+		return -1
+	})
+	if err != nil {
+		return nil, &FileParseError{Source: &MpegParseError{Source: err}}
+	}
+	if !foundNonZero {
+		return nil, &FileParseError{Source: &MpegParseError{Source: io.EOF}}
+	}
+	if _, err := reader.Seek(startPos+firstNonZero, io.SeekStart); err != nil {
 		return nil, &FileParseError{Source: err}
 	}
 

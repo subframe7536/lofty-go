@@ -757,8 +757,15 @@ func FindId3v2(reader io.ReadSeeker, read bool, parseOptions ParseOptions) (Id3v
 		return Id3v2Header{}, 0, false, err
 	}
 
-	search := io.LimitReader(reader, int64(parseOptions.MaxJunkBytes))
-	_, found := FindId3v2InJunk(search)
+	var offset int64
+	var found bool
+	if parseOptions.MaxJunkBytes > 0 {
+		offset, found, err = util.ChunkedScan(reader, 2, int64(parseOptions.MaxJunkBytes),
+			func(window []byte) int { return bytes.Index(window, []byte("ID3")) })
+		if err != nil {
+			return Id3v2Header{}, 0, false, err
+		}
+	}
 	if !found {
 		if _, err := reader.Seek(start, io.SeekStart); err != nil {
 			return Id3v2Header{}, 0, false, err
@@ -767,7 +774,7 @@ func FindId3v2(reader io.ReadSeeker, read bool, parseOptions ParseOptions) (Id3v
 	}
 
 	// Seek back to start of "ID3"
-	if _, err := reader.Seek(-3, io.SeekCurrent); err != nil {
+	if _, err := reader.Seek(start+offset, io.SeekStart); err != nil {
 		return Id3v2Header{}, 0, false, err
 	}
 
@@ -804,6 +811,21 @@ func FindId3v2(reader io.ReadSeeker, read bool, parseOptions ParseOptions) (Id3v
 // FindId3v2InJunk scans reader for an "ID3" magic; on return the reader is
 // positioned right after it. Returns (offset of magic, found).
 func FindId3v2InJunk(reader io.Reader) (int64, bool) {
+	if rs, ok := reader.(io.ReadSeeker); ok {
+		start, err := rs.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return 0, false
+		}
+		offset, found, err := util.ChunkedScan(rs, 2, -1,
+			func(window []byte) int { return bytes.Index(window, []byte("ID3")) })
+		if err != nil || !found {
+			return 0, false
+		}
+		if _, err := rs.Seek(start+offset+3, io.SeekStart); err != nil {
+			return 0, false
+		}
+		return offset, true
+	}
 	var window [3]byte
 	idx := int64(0)
 	var oneByte [1]byte

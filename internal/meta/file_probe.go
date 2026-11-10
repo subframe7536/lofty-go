@@ -154,7 +154,7 @@ func (p *Probe) guessInner(maxJunkBytes int) (Option[FileType], error) {
 // checkMpegOrAac searches for an MPEG/AAC frame sync, which may be preceded by
 // junk bytes.
 func (p *Probe) checkMpegOrAac(maxJunkBytes int) (Option[FileType], error) {
-	found, err := searchForFrameSync(io.LimitReader(p.inner, int64(maxJunkBytes)))
+	found, err := searchForFrameSyncSeeking(p.inner, int64(maxJunkBytes))
 	if err != nil {
 		return None[FileType](), err
 	}

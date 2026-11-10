@@ -359,7 +359,9 @@ func writeFrame(w io.Writer, name string, flags FrameFlags, value []byte, writeO
 	}
 	if isGrouping {
 		g, _ := flags.GroupingIdentity.Get()
-		w.Write([]byte{g})
+		if _, err := w.Write([]byte{g}); err != nil {
+			return err
+		}
 	}
 	_, err := w.Write(value)
 	return err
@@ -384,8 +386,12 @@ func writeEncrypted(w io.Writer, name string, value []byte, flags FrameFlags, wr
 		}
 		var lb [4]byte
 		binary.BigEndian.PutUint32(lb[:], dli)
-		w.Write(lb[:])
-		w.Write([]byte{methodSymbol})
+		if _, err := w.Write(lb[:]); err != nil {
+			return err
+		}
+		if _, err := w.Write([]byte{methodSymbol}); err != nil {
+			return err
+		}
 		_, err := w.Write(value)
 		return err
 	}

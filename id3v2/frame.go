@@ -48,17 +48,6 @@ func ParseFrameId(id string) (FrameId, error) {
 	}
 }
 
-// verifyFrameId verifies the characters of an ID string without a length check.
-func verifyFrameId(id string) error {
-	for i := 0; i < len(id); i++ {
-		c := id[i]
-		if (c < 'A' || c > 'Z') && (c < '0' || c > '9') {
-			return &FrameIdParseError{IdBytes: []byte(id)}
-		}
-	}
-	return nil
-}
-
 // IsOutdated reports whether this is an outdated (ID3v2.2) ID.
 func (i FrameId) IsOutdated() bool { return i.outdated }
 
@@ -236,9 +225,6 @@ type Frame interface {
 	// cloneFrame returns a copy safe to mutate during writing.
 	cloneFrame() Frame
 }
-
-// frameID extracts the ID from a frame.
-func frameID(f Frame) FrameId { return f.ID() }
 
 // frameEncodingContext carries state needed while encoding frames.
 type frameEncodingContext struct {

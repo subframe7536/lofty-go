@@ -154,7 +154,7 @@ var (
 // --- synchsafe / frame sync ---
 
 var (
-	unsynchsafe32      = util.Unsynchsafe32
-	verifyFrameSync    = util.VerifyFrameSync
-	searchForFrameSync = util.SearchForFrameSync
+	unsynchsafe32             = util.Unsynchsafe32
+	verifyFrameSync           = util.VerifyFrameSync
+	searchForFrameSyncSeeking = util.SearchForFrameSyncSeeking
 )

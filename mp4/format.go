@@ -141,6 +141,24 @@ func mp4SkipBox(reader io.ReadSeeker, h *mp4BoxHeader) error {
 	return err
 }
 
+// offsetReadSeeker wraps a ReadSeeker so position 0 corresponds to the
+// absolute offset base: Seeks and reported positions stay file-absolute.
+// It lets a buffered moov subtree be walked with the same code as the file.
+type offsetReadSeeker struct {
+	r    io.ReadSeeker
+	base int64
+}
+
+func (o *offsetReadSeeker) Read(p []byte) (int, error) { return o.r.Read(p) }
+
+func (o *offsetReadSeeker) Seek(off int64, whence int) (int64, error) {
+	if whence == io.SeekStart {
+		off -= o.base
+	}
+	n, err := o.r.Seek(off, whence)
+	return n + o.base, err
+}
+
 // mp4MetaIsFull reports whether a `meta` atom carries the 4-byte
 // version+flags field before its children (Rust `meta_is_full`): if the
 // second four bytes of the payload are a known child ident, the `meta` is
@@ -277,8 +295,20 @@ func Mp4FileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*Mp4File,
 		return nil, &FileParseError{Source: &Mp4ParseError{Source: &FakeTagError{}}}
 	}
 
-	// Walk moov children: trak (props), udta/meta/ilst (tag)
-	if _, err := reader.Seek(moov.pos, io.SeekStart); err != nil {
+	// Walk moov children: trak (props), udta/meta/ilst (tag). Buffer the moov
+	// body when it fits the allocation limit so the many small box reads and
+	// seeks inside it become memory operations instead of syscalls.
+	mr := reader
+	if int64(moov.size) > 0 {
+		if buf, aerr := tryByteSlice(int(moov.size)); aerr == nil {
+			if _, serr := reader.Seek(moov.pos, io.SeekStart); serr == nil {
+				if n, rerr := io.ReadFull(reader, buf); rerr == nil || rerr == io.EOF || rerr == io.ErrUnexpectedEOF {
+					mr = &offsetReadSeeker{r: bytes.NewReader(buf[:n]), base: moov.pos}
+				}
+			}
+		}
+	}
+	if _, err := mr.Seek(moov.pos, io.SeekStart); err != nil {
 		return nil, &FileParseError{Source: err}
 	}
 	moovEnd := moov.pos + int64(moov.size)
@@ -286,11 +316,11 @@ func Mp4FileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*Mp4File,
 	var traks []*mp4BoxHeader
 
 	for {
-		pos, _ := reader.Seek(0, io.SeekCurrent)
+		pos, _ := mr.Seek(0, io.SeekCurrent)
 		if pos >= moovEnd {
 			break
 		}
-		h, err := mp4ReadBox(reader)
+		h, err := mp4ReadBox(mr)
 		if err != nil {
 			break
 		}
@@ -300,17 +330,17 @@ func Mp4FileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*Mp4File,
 			traks = append(traks, h)
 		case "udta":
 			// udta/meta/ilst
-			if t, err := mp4WalkUdta(reader, boxEnd, parseOptions); err == nil && t != nil {
+			if t, err := mp4WalkUdta(mr, boxEnd, parseOptions); err == nil && t != nil {
 				ilstTag = t
 			}
 		}
-		if _, err := reader.Seek(boxEnd, io.SeekStart); err != nil {
+		if _, err := mr.Seek(boxEnd, io.SeekStart); err != nil {
 			return nil, &FileParseError{Source: err}
 		}
 	}
 
 	if parseOptions.ReadProperties {
-		if err := mp4ReadProperties(reader, traks, fileLen, mdatSize, &file.Properties); err != nil {
+		if err := mp4ReadProperties(mr, traks, fileLen, mdatSize, &file.Properties); err != nil {
 			return nil, &FileParseError{Source: err}
 		}
 	}

@@ -687,18 +687,29 @@ func ReadApeTagWithHeader(reader io.ReadSeeker, header *ApeHeader, parseOptions 
 		remainingSize -= 4
 
 		var key []byte
+		var kbuf [64]byte
 		for {
-			var b [1]byte
-			if _, err := io.ReadFull(reader, b[:]); err != nil {
+			n, err := io.ReadFull(reader, kbuf[:])
+			if err != nil && err != io.ErrUnexpectedEOF {
 				return nil, &ApeTagParseError{Source: err}
 			}
-			if b[0] == 0 {
+			if z := bytes.IndexByte(kbuf[:n], 0); z >= 0 {
+				key = append(key, kbuf[:z]...)
+				// Push back bytes read past the terminator.
+				if extra := n - (z + 1); extra > 0 {
+					if _, serr := reader.Seek(-int64(extra), io.SeekCurrent); serr != nil {
+						return nil, &ApeTagParseError{Source: serr}
+					}
+				}
+				remainingSize -= uint32(z + 1)
 				break
 			}
-			key = append(key, b[0])
-			remainingSize--
+			key = append(key, kbuf[:n]...)
+			remainingSize -= uint32(n)
+			if err == io.ErrUnexpectedEOF || n == 0 {
+				return nil, &ApeTagParseError{Source: io.ErrUnexpectedEOF}
+			}
 		}
-		remainingSize--
 		keyStr, err := utf8Decode(key)
 		if err != nil {
 			return nil, &ApeTagItemParseError{Source: err}

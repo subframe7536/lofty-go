@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"io"
 	"reflect"
+	"strings"
 )
 
 // unsyncReader streams unsynchronised ID3v2 content, dropping the 0x00 that
@@ -17,40 +18,53 @@ type unsyncReader struct {
 }
 
 func (u *unsyncReader) Read(p []byte) (int, error) {
-	// Simple byte-at-a-time filter — adequate for tag-sized data.
+	if len(p) == 0 {
+		return 0, nil
+	}
 	n := 0
-	var b [1]byte
-	for n < len(p) {
-		if u.have {
-			p[n] = u.pend
-			u.have = false
-			n++
-			continue
-		}
-		_, err := u.r.Read(b[:])
-		if err != nil {
-			if n > 0 {
-				return n, nil
+	if u.have {
+		p[0] = u.pend
+		u.have = false
+		n = 1
+	}
+	m, err := u.r.Read(p[n:])
+	data := p[n : n+m]
+	w := n
+	for i := 0; i < len(data); i++ {
+		b := data[i]
+		if b == 0xFF {
+			if i+1 < len(data) {
+				p[w] = b
+				w++
+				i++
+				if data[i] == 0x00 {
+					continue
+				}
+				p[w] = data[i]
+				w++
+				continue
 			}
-			return 0, err
-		}
-		if b[0] == 0xFF {
-			var peek [1]byte
-			_, err := u.r.Read(peek[:])
-			if err != nil {
-				p[n] = b[0]
-				n++
-				return n, nil
-			}
-			if peek[0] != 0x00 {
-				u.pend = peek[0]
+			// Last byte is 0xFF: its 0x00 check needs the next read —
+			// unless the stream already ended.
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				p[w] = b
+				w++
+			} else {
+				u.pend = b
 				u.have = true
 			}
+			continue
 		}
-		p[n] = b[0]
-		n++
+		p[w] = b
+		w++
 	}
-	return n, nil
+	if w > 0 {
+		return w, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return 0, nil
 }
 
 // parsedFrameResult mirrors Rust's `ParsedFrame` enum.
@@ -65,8 +79,30 @@ const (
 // ParseId3v2Tag reads the tag content (after the header was consumed) into a
 // native [Id3v2Tag]. Mirrors Rust `parse_id3v2`.
 func ParseId3v2Tag(reader io.Reader, header Id3v2Header, parseOptions ParseOptions) (*Id3v2Tag, error) {
-	// Rust uses reader.take(size) — a lazy, unbuffered restriction.
-	r := io.LimitReader(reader, int64(header.Size-header.ExtendedSize))
+	contentSize := int64(header.Size - header.ExtendedSize)
+	var r io.Reader
+	switch reader.(type) {
+	case *bytes.Reader, *strings.Reader:
+		// Already memory-backed; Rust's lazy restriction is just as cheap.
+		r = io.LimitReader(reader, contentSize)
+	default:
+		// Buffer the tag content when it fits the allocation limit: the
+		// frame walk performs many tiny reads, which would each be a
+		// syscall on a raw file. The whole limited region is consumed
+		// either way.
+		if contentSize > 0 {
+			if buf, aerr := tryByteSlice(int(contentSize)); aerr == nil {
+				n, rerr := io.ReadFull(reader, buf)
+				if rerr != nil && rerr != io.EOF && rerr != io.ErrUnexpectedEOF {
+					return nil, &Id3v2ParseError{Source: rerr}
+				}
+				r = bytes.NewReader(buf[:n])
+			}
+		}
+		if r == nil {
+			r = io.LimitReader(reader, contentSize)
+		}
+	}
 
 	// Prior to ID3v2.4 the tag-wide unsynchronisation flag meant the entire
 	// tag content was unsynchronised.
@@ -77,7 +113,7 @@ func ParseId3v2Tag(reader io.Reader, header Id3v2Header, parseOptions ParseOptio
 	tag, err := readAllFramesIntoTag(r, header, parseOptions)
 	// Consume any remaining tag content (padding, discarded frames) so callers
 	// are positioned at the tag's end.
-	io.Copy(io.Discard, r)
+	_, _ = io.Copy(io.Discard, r)
 	if err != nil {
 		return nil, &Id3v2ParseError{Source: err}
 	}
@@ -467,7 +503,7 @@ func parseFrame(reader io.Reader, id FrameId, size uint32, flags FrameFlags, ver
 			err = e
 			return
 		}
-		if f == nil || (reflect.ValueOf(f).Kind() == reflect.Ptr && reflect.ValueOf(f).IsNil()) {
+		if f == nil || reflect.ValueOf(f).IsNil() {
 			return
 		}
 		frame, parsed = f, true

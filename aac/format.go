@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"time"
+
+	"github.com/subframe7536/lofty-go/internal/util"
 )
 
 // --- AAC ---
@@ -176,17 +178,22 @@ func aacSearchFrameSync(reader io.ReadSeeker, pos int64) (int64, bool) {
 	if _, err := reader.Seek(pos, io.SeekStart); err != nil {
 		return 0, false
 	}
-	var buf [1]byte
-	prev := byte(0)
-	for i := pos; ; i++ {
-		if _, err := reader.Read(buf[:]); err != nil {
-			return 0, false
+	offset, found, err := util.ChunkedScan(reader, 1, -1, func(window []byte) int {
+		for i := 0; i+1 < len(window); i++ {
+			if window[i] == 0xFF && window[i+1]>>5 == 0b111 {
+				return i
+			}
 		}
-		if prev == 0xFF && buf[0]>>5 == 0b111 {
-			return i - 1, true
-		}
-		prev = buf[0]
+		return -1
+	})
+	if err != nil || !found {
+		return 0, false
 	}
+	abs := pos + offset
+	if _, err := reader.Seek(abs+2, io.SeekStart); err != nil {
+		return 0, false
+	}
+	return abs, true
 }
 
 // FileType implements AudioFile.

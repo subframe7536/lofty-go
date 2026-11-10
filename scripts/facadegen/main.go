@@ -287,7 +287,7 @@ func main() {
 			out.WriteString("// from " + k + "\n")
 			if block == "" {
 				for _, e := range byPkg[k] {
-					out.WriteString(e.code + "\n")
+					out.WriteString(e.code + "\n\n")
 				}
 				continue
 			}

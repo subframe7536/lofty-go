@@ -90,7 +90,7 @@ func frameParseInvalidLanguage(language [3]byte) *FrameParseError {
 
 func frameParseUnsupportedVersion(version Id3v2Version) *FrameParseError {
 	return frameParseErrorMsg(None[FrameId](),
-		fmt.Sprintf("attempted to read frame in version %s", id3v2VersionString(version)))
+		"attempted to read frame in version "+id3v2VersionString(version))
 }
 
 // FrameEncodingError is returned when an ID3v2 frame fails to encode.
@@ -127,7 +127,7 @@ func frameEncodingInvalidLanguage(language [3]byte) *FrameEncodingError {
 
 func frameEncodingUnsupportedVersion(version Id3v2Version) *FrameEncodingError {
 	return frameEncodingErrorMsg(None[FrameId](),
-		fmt.Sprintf("attempted to write frame in version %s", id3v2VersionString(version)))
+		"attempted to write frame in version "+id3v2VersionString(version))
 }
 
 // SynchOverflowError is returned when an integer is too large to create a synchsafe representation.

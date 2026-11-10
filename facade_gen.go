@@ -763,195 +763,259 @@ var (
 func SaveToPath(path string, f AudioFile, tagType TagType, writeOptions WriteOptions) error {
 	return meta.SaveToPath(path, f, tagType, writeOptions)
 }
+
 func RemoveTagFromPath(path string, tagType TagType) error {
 	return meta.RemoveTagFromPath(path, tagType)
 }
+
 func NewProbe(reader io.ReadSeeker) *Probe {
 	return meta.NewProbe(reader)
 }
+
 func NewProbeFromPath(path string) (*Probe, error) {
 	return meta.NewProbeFromPath(path)
 }
+
 func ProbeWithFileType(reader io.ReadSeeker, fileType FileType) *Probe {
 	return meta.ProbeWithFileType(reader, fileType)
 }
+
 func ReadFormat(fTy FileType, reader io.ReadSeeker, options ParseOptions) (*TaggedFile, error) {
 	return meta.ReadFormat(fTy, reader, options)
 }
+
 func ReadFromPath(path string, parseOptions ...ParseOptions) (*TaggedFile, error) {
 	return meta.ReadFromPath(path, parseOptions...)
 }
+
 func ReadFrom(reader io.ReadSeeker, parseOptions ...ParseOptions) (*TaggedFile, error) {
 	return meta.ReadFrom(reader, parseOptions...)
 }
+
 func RegisterCustomResolver(name string, resolver FileResolver) {
 	meta.RegisterCustomResolver(name, resolver)
 }
+
 func UnregisterCustomResolver(name string) {
 	meta.UnregisterCustomResolver(name)
 }
+
 func NewTaggedFile(fileType FileType, tags []*Tag, properties FileProperties) *TaggedFile {
 	return meta.NewTaggedFile(fileType, tags, properties)
 }
+
 func NewBoundTaggedFile(file FileLike, taggedFile *TaggedFile) *BoundTaggedFile {
 	return meta.NewBoundTaggedFile(file, taggedFile)
 }
+
 func BoundTaggedFileFrom(file FileLike, parseOptions ParseOptions) (*BoundTaggedFile, error) {
 	return meta.BoundTaggedFileFrom(file, parseOptions)
 }
+
 func FileTypeCustom(name string) FileType {
 	return meta.FileTypeCustom(name)
 }
+
 func FileTypeFromExt(ext string) (FileType, bool) {
 	return meta.FileTypeFromExt(ext)
 }
+
 func FileTypeFromPath(p string) (FileType, bool) {
 	return meta.FileTypeFromPath(p)
 }
+
 func FileTypeFromBuffer(buf []byte) (FileType, bool) {
 	return meta.FileTypeFromBuffer(buf)
 }
+
 func MimeTypeUnknown(s string) MimeType {
 	return meta.MimeTypeUnknown(s)
 }
+
 func MimeTypeFromStr(mimeType string) MimeType {
 	return meta.MimeTypeFromStr(mimeType)
 }
+
 func PictureTypeUndefined(i uint8) PictureType {
 	return meta.PictureTypeUndefined(i)
 }
+
 func PictureTypeFromU8(b uint8) PictureType {
 	return meta.PictureTypeFromU8(b)
 }
+
 func PictureTypeFromApeKey(key string) PictureType {
 	return meta.PictureTypeFromApeKey(key)
 }
+
 func PictureInformationFromPicture(picture *Picture) (PictureInformation, error) {
 	return meta.PictureInformationFromPicture(picture)
 }
+
 func PictureInformationFromPNG(data []byte) (PictureInformation, error) {
 	return meta.PictureInformationFromPNG(data)
 }
+
 func PictureInformationFromJPEG(data []byte) (PictureInformation, error) {
 	return meta.PictureInformationFromJPEG(data)
 }
+
 func PictureFromReader(reader io.Reader) (*Picture, error) {
 	return meta.PictureFromReader(reader)
 }
+
 func PictureUnchecked(data []byte) *PictureBuilder {
 	return meta.PictureUnchecked(data)
 }
+
 func PictureFromFlacBytes(b []byte, encoded bool, parseMode ParsingMode) (Picture, PictureInformation, error) {
 	return meta.PictureFromFlacBytes(b, encoded, parseMode)
 }
+
 func PictureFromApeBytes(key string, b []byte) (Picture, error) {
 	return meta.PictureFromApeBytes(key, b)
 }
+
 func MimetypeFromBin(b []byte) (MimeType, error) {
 	return meta.MimetypeFromBin(b)
 }
+
 func SetCustomRatingProvider(provider RatingProvider) bool {
 	return meta.SetCustomRatingProvider(provider)
 }
+
 func PopularimeterCustom(email string, rating StarRating, playCounter uint64) Popularimeter {
 	return meta.PopularimeterCustom(email, rating, playCounter)
 }
+
 func PopularimeterMapped(email string, tagType TagType, rate uint8, playCounter uint64) (Popularimeter, bool) {
 	return meta.PopularimeterMapped(email, tagType, rate, playCounter)
 }
+
 func PopularimeterFromStr(s string) (Popularimeter, error) {
 	return meta.PopularimeterFromStr(s)
 }
+
 func PopularimeterWindowsMediaPlayer(rating StarRating, playCounter uint64) Popularimeter {
 	return meta.PopularimeterWindowsMediaPlayer(rating, playCounter)
 }
+
 func PopularimeterMusicBee(rating StarRating, playCounter uint64) Popularimeter {
 	return meta.PopularimeterMusicBee(rating, playCounter)
 }
+
 func PopularimeterPicard(rating StarRating, playCounter uint64) Popularimeter {
 	return meta.PopularimeterPicard(rating, playCounter)
 }
+
 func NewFileProperties(duration time.Duration, overallBitrate Option[uint32], audioBitrate Option[uint32], sampleRate Option[uint32], bitDepth Option[uint8], channels Option[uint8], channelMask Option[ChannelMask]) FileProperties {
 	return meta.NewFileProperties(duration, overallBitrate, audioBitrate, sampleRate, bitDepth, channels, channelMask)
 }
+
 func ChannelMaskFromOpusChannels(channels uint8) Option[ChannelMask] {
 	return meta.ChannelMaskFromOpusChannels(channels)
 }
+
 func ChannelMaskFromMp4Channels(channels uint8) Option[ChannelMask] {
 	return meta.ChannelMaskFromMp4Channels(channels)
 }
+
 func ChannelMaskFromDsfChannelType(channelType uint8) Option[ChannelMask] {
 	return meta.ChannelMaskFromDsfChannelType(channelType)
 }
+
 func Some[T any](val T) Option[T] {
 	return meta.Some[T](val)
 }
+
 func None[T any]() Option[T] {
 	return meta.None[T]()
 }
+
 func NewTag(tagType TagType) *Tag {
 	return meta.NewTag(tagType)
 }
+
 func ItemValueText(s string) ItemValue {
 	return meta.ItemValueText(s)
 }
+
 func ItemValueLocator(s string) ItemValue {
 	return meta.ItemValueLocator(s)
 }
+
 func ItemValueBinary(b []byte) ItemValue {
 	return meta.ItemValueBinary(b)
 }
+
 func NewTagItem(itemKey ItemKey, itemValue ItemValue) TagItem {
 	return meta.NewTagItem(itemKey, itemValue)
 }
+
 func NewTagItemChecked(tagType TagType, itemKey ItemKey, itemValue ItemValue) (TagItem, bool) {
 	return meta.NewTagItemChecked(tagType, itemKey, itemValue)
 }
+
 func ItemKeySupportedKeys(tagType TagType) []ItemKey {
 	return meta.ItemKeySupportedKeys(tagType)
 }
+
 func ItemKeyFromKey(tagType TagType, key string) (ItemKey, bool) {
 	return meta.ItemKeyFromKey(tagType, key)
 }
+
 func ItemKeyOrUnknown(tagType TagType, key string) ItemKey {
 	return meta.ItemKeyOrUnknown(tagType, key)
 }
+
 func RegisterFormat(fileType FileType, reader FormatReader, writer FormatWriter) {
 	meta.RegisterFormat(fileType, reader, writer)
 }
+
 func RegisterFormatReader(fileType FileType, reader FormatReader) {
 	meta.RegisterFormatReader(fileType, reader)
 }
+
 func RegisterFormatWriter(fileType FileType, writer FormatFileWriter) {
 	meta.RegisterFormatWriter(fileType, writer)
 }
+
 func RegisterTagDumper(tagType TagType, dumper TagDumper) {
 	meta.RegisterTagDumper(tagType, dumper)
 }
+
 func RegisterConcreteTagWriter(fileType FileType, tagType TagType, writer ConcreteTagWriter) {
 	meta.RegisterConcreteTagWriter(fileType, tagType, writer)
 }
+
 func WriteConcreteTag(file *VerifiedFile, tagType TagType, tag any, writeOptions WriteOptions) (bool, error) {
 	return meta.WriteConcreteTag(file, tagType, tag, writeOptions)
 }
+
 func WriteTag(tag *Tag, file *VerifiedFile, writeOptions WriteOptions) error {
 	return meta.WriteTag(tag, file, writeOptions)
 }
+
 func DumpTag(tag *Tag, writer io.Writer, writeOptions WriteOptions) error {
 	return meta.DumpTag(tag, writer, writeOptions)
 }
+
 func RemoveTag(tagType TagType, file *VerifiedFile, writeOptions WriteOptions) error {
 	return meta.RemoveTag(tagType, file, writeOptions)
 }
+
 func SaveTagFields(file FileLike, format FileType, tags []*Tag, writeOptions WriteOptions) error {
 	return meta.SaveTagFields(file, format, tags, writeOptions)
 }
+
 func NewVerifiedFile(file FileLike, parseOptions ParseOptions) (*VerifiedFile, error) {
 	return meta.NewVerifiedFile(file, parseOptions)
 }
+
 func VerifiedFileFromPath(path string, parseOptions ParseOptions) (*VerifiedFile, *os.File, error) {
 	return meta.VerifiedFileFromPath(path, parseOptions)
 }
+
 func NewVerifiedFileOf(format FileType, file FileLike) *VerifiedFile {
 	return meta.NewVerifiedFileOf(format, file)
 }
@@ -960,132 +1024,175 @@ func NewVerifiedFileOf(format FileType, file FileLike) *VerifiedFile {
 func TryMake[T any](size int) ([]T, error) {
 	return util.TryMake[T](size)
 }
+
 func TryByteSlice(size int) ([]byte, error) {
 	return util.TryByteSlice(size)
 }
+
 func TryCapSlice[T any](capacity int) ([]T, error) {
 	return util.TryCapSlice[T](capacity)
 }
+
 func ApplyGlobalOptions(options GlobalOptions) {
 	util.ApplyGlobalOptions(options)
 }
+
 func GetGlobalOptions() GlobalOptions {
 	return util.GetGlobalOptions()
 }
+
 func NewNotEnoughDataError(expected int) *NotEnoughDataError {
 	return util.NewNotEnoughDataError(expected)
 }
+
 func VerifyFrameSync(b [2]byte) bool {
 	return util.VerifyFrameSync(b)
 }
+
 func SearchForFrameSync(reader io.Reader) (int64, error) {
 	return util.SearchForFrameSync(reader)
 }
+
 func DurationFromSeconds(s float64) time.Duration {
 	return util.DurationFromSeconds(s)
 }
+
 func Itoa(n int) string {
 	return util.Itoa(n)
 }
+
 func Atoi(s string) (int, error) {
 	return util.Atoi(s)
 }
+
 func IndexOfStr(s []string, v string) int {
 	return util.IndexOfStr(s, v)
 }
+
 func Latin1EncodeMust(s string) []byte {
 	return util.Latin1EncodeMust(s)
 }
+
 func OptionFromPtr[T any](p *T) Option[*T] {
 	return util.OptionFromPtr[T](p)
 }
+
 func U32FromString(s string) (uint32, bool) {
 	return util.U32FromString(s)
 }
+
 func FlagItem(s string) int {
 	return util.FlagItem(s)
 }
+
 func AdvisoryRatingFromU8(v uint8) (uint8, bool) {
 	return util.AdvisoryRatingFromU8(v)
 }
+
 func SplitNulls(s string) []string {
 	return util.SplitNulls(s)
 }
+
 func JoinNulls(parts []string) string {
 	return util.JoinNulls(parts)
 }
+
 func StreamLen(rs io.Seeker) (uint64, error) {
 	return util.StreamLen(rs)
 }
+
 func F80FromBEBytes(bytes [10]byte) F80 {
 	return util.F80FromBEBytes(bytes)
 }
+
 func DivRound(a uint64, b uint64) uint64 {
 	return util.DivRound(a, b)
 }
+
 func RevSearchEndAtPos(p uint64) RevSearchEnd {
 	return util.RevSearchEndAtPos(p)
 }
+
 func NewRevPatternSearcher(reader io.ReadSeeker, pattern []byte) *RevPatternSearcher {
 	return util.NewRevPatternSearcher(reader, pattern)
 }
+
 func StringToOption(s string) Option[string] {
 	return util.StringToOption(s)
 }
+
 func Unsynchsafe32(b []byte) uint32 {
 	return util.Unsynchsafe32(b)
 }
+
 func Synchsafe32(v uint32) [4]byte {
 	return util.Synchsafe32(v)
 }
+
 func VerifyLatin1(text string) bool {
 	return util.VerifyLatin1(text)
 }
+
 func NativeEndian() ByteOrder {
 	return util.NativeEndian()
 }
+
 func Utf16Encode(text string, order ByteOrder, bom bool, terminated bool) []byte {
 	return util.Utf16Encode(text, order, bom, terminated)
 }
+
 func AppendUint16(b []byte, v uint16, order ByteOrder) []byte {
 	return util.AppendUint16(b, v, order)
 }
+
 func DecodeText(reader io.Reader, options TextDecodeOptions) (DecodeTextResult, error) {
 	return util.DecodeText(reader, options)
 }
+
 func ReadToTerminator(reader io.Reader, encoding TextEncoding) ([]byte, int) {
 	return util.ReadToTerminator(reader, encoding)
 }
+
 func Latin1Decode(bytes []byte) string {
 	return util.Latin1Decode(bytes)
 }
+
 func Latin1Encode(s string, lossy bool) ([]byte, error) {
 	return util.Latin1Encode(s, lossy)
 }
+
 func Utf8Decode(b []byte) (string, error) {
 	return util.Utf8Decode(b)
 }
+
 func Utf8ErrorIndex(b []byte) int {
 	return util.Utf8ErrorIndex(b)
 }
+
 func Utf8DecodeStr(b []byte) (string, error) {
 	return util.Utf8DecodeStr(b)
 }
+
 func Utf16DecodeBytes(bytes []byte, order ByteOrder) (string, error) {
 	return util.Utf16DecodeBytes(bytes, order)
 }
+
 func Utf16Valid(words []uint16) bool {
 	return util.Utf16Valid(words)
 }
+
 func Utf16DecodeTerminatedMaybeBom(reader io.Reader, order ByteOrder) (string, int, error) {
 	return util.Utf16DecodeTerminatedMaybeBom(reader, order)
 }
+
 func TrimEndNulls(text string) string {
 	return util.TrimEndNulls(text)
 }
+
 func AsciiNumber(input []byte) (int, uint64) {
 	return util.AsciiNumber(input)
 }
+
 func TryParseTimestamp(input string) Option[Timestamp] {
 	return util.TryParseTimestamp(input)
 }
@@ -1094,21 +1201,27 @@ func TryParseTimestamp(input string) Option[Timestamp] {
 func ParseLyrics3Tag(content []byte) (*Lyrics3Tag, error) {
 	return lyrics3.ParseLyrics3Tag(content)
 }
+
 func Lyrics3TagFromTag(tag *Tag) *Lyrics3Tag {
 	return lyrics3.Lyrics3TagFromTag(tag)
 }
+
 func ParseLyrics3v2Tag(content []byte, parseOptions ParseOptions) (*Lyrics3v2Tag, error) {
 	return lyrics3.ParseLyrics3v2Tag(content, parseOptions)
 }
+
 func Lyrics3v2TagFromTag(input *Tag) *Lyrics3v2Tag {
 	return lyrics3.Lyrics3v2TagFromTag(input)
 }
+
 func FindLyrics3(reader io.ReadSeeker, read bool, parseOptions ParseOptions) (int64, int64, any, bool, error) {
 	return lyrics3.FindLyrics3(reader, read, parseOptions)
 }
+
 func Lyrics3v2WriteTo(file FileLike, tag *Lyrics3v2Tag, writeOptions WriteOptions) error {
 	return lyrics3.Lyrics3v2WriteTo(file, tag, writeOptions)
 }
+
 func Lyrics3v1WriteTo(file FileLike, tag *Lyrics3Tag, writeOptions WriteOptions) error {
 	return lyrics3.Lyrics3v1WriteTo(file, tag, writeOptions)
 }
@@ -1117,12 +1230,15 @@ func Lyrics3v1WriteTo(file FileLike, tag *Lyrics3Tag, writeOptions WriteOptions)
 func Id3v1TagParse(reader [128]byte, parseMode ParsingMode) (*Id3v1Tag, error) {
 	return id3v1.Id3v1TagParse(reader, parseMode)
 }
+
 func Id3v1TagFromTag(input *Tag) *Id3v1Tag {
 	return id3v1.Id3v1TagFromTag(input)
 }
+
 func FindId3v1(reader io.ReadSeeker, read bool, parseMode ParsingMode) (*Id3v1Tag, int64, int64, bool, error) {
 	return id3v1.FindId3v1(reader, read, parseMode)
 }
+
 func WriteId3v1(file FileLike, tag *Id3v1Tag, writeOptions WriteOptions) error {
 	return id3v1.WriteId3v1(file, tag, writeOptions)
 }
@@ -1131,213 +1247,283 @@ func WriteId3v1(file FileLike, tag *Id3v1Tag, writeOptions WriteOptions) error {
 func ParseFrame(reader io.Reader, id FrameId, size uint32, frameFlags FrameFlags, version Id3v2Version, parseOptions ParseOptions) (Frame, error) {
 	return id3v2.ParseFrame(reader, id, size, frameFlags, version, parseOptions)
 }
+
 func ParseTextInformationFrame(reader io.Reader, id FrameId, frameFlags FrameFlags, version Id3v2Version) (*TextInformationFrame, error) {
 	return id3v2.ParseTextInformationFrame(reader, id, frameFlags, version)
 }
+
 func ParseUrlLinkFrame(reader io.Reader, id FrameId, frameFlags FrameFlags) (*UrlLinkFrame, error) {
 	return id3v2.ParseUrlLinkFrame(reader, id, frameFlags)
 }
+
 func ParseCommentFrame(reader io.Reader, frameFlags FrameFlags, version Id3v2Version) (*CommentFrame, error) {
 	return id3v2.ParseCommentFrame(reader, frameFlags, version)
 }
+
 func ParseUnsynchronizedTextFrame(reader io.Reader, frameFlags FrameFlags, version Id3v2Version) (*UnsynchronizedTextFrame, error) {
 	return id3v2.ParseUnsynchronizedTextFrame(reader, frameFlags, version)
 }
+
 func ParseExtendedTextFrame(reader io.Reader, frameFlags FrameFlags, version Id3v2Version) (*ExtendedTextFrame, error) {
 	return id3v2.ParseExtendedTextFrame(reader, frameFlags, version)
 }
+
 func ParseExtendedUrlFrame(reader io.Reader, frameFlags FrameFlags, version Id3v2Version) (*ExtendedUrlFrame, error) {
 	return id3v2.ParseExtendedUrlFrame(reader, frameFlags, version)
 }
+
 func ParseKeyValueFrame(reader io.Reader, id FrameId, frameFlags FrameFlags, version Id3v2Version) (*KeyValueFrame, error) {
 	return id3v2.ParseKeyValueFrame(reader, id, frameFlags, version)
 }
+
 func ParsePopularimeterFrame(reader io.Reader, frameFlags FrameFlags) (*PopularimeterFrame, error) {
 	return id3v2.ParsePopularimeterFrame(reader, frameFlags)
 }
+
 func ParseUniqueFileIdentifierFrame(reader io.Reader, frameFlags FrameFlags, parseMode ParsingMode) (*UniqueFileIdentifierFrame, error) {
 	return id3v2.ParseUniqueFileIdentifierFrame(reader, frameFlags, parseMode)
 }
+
 func ParseOwnershipFrame(reader io.Reader, frameFlags FrameFlags) (*OwnershipFrame, error) {
 	return id3v2.ParseOwnershipFrame(reader, frameFlags)
 }
+
 func ParseTimestampFrame(reader io.Reader, id FrameId, frameFlags FrameFlags, parseMode ParsingMode) (*TimestampFrame, error) {
 	return id3v2.ParseTimestampFrame(reader, id, frameFlags, parseMode)
 }
+
 func ParseEventTimingCodesFrame(reader io.Reader, frameFlags FrameFlags) (*EventTimingCodesFrame, error) {
 	return id3v2.ParseEventTimingCodesFrame(reader, frameFlags)
 }
+
 func ParsePrivateFrame(reader io.Reader, frameFlags FrameFlags) (*PrivateFrame, error) {
 	return id3v2.ParsePrivateFrame(reader, frameFlags)
 }
+
 func ParseRelativeVolumeAdjustmentFrame(reader io.Reader, frameFlags FrameFlags, parseMode ParsingMode) (*RelativeVolumeAdjustmentFrame, error) {
 	return id3v2.ParseRelativeVolumeAdjustmentFrame(reader, frameFlags, parseMode)
 }
+
 func ParseAttachedPictureFrame(reader io.Reader, frameFlags FrameFlags, version Id3v2Version) (*AttachedPictureFrame, error) {
 	return id3v2.ParseAttachedPictureFrame(reader, frameFlags, version)
 }
+
 func ParseChapterFrame(reader io.Reader, parseOptions ParseOptions, version Id3v2Version, frameFlags FrameFlags) (*ChapterFrame, error) {
 	return id3v2.ParseChapterFrame(reader, parseOptions, version, frameFlags)
 }
+
 func ParseChapterTableOfContentsFrame(reader io.Reader, parseOptions ParseOptions, version Id3v2Version, frameFlags FrameFlags) (*ChapterTableOfContentsFrame, error) {
 	return id3v2.ParseChapterTableOfContentsFrame(reader, parseOptions, version, frameFlags)
 }
+
 func Id3v2TagToTag(input *Id3v2Tag) *Tag {
 	return id3v2.Id3v2TagToTag(input)
 }
+
 func Id3v2TagFromTag(input *Tag) *Id3v2Tag {
 	return id3v2.Id3v2TagFromTag(input)
 }
+
 func FrameIdValid(id string) FrameId {
 	return id3v2.FrameIdValid(id)
 }
+
 func FrameIdOutdated(id string) FrameId {
 	return id3v2.FrameIdOutdated(id)
 }
+
 func ParseFrameId(id string) (FrameId, error) {
 	return id3v2.ParseFrameId(id)
 }
+
 func ParseFrameFlagsId3v24(flags uint16) FrameFlags {
 	return id3v2.ParseFrameFlagsId3v24(flags)
 }
+
 func ParseFrameFlagsId3v23(flags uint16) FrameFlags {
 	return id3v2.ParseFrameFlagsId3v23(flags)
 }
+
 func NewFrameHeader(id FrameId, flags FrameFlags) FrameHeader {
 	return id3v2.NewFrameHeader(id, flags)
 }
+
 func NewFrameList() *FrameList {
 	return id3v2.NewFrameList()
 }
+
 func NewTextInformationFrame(id FrameId, encoding TextEncoding, value string) *TextInformationFrame {
 	return id3v2.NewTextInformationFrame(id, encoding, value)
 }
+
 func NewUrlLinkFrame(id FrameId, content string) *UrlLinkFrame {
 	return id3v2.NewUrlLinkFrame(id, content)
 }
+
 func NewCommentFrame(encoding TextEncoding, language Lang, description string, content string) *CommentFrame {
 	return id3v2.NewCommentFrame(encoding, language, description, content)
 }
+
 func NewUnsynchronizedTextFrame(encoding TextEncoding, language Lang, description string, content string) *UnsynchronizedTextFrame {
 	return id3v2.NewUnsynchronizedTextFrame(encoding, language, description, content)
 }
+
 func NewExtendedTextFrame(encoding TextEncoding, description string, content string) *ExtendedTextFrame {
 	return id3v2.NewExtendedTextFrame(encoding, description, content)
 }
+
 func NewExtendedUrlFrame(encoding TextEncoding, description string, content string) *ExtendedUrlFrame {
 	return id3v2.NewExtendedUrlFrame(encoding, description, content)
 }
+
 func NewKeyValueFrame(id FrameId, encoding TextEncoding, pairs [][2]string) *KeyValueFrame {
 	return id3v2.NewKeyValueFrame(id, encoding, pairs)
 }
+
 func NewPopularimeterFrame(email string, rating uint8, counter uint64) *PopularimeterFrame {
 	return id3v2.NewPopularimeterFrame(email, rating, counter)
 }
+
 func PopularimeterFrameFromPopularimeter(p Popularimeter) *PopularimeterFrame {
 	return id3v2.PopularimeterFrameFromPopularimeter(p)
 }
+
 func NewUniqueFileIdentifierFrame(owner string, identifier []byte) *UniqueFileIdentifierFrame {
 	return id3v2.NewUniqueFileIdentifierFrame(owner, identifier)
 }
+
 func NewOwnershipFrame(encoding TextEncoding, pricePaid string, dateOfPurchase string, seller string) *OwnershipFrame {
 	return id3v2.NewOwnershipFrame(encoding, pricePaid, dateOfPurchase, seller)
 }
+
 func NewTimestampFrame(id FrameId, encoding TextEncoding, timestamp Timestamp) *TimestampFrame {
 	return id3v2.NewTimestampFrame(id, encoding, timestamp)
 }
+
 func EventTypeFromU8(b uint8) EventType {
 	return id3v2.EventTypeFromU8(b)
 }
+
 func NewEventTimingCodesFrame(format TimestampFormat, events []Event) *EventTimingCodesFrame {
 	return id3v2.NewEventTimingCodesFrame(format, events)
 }
+
 func NewPrivateFrame(owner string, data []byte) *PrivateFrame {
 	return id3v2.NewPrivateFrame(owner, data)
 }
+
 func ChannelTypeFromU8(b uint8) (ChannelType, error) {
 	return id3v2.ChannelTypeFromU8(b)
 }
+
 func NewRelativeVolumeAdjustmentFrame(identification string, channels map[ChannelType]ChannelInformation) *RelativeVolumeAdjustmentFrame {
 	return id3v2.NewRelativeVolumeAdjustmentFrame(identification, channels)
 }
+
 func NewBinaryFrame(id FrameId, data []byte) *BinaryFrame {
 	return id3v2.NewBinaryFrame(id, data)
 }
+
 func NewAttachedPictureFrame(encoding TextEncoding, picture Picture) *AttachedPictureFrame {
 	return id3v2.NewAttachedPictureFrame(encoding, picture)
 }
+
 func NewChapterFrame(id string, startTime uint32, endTime uint32, startOffset uint32, endOffset uint32, children *FrameList) *ChapterFrame {
 	return id3v2.NewChapterFrame(id, startTime, endTime, startOffset, endOffset, children)
 }
+
 func CtocFlagsFromU8(v uint8) CtocFlags {
 	return id3v2.CtocFlagsFromU8(v)
 }
+
 func NewChapterTableOfContentsFrame(id string, flags CtocFlags, entries []string, children *FrameList) *ChapterTableOfContentsFrame {
 	return id3v2.NewChapterTableOfContentsFrame(id, flags, entries, children)
 }
+
 func TimestampFormatFromU8(b uint8) (TimestampFormat, error) {
 	return id3v2.TimestampFormatFromU8(b)
 }
+
 func SyncTextContentTypeFromU8(b uint8) (SyncTextContentType, error) {
 	return id3v2.SyncTextContentTypeFromU8(b)
 }
+
 func NewSynchronizedTextFrame(encoding TextEncoding, language [3]byte, format TimestampFormat, contentType SyncTextContentType, description Option[string], content []SyncTextItem) *SynchronizedTextFrame {
 	return id3v2.NewSynchronizedTextFrame(encoding, language, format, contentType, description, content)
 }
+
 func ParseSynchronizedTextFrame(data []byte, frameFlags FrameFlags) (*SynchronizedTextFrame, error) {
 	return id3v2.ParseSynchronizedTextFrame(data, frameFlags)
 }
+
 func NewGeneralEncapsulatedObject(encoding TextEncoding, mimeType Option[string], fileName Option[string], descriptor Option[string], data []byte) *GeneralEncapsulatedObject {
 	return id3v2.NewGeneralEncapsulatedObject(encoding, mimeType, fileName, descriptor, data)
 }
+
 func ParseGeneralEncapsulatedObject(data []byte, frameFlags FrameFlags) (*GeneralEncapsulatedObject, error) {
 	return id3v2.ParseGeneralEncapsulatedObject(data, frameFlags)
 }
+
 func AudioTextFrameFlagsFromU8(b uint8) AudioTextFrameFlags {
 	return id3v2.AudioTextFrameFlagsFromU8(b)
 }
+
 func NewAudioTextFrame(encoding TextEncoding, mimeType string, flags AudioTextFrameFlags, equivalentText string, audioData []byte) *AudioTextFrame {
 	return id3v2.NewAudioTextFrame(encoding, mimeType, flags, equivalentText, audioData)
 }
+
 func ParseAudioTextFrame(bytes_ []byte, frameFlags FrameFlags) (*AudioTextFrame, error) {
 	return id3v2.ParseAudioTextFrame(bytes_, frameFlags)
 }
+
 func Scramble(audioData []byte) {
 	id3v2.Scramble(audioData)
 }
+
 func ParseId3v2Tag(reader io.Reader, header Id3v2Header, parseOptions ParseOptions) (*Id3v2Tag, error) {
 	return id3v2.ParseId3v2Tag(reader, header, parseOptions)
 }
+
 func ParseId3v2HeaderRaw(reader io.Reader) (Id3v2Header, error) {
 	return id3v2.ParseId3v2HeaderRaw(reader)
 }
+
 func ParseId3v2Header(reader io.Reader, parseOptions ParseOptions) (Id3v2Header, error) {
 	return id3v2.ParseId3v2Header(reader, parseOptions)
 }
+
 func NewId3v2Tag() *Id3v2Tag {
 	return id3v2.NewId3v2Tag()
 }
+
 func ParseId3v2(reader io.Reader, header Id3v2Header, parseOptions ParseOptions) (*Tag, error) {
 	return id3v2.ParseId3v2(reader, header, parseOptions)
 }
+
 func Id3v2Serialize(tag *Tag, writeOptions WriteOptions) ([]byte, error) {
 	return id3v2.Id3v2Serialize(tag, writeOptions)
 }
+
 func WriteId3v2(file FileLike, tag *Tag, writeOptions WriteOptions) error {
 	return id3v2.WriteId3v2(file, tag, writeOptions)
 }
+
 func FindId3v2(reader io.ReadSeeker, read bool, parseOptions ParseOptions) (Id3v2Header, int64, bool, error) {
 	return id3v2.FindId3v2(reader, read, parseOptions)
 }
+
 func FindId3v2InJunk(reader io.Reader) (int64, bool) {
 	return id3v2.FindId3v2InJunk(reader)
 }
+
 func Id3v2Deunsync(data []byte) []byte {
 	return id3v2.Id3v2Deunsync(data)
 }
+
 func UpgradeV2(id string) (string, bool) {
 	return id3v2.UpgradeV2(id)
 }
+
 func UpgradeV3(id string) (string, bool) {
 	return id3v2.UpgradeV3(id)
 }
@@ -1346,18 +1532,23 @@ func UpgradeV3(id string) (string, bool) {
 func NewVorbisCommentsTag() *VorbisCommentsTag {
 	return vorbis.NewVorbisCommentsTag()
 }
+
 func VorbisCommentsTagFromTag(input *Tag, vendor string) *VorbisCommentsTag {
 	return vorbis.VorbisCommentsTagFromTag(input, vendor)
 }
+
 func ParseVorbisComments(content []byte, parseOptions ParseOptions) (*VorbisCommentsTag, error) {
 	return vorbis.ParseVorbisComments(content, parseOptions)
 }
+
 func EncodeVorbisComments(tag *VorbisCommentsTag) ([]byte, error) {
 	return vorbis.EncodeVorbisComments(tag)
 }
+
 func VorbisCommentsTagForWrite(input *Tag, vendor string) *VorbisCommentsTag {
 	return vorbis.VorbisCommentsTagForWrite(input, vendor)
 }
+
 func VorbisCommentsTagForWritePics(input *Tag, vendor string, withPics bool) *VorbisCommentsTag {
 	return vorbis.VorbisCommentsTagForWritePics(input, vendor, withPics)
 }
@@ -1366,27 +1557,35 @@ func VorbisCommentsTagForWritePics(input *Tag, vendor string, withPics bool) *Vo
 func ReadApeHeader(reader io.ReadSeeker, footer bool) (*ApeHeader, error) {
 	return ape.ReadApeHeader(reader, footer)
 }
+
 func NewApeItem(key string, value ItemValue) (*ApeItem, error) {
 	return ape.NewApeItem(key, value)
 }
+
 func NewApeTag() *ApeTag {
 	return ape.NewApeTag()
 }
+
 func ApeTagFromTag(input *Tag) *ApeTag {
 	return ape.ApeTagFromTag(input)
 }
+
 func ReadApeTagWithHeader(reader io.ReadSeeker, header *ApeHeader, parseOptions ParseOptions) (*ApeTag, error) {
 	return ape.ReadApeTagWithHeader(reader, header, parseOptions)
 }
+
 func ReadApeTag(reader io.ReadSeeker, footer bool, parseOptions ParseOptions) (*ApeTag, *ApeHeader, error) {
 	return ape.ReadApeTag(reader, footer, parseOptions)
 }
+
 func ApeWriteTo(file FileLike, tag *ApeTag, writeOptions WriteOptions) error {
 	return ape.ApeWriteTo(file, tag, writeOptions)
 }
+
 func ApeFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*ApeFile, error) {
 	return ape.ApeFileReadFrom(reader, parseOptions)
 }
+
 func ReadEndTags(reader io.ReadSeeker, start int64, streamLen uint64, parseOptions ParseOptions) (uint64, *Id3v1Tag, *ApeTag, error) {
 	return ape.ReadEndTags(reader, start, streamLen, parseOptions)
 }
@@ -1395,15 +1594,19 @@ func ReadEndTags(reader io.ReadSeeker, start int64, streamLen uint64, parseOptio
 func OggCrc32(data []byte) uint32 {
 	return ogg.OggCrc32(data)
 }
+
 func OggReadCountPackets(reader io.ReadSeeker, count int) ([][]byte, *OggPage, uint32, error) {
 	return ogg.OggReadCountPackets(reader, count)
 }
+
 func OggVorbisFileReadFrom(reader io.ReadSeeker, po ParseOptions) (*OggVorbisFile, error) {
 	return ogg.OggVorbisFileReadFrom(reader, po)
 }
+
 func OggOpusFileReadFrom(reader io.ReadSeeker, po ParseOptions) (*OggOpusFile, error) {
 	return ogg.OggOpusFileReadFrom(reader, po)
 }
+
 func OggSpeexFileReadFrom(reader io.ReadSeeker, po ParseOptions) (*OggSpeexFile, error) {
 	return ogg.OggSpeexFileReadFrom(reader, po)
 }
@@ -1417,24 +1620,31 @@ func FlacFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*FlacFil
 func Mp4FileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*Mp4File, error) {
 	return mp4.Mp4FileReadFrom(reader, parseOptions)
 }
+
 func EncodeMp4Ilst(tag *Tag) ([]byte, error) {
 	return mp4.EncodeMp4Ilst(tag)
 }
+
 func DataTypeOther(code uint32) DataType {
 	return mp4.DataTypeOther(code)
 }
+
 func FourccIdent(name string) AtomIdent {
 	return mp4.FourccIdent(name)
 }
+
 func FreeformIdent(mean string, name string) AtomIdent {
 	return mp4.FreeformIdent(mean, name)
 }
+
 func NewIlst() *Ilst {
 	return mp4.NewIlst()
 }
+
 func IlstFromTag(tag *Tag) *Ilst {
 	return mp4.IlstFromTag(tag)
 }
+
 func ParseIlst(reader io.ReadSeeker, end int64, parseOptions ParseOptions) (*Ilst, error) {
 	return mp4.ParseIlst(reader, end, parseOptions)
 }
@@ -1443,18 +1653,23 @@ func ParseIlst(reader io.ReadSeeker, end int64, parseOptions ParseOptions) (*Ils
 func RiffInfoTagFromTag(input *Tag) *RiffInfoTag {
 	return iff.RiffInfoTagFromTag(input)
 }
+
 func AiffTextTagFromTag(input *Tag) *AiffTextTag {
 	return iff.AiffTextTagFromTag(input)
 }
+
 func WavFormatOther(tag uint16) WavFormat {
 	return iff.WavFormatOther(tag)
 }
+
 func WavFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*WavFile, error) {
 	return iff.WavFileReadFrom(reader, parseOptions)
 }
+
 func AiffCompressionTypeFromId(id [4]byte) AiffCompressionType {
 	return iff.AiffCompressionTypeFromId(id)
 }
+
 func AiffFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*AiffFile, error) {
 	return iff.AiffFileReadFrom(reader, parseOptions)
 }
@@ -1478,6 +1693,7 @@ func WavPackFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*WavP
 func MpcProfileFromU8(value uint8) MpcProfile {
 	return mpc.MpcProfileFromU8(value)
 }
+
 func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*MusepackFile, error) {
 	return mpc.MusepackFileReadFrom(reader, parseOptions)
 }

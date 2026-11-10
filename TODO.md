@@ -225,6 +225,32 @@ parse tests, `TestSpecialItemsRoundtrip` (RVA2), `TestReadSv5`
 - `tag/utils.rs` `dump_to` byte-level API (covered indirectly via
   `SaveFile`/`writeTagTo`).
 
+## Performance
+
+`bench_test.go` has read/write benchmarks (`go test -run XXX -bench .`). The
+dominant cost was syscall count, not CPU — every format's junk scan and tag
+walk did byte-at-a-time `Read`s on the raw `*os.File` (matching Rust's
+`reader.bytes()`, which is equally syscall-heavy upstream). Fixes:
+
+- `internal/util/scan.go` `ChunkedScan` — chunked (8 KiB) seeker scan with
+  carry overlap; used by `FindId3v2`/`FindId3v2InJunk` (ID3 magic in junk),
+  `util.SearchForFrameSync`/`SearchForFrameSyncSeeking` (probe),
+  `aacSearchFrameSync`, `mpeg.findNextFrame`, and the MPEG leading-zero
+  skip. Non-seekable readers keep the byte-loop fallback to preserve the
+  "positioned right after the match" contract.
+- `id3v2.ParseId3v2Tag` buffers tag content (≤ `AllocationLimit`; lazy
+  `LimitReader` for larger tags and for already-memory readers) — identical
+  end position since the drain consumed the limited region anyway.
+- `mp4` buffers the `moov` box and walks it via `offsetReadSeeker`, which
+  keeps positions file-absolute while making inner seeks memory ops.
+- `unsyncReader` (v2.3 tag-wide desync) filters in bulk instead of 2-byte
+  reads per byte.
+- APE item-key read scans for NUL in 64-byte chunks with seek-back.
+
+Results (M4, ~400ms runs): FLAC 324µs→8µs, APE 342µs→18µs, M4A 36µs→11µs,
+WavPack 19µs→15µs; MP3/Opus/WAV already ~10µs. `BenchmarkWriteMP3Tag` is
+disk-bound (~120µs: temp file + splice rewrite of the audio tail).
+
 ## Notes
 
 - ID3v2 is a **native port** — `Id3v2Tag`/`FrameList`/`Frame` with typed
