@@ -1,7 +1,7 @@
 package id3v2
 
 import (
-	"github.com/subframe7536/lofty-go/internal/meta"
+	meta "github.com/subframe7536/lofty-go/internal/meta"
 	"github.com/subframe7536/lofty-go/internal/util"
 )
 
@@ -69,15 +69,15 @@ type FrameFlags struct {
 	// ReadOnly — the frame cannot be written to.
 	ReadOnly bool
 	// GroupingIdentity is the group identifier the frame belongs to.
-	GroupingIdentity Option[uint8]
+	GroupingIdentity meta.Option[uint8]
 	// Compression — the frame is zlib compressed.
 	Compression bool
 	// Encryption is the frame's encryption method symbol (> 0x80).
-	Encryption Option[uint8]
+	Encryption meta.Option[uint8]
 	// Unsynchronisation — the frame content is unsynchronised.
 	Unsynchronisation bool
 	// DataLengthIndicator is the size of the frame if the flags were all zeroed out.
-	DataLengthIndicator Option[uint32]
+	DataLengthIndicator meta.Option[uint32]
 }
 
 // ParseFrameFlagsId3v24 parses the flags from an ID3v2.4 frame.
@@ -90,13 +90,13 @@ func ParseFrameFlagsId3v24(flags uint16) FrameFlags {
 		Unsynchronisation:     flags&0x0002 == 0x0002,
 	}
 	if flags&0x0040 == 0x0040 {
-		f.GroupingIdentity = Some(uint8(0))
+		f.GroupingIdentity = meta.Some(uint8(0))
 	}
 	if flags&0x0004 == 0x0004 {
-		f.Encryption = Some(uint8(0))
+		f.Encryption = meta.Some(uint8(0))
 	}
 	if flags&0x0001 == 0x0001 {
-		f.DataLengthIndicator = Some(uint32(0))
+		f.DataLengthIndicator = meta.Some(uint32(0))
 	}
 	return f
 }
@@ -110,10 +110,10 @@ func ParseFrameFlagsId3v23(flags uint16) FrameFlags {
 		Compression:           flags&0x0080 == 0x0080,
 	}
 	if flags&0x0020 == 0x0020 {
-		f.GroupingIdentity = Some(uint8(0))
+		f.GroupingIdentity = meta.Some(uint8(0))
 	}
 	if flags&0x0040 == 0x0040 {
-		f.Encryption = Some(uint8(0))
+		f.Encryption = meta.Some(uint8(0))
 	}
 	return f
 }
@@ -229,7 +229,7 @@ type Frame interface {
 // frameEncodingContext carries state needed while encoding frames.
 type frameEncodingContext struct {
 	version             Id3v2Version
-	writeOptions        WriteOptions
+	writeOptions        meta.WriteOptions
 	ctocRootEncountered bool
 }
 
@@ -244,7 +244,7 @@ func frameAsBytes(f Frame, ctx *frameEncodingContext) ([]byte, error) {
 	ret, err := f.frameBytes(ctx)
 	if err != nil {
 		if fe, ok := err.(*FrameEncodingError); ok && fe.ID.IsNone() {
-			fe.ID = Some(f.ID())
+			fe.ID = meta.Some(f.ID())
 		}
 		return nil, err
 	}
@@ -261,7 +261,7 @@ func verifyFrame(f Frame) error {
 		return nil
 	}
 	bad := func() error {
-		return frameEncodingErrorMsg(Some(f.ID()),
+		return frameEncodingErrorMsg(meta.Some(f.ID()),
 			"a value of type '"+f.frameName()+"' cannot be written under this ID")
 	}
 	switch f.(type) {
@@ -351,11 +351,11 @@ func textDecodeOpts(enc TextEncoding, terminated bool) util.TextDecodeOptions {
 // verifyEncoding mirrors `content::verify_encoding`.
 func verifyEncoding(encoding uint8, version Id3v2Version) (TextEncoding, error) {
 	if version == id3v2Version2 && encoding != 0 && encoding != 1 {
-		return 0, frameParseErrorMsg(None[FrameId](),
+		return 0, frameParseErrorMsg(meta.None[FrameId](),
 			"ID3v2.2 only supports Latin-1 and UTF-16 encodings")
 	}
 	if encoding > 3 {
-		return 0, frameParseError(None[FrameId](), &BadTextEncodingError{})
+		return 0, frameParseError(meta.None[FrameId](), &meta.BadTextEncodingError{})
 	}
 	return TextEncoding(encoding), nil
 }

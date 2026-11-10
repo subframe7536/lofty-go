@@ -8,6 +8,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/subframe7536/lofty-go/id3v1"
+	"github.com/subframe7536/lofty-go/id3v2"
+	meta "github.com/subframe7536/lofty-go/internal/meta"
+	"github.com/subframe7536/lofty-go/internal/util"
+	"github.com/subframe7536/lofty-go/lyrics3"
 )
 
 var apePreamble = []byte("APETAGEX")
@@ -96,7 +102,7 @@ func ReadApeHeader(reader io.ReadSeeker, footer bool) (*ApeHeader, error) {
 	version := binary.LittleEndian.Uint32(data[0:])
 	size := binary.LittleEndian.Uint32(data[4:])
 	if size < 32 {
-		return nil, &ApeTagParseError{Source: &SizeMismatchError{}}
+		return nil, &ApeTagParseError{Source: &meta.SizeMismatchError{}}
 	}
 	h := &ApeHeader{
 		Version:   version,
@@ -116,9 +122,9 @@ func ReadApeHeader(reader io.ReadSeeker, footer bool) (*ApeHeader, error) {
 	} else if version == 2000 && h.Flags&apeHeaderContainsFooter != 0 {
 		h.Size += 32
 	}
-	if streamLength, err := streamLen(reader); err == nil {
+	if streamLength, err := util.StreamLen(reader); err == nil {
 		if uint64(h.Size) > streamLength {
-			return nil, &ApeTagParseError{Source: &SizeMismatchError{}}
+			return nil, &ApeTagParseError{Source: &meta.SizeMismatchError{}}
 		}
 	}
 	return h, nil
@@ -128,11 +134,11 @@ func ReadApeHeader(reader io.ReadSeeker, footer bool) (*ApeHeader, error) {
 type ApeItem struct {
 	ReadOnly bool
 	Key      string
-	Value    ItemValue
+	Value    meta.ItemValue
 }
 
 // NewApeItem creates an [ApeItem].
-func NewApeItem(key string, value ItemValue) (*ApeItem, error) {
+func NewApeItem(key string, value meta.ItemValue) (*ApeItem, error) {
 	for _, k := range apeInvalidKeys {
 		if strings.EqualFold(k, key) {
 			return nil, &ApeTagItemParseError{Key: key, Message: "invalid key"}
@@ -199,16 +205,16 @@ func (t *ApeTag) insert(item *ApeItem) {
 	t.items = append(t.items, item)
 }
 
-func itemValueFromKind(kind ItemValueKind, text string) ItemValue {
-	if kind == ItemValueKindLocator {
-		return ItemValueLocator(text)
+func itemValueFromKind(kind meta.ItemValueKind, text string) meta.ItemValue {
+	if kind == meta.ItemValueKindLocator {
+		return meta.ItemValueLocator(text)
 	}
-	return ItemValueText(text)
+	return meta.ItemValueText(text)
 }
 
-// Insert inserts a generic [TagItem]. Pictures are stored for APE_PICTURE_TYPES keys.
-func (t *ApeTag) Insert(item TagItem) error {
-	if item.Key() == ItemKeyUnknown {
+// Insert inserts a generic [meta.TagItem]. Pictures are stored for APE_PICTURE_TYPES keys.
+func (t *ApeTag) Insert(item meta.TagItem) error {
+	if item.Key() == meta.ItemKeyUnknown {
 		if len(item.Description) < 2 {
 			return nil
 		}
@@ -222,42 +228,42 @@ func (t *ApeTag) Insert(item TagItem) error {
 	// Number-pair keys are normalized through the pair setters — whitespace is
 	// trimmed and the value merges into the "N/T" field (Rust `set_number`).
 	switch item.Key() {
-	case ItemKeyTrackNumber, ItemKeyTrackTotal, ItemKeyDiscNumber, ItemKeyDiscTotal:
+	case meta.ItemKeyTrackNumber, meta.ItemKeyTrackTotal, meta.ItemKeyDiscNumber, meta.ItemKeyDiscTotal:
 		if text, ok := item.Value().IntoString(); ok {
 			if n, err := strconv.ParseUint(strings.TrimSpace(text), 10, 32); err == nil {
 				switch item.Key() {
-				case ItemKeyTrackNumber:
+				case meta.ItemKeyTrackNumber:
 					t.SetTrack(uint32(n))
-				case ItemKeyTrackTotal:
+				case meta.ItemKeyTrackTotal:
 					t.SetTrackTotal(uint32(n))
-				case ItemKeyDiscNumber:
+				case meta.ItemKeyDiscNumber:
 					t.SetDisk(uint32(n))
-				case ItemKeyDiscTotal:
+				case meta.ItemKeyDiscTotal:
 					t.SetDiskTotal(uint32(n))
 				}
 			}
 		}
 		return nil
 	}
-	key, ok := item.Key().MapKey(TagTypeApe)
+	key, ok := item.Key().MapKey(meta.TagTypeApe)
 	if !ok {
 		return nil
 	}
 	if key == "Cover Art (Front)" || key == "Cover Art (Back)" {
 		return nil
 	}
-	var value ItemValue
-	if item.Value().Kind() == ItemValueKindBinary {
+	var value meta.ItemValue
+	if item.Value().Kind() == meta.ItemValueKindBinary {
 		value = item.Value()
 	} else {
 		text, ok := item.Value().IntoString()
 		if !ok {
 			return nil
 		}
-		if item.Value().Kind() == ItemValueKindLocator {
-			value = ItemValueLocator(text)
+		if item.Value().Kind() == meta.ItemValueKindLocator {
+			value = meta.ItemValueLocator(text)
 		} else {
-			value = ItemValueText(text)
+			value = meta.ItemValueText(text)
 		}
 	}
 	apeItem, err := NewApeItem(key, value)
@@ -299,7 +305,7 @@ func (t *ApeTag) GetText(key string) (string, bool) {
 
 // SetText replaces an item's text value (invalid keys are ignored).
 func (t *ApeTag) SetText(key, value string) {
-	if item, err := NewApeItem(key, ItemValueText(value)); err == nil {
+	if item, err := NewApeItem(key, meta.ItemValueText(value)); err == nil {
 		t.insert(item)
 	}
 }
@@ -351,19 +357,19 @@ func (t *ApeTag) RemoveComment() { t.Remove("Comment") }
 
 // splitNumPair splits a "num/total" text item, mirroring Rust's
 // `ApeTag::split_num_pair`.
-func (t *ApeTag) splitNumPair(key string) (Option[uint32], Option[uint32]) {
+func (t *ApeTag) splitNumPair(key string) (meta.Option[uint32], meta.Option[uint32]) {
 	text, ok := t.GetText(key)
 	if !ok {
-		return None[uint32](), None[uint32]()
+		return meta.None[uint32](), meta.None[uint32]()
 	}
-	var num, total Option[uint32]
+	var num, total meta.Option[uint32]
 	parts := strings.SplitN(text, "/", 3)
-	if n, ok := u32FromString(parts[0]); ok {
-		num = Some(n)
+	if n, ok := util.U32FromString(parts[0]); ok {
+		num = meta.Some(n)
 	}
 	if len(parts) > 1 {
-		if n, ok := u32FromString(parts[1]); ok {
-			total = Some(n)
+		if n, ok := util.U32FromString(parts[1]); ok {
+			total = meta.Some(n)
 		}
 	}
 	return num, total
@@ -371,17 +377,17 @@ func (t *ApeTag) splitNumPair(key string) (Option[uint32], Option[uint32]) {
 
 // insertNumberPair formats and inserts a "num/total" pair (Rust's
 // `insert_number_pair` + `format_number_pair`).
-func (t *ApeTag) insertNumberPair(key string, number, total Option[uint32]) {
+func (t *ApeTag) insertNumberPair(key string, number, total meta.Option[uint32]) {
 	var value string
 	n, hasN := number.Get()
 	tot, hasT := total.Get()
 	switch {
 	case hasN && hasT:
-		value = itoa(int(n)) + "/" + itoa(int(tot))
+		value = util.Itoa(int(n)) + "/" + util.Itoa(int(tot))
 	case hasN:
-		value = itoa(int(n))
+		value = util.Itoa(int(n))
 	case hasT:
-		value = "0/" + itoa(int(tot))
+		value = "0/" + util.Itoa(int(tot))
 	default:
 		return
 	}
@@ -397,7 +403,7 @@ func (t *ApeTag) Track() (uint32, bool) {
 // SetTrack sets the track number, keeping the total.
 func (t *ApeTag) SetTrack(value uint32) {
 	_, total := t.splitNumPair("Track")
-	t.insertNumberPair("Track", Some(value), total)
+	t.insertNumberPair("Track", meta.Some(value), total)
 }
 
 // RemoveTrack removes the track.
@@ -412,7 +418,7 @@ func (t *ApeTag) TrackTotal() (uint32, bool) {
 // SetTrackTotal sets the track total, keeping the number.
 func (t *ApeTag) SetTrackTotal(value uint32) {
 	num, _ := t.splitNumPair("Track")
-	t.insertNumberPair("Track", num, Some(value))
+	t.insertNumberPair("Track", num, meta.Some(value))
 }
 
 // RemoveTrackTotal removes the total, keeping the bare track number.
@@ -420,7 +426,7 @@ func (t *ApeTag) RemoveTrackTotal() {
 	num, _ := t.splitNumPair("Track")
 	t.Remove("Track")
 	if n, ok := num.Get(); ok {
-		t.SetText("Track", itoa(int(n)))
+		t.SetText("Track", util.Itoa(int(n)))
 	}
 }
 
@@ -433,7 +439,7 @@ func (t *ApeTag) Disk() (uint32, bool) {
 // SetDisk sets the disc number, keeping the total.
 func (t *ApeTag) SetDisk(value uint32) {
 	_, total := t.splitNumPair("Disc")
-	t.insertNumberPair("Disc", Some(value), total)
+	t.insertNumberPair("Disc", meta.Some(value), total)
 }
 
 // RemoveDisk removes the disc.
@@ -448,7 +454,7 @@ func (t *ApeTag) DiskTotal() (uint32, bool) {
 // SetDiskTotal sets the disc total, keeping the number.
 func (t *ApeTag) SetDiskTotal(value uint32) {
 	num, _ := t.splitNumPair("Disc")
-	t.insertNumberPair("Disc", num, Some(value))
+	t.insertNumberPair("Disc", num, meta.Some(value))
 }
 
 // RemoveDiskTotal removes the total, keeping the bare disc number.
@@ -456,73 +462,73 @@ func (t *ApeTag) RemoveDiskTotal() {
 	num, _ := t.splitNumPair("Disc")
 	t.Remove("Disc")
 	if n, ok := num.Get(); ok {
-		t.SetText("Disc", itoa(int(n)))
+		t.SetText("Disc", util.Itoa(int(n)))
 	}
 }
 
 // Date returns the recording date from the "Year" item.
-func (t *ApeTag) Date() Option[Timestamp] {
+func (t *ApeTag) Date() meta.Option[meta.Timestamp] {
 	if s, ok := t.GetText("Year"); ok {
-		return tryParseTimestamp(s)
+		return util.TryParseTimestamp(s)
 	}
-	return None[Timestamp]()
+	return meta.None[meta.Timestamp]()
 }
 
 // SetDate sets the recording date ("Year").
-func (t *ApeTag) SetDate(value Timestamp) { t.SetText("Year", value.String()) }
+func (t *ApeTag) SetDate(value meta.Timestamp) { t.SetText("Year", value.String()) }
 
 // RemoveDate removes the recording date.
 func (t *ApeTag) RemoveDate() { t.Remove("Year") }
 
 // Tag converts the [ApeTag] to a generic [Tag].
-func (t *ApeTag) Tag() *Tag {
-	tag := NewTag(TagTypeApe)
+func (t *ApeTag) Tag() *meta.Tag {
+	tag := meta.NewTag(meta.TagTypeApe)
 	for _, item := range t.items {
 		isPic := false
-		var picType PictureType
-		if idx := indexOfStr(ApePictureTypes[:], item.Key); idx >= 0 {
-			picType = PictureType(idx)
+		var picType meta.PictureType
+		if idx := util.IndexOfStr(meta.ApePictureTypes[:], item.Key); idx >= 0 {
+			picType = meta.PictureType(idx)
 			isPic = true
 		}
 		if isPic {
 			if binary, ok := item.Value.IntoBinary(); ok {
-				if pic, err := PictureFromApeBytes(item.Key, binary); err == nil {
+				if pic, err := meta.PictureFromApeBytes(item.Key, binary); err == nil {
 					pic.SetPicType(picType)
 					tag.PushPicture(pic)
 				}
 			}
 			continue
 		}
-		ik := ItemKeyOrUnknown(TagTypeApe, item.Key)
-		if ik != ItemKeyUnknown {
+		ik := meta.ItemKeyOrUnknown(meta.TagTypeApe, item.Key)
+		if ik != meta.ItemKeyUnknown {
 			if text, ok := item.Value.IntoString(); ok {
-				var curKey, totKey ItemKey
+				var curKey, totKey meta.ItemKey
 				switch ik {
-				case ItemKeyTrackNumber, ItemKeyTrackTotal:
-					curKey, totKey = ItemKeyTrackNumber, ItemKeyTrackTotal
-				case ItemKeyDiscNumber, ItemKeyDiscTotal:
-					curKey, totKey = ItemKeyDiscNumber, ItemKeyDiscTotal
+				case meta.ItemKeyTrackNumber, meta.ItemKeyTrackTotal:
+					curKey, totKey = meta.ItemKeyTrackNumber, meta.ItemKeyTrackTotal
+				case meta.ItemKeyDiscNumber, meta.ItemKeyDiscTotal:
+					curKey, totKey = meta.ItemKeyDiscNumber, meta.ItemKeyDiscTotal
 				}
 				// "Track"/"Disc" items may hold "N/T" pairs; split them
 				if totKey != 0 {
 					parts := strings.SplitN(text, "/", 2)
-					tag.PushUnchecked(NewTagItem(curKey, ItemValueText(parts[0])))
+					tag.PushUnchecked(meta.NewTagItem(curKey, meta.ItemValueText(parts[0])))
 					if len(parts) > 1 {
-						tag.PushUnchecked(NewTagItem(totKey, ItemValueText(parts[1])))
+						tag.PushUnchecked(meta.NewTagItem(totKey, meta.ItemValueText(parts[1])))
 					}
 					continue
 				}
 				// Multi-value text/locator items split on NUL (Rust `split_tag`)
 				if strings.Contains(text, "\x00") {
 					for _, value := range strings.Split(text, "\x00") {
-						tag.PushUnchecked(NewTagItem(ik, itemValueFromKind(item.Value.Kind(), value)))
+						tag.PushUnchecked(meta.NewTagItem(ik, itemValueFromKind(item.Value.Kind(), value)))
 					}
 					continue
 				}
 			}
 		}
-		tagItem := NewTagItem(ik, item.Value)
-		if ik == ItemKeyUnknown {
+		tagItem := meta.NewTagItem(ik, item.Value)
+		if ik == meta.ItemKeyUnknown {
 			tagItem.Description = item.Key
 		}
 		tag.PushUnchecked(tagItem)
@@ -530,55 +536,55 @@ func (t *ApeTag) Tag() *Tag {
 	return tag
 }
 
-// SaveTo writes the tag to a [FileLike].
+// SaveTo writes the tag to a [meta.FileLike].
 //
 // Unlike going through [ApeTag.Tag] and [Tag.SaveTo], this writes items
 // verbatim — keys are preserved exactly rather than canonicalized.
-func (t *ApeTag) SaveTo(file FileLike, writeOptions WriteOptions) error {
-	vf, err := NewVerifiedFile(file, writeOptions.ParseOptions)
+func (t *ApeTag) SaveTo(file meta.FileLike, writeOptions meta.WriteOptions) error {
+	vf, err := meta.NewVerifiedFile(file, writeOptions.ParseOptions)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	format := vf.Format()
-	support := format.TagSupport(TagTypeApe)
-	if support == TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
-		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	support := format.TagSupport(meta.TagTypeApe)
+	if support == meta.TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
+		return &meta.FileEncodingError{FileType: format, Source: &meta.UnsupportedTagError{}}
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	if err := ApeWriteTo(file, t, writeOptions); err != nil {
-		return &FileEncodingError{FileType: format, Source: err}
+		return &meta.FileEncodingError{FileType: format, Source: err}
 	}
 	return nil
 }
 
 // SaveToPath writes the tag to a path.
-func (t *ApeTag) SaveToPath(path string, writeOptions WriteOptions) error {
-	vf, f, err := VerifiedFileFromPath(path, writeOptions.ParseOptions)
+func (t *ApeTag) SaveToPath(path string, writeOptions meta.WriteOptions) error {
+	vf, f, err := meta.VerifiedFileFromPath(path, writeOptions.ParseOptions)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 	format := vf.Format()
-	support := format.TagSupport(TagTypeApe)
-	if support == TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
-		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	support := format.TagSupport(meta.TagTypeApe)
+	if support == meta.TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
+		return &meta.FileEncodingError{FileType: format, Source: &meta.UnsupportedTagError{}}
 	}
-	if err := ApeWriteTo(NewOSFile(f), t, writeOptions); err != nil {
-		return &FileEncodingError{FileType: format, Source: err}
+	if err := ApeWriteTo(meta.NewOSFile(f), t, writeOptions); err != nil {
+		return &meta.FileEncodingError{FileType: format, Source: err}
 	}
 	return nil
 }
 
-// numberPairKeys are the ItemKeys stored in "N/T" APE fields.
-var apeNumberPairKeys = map[ItemKey]bool{
-	ItemKeyTrackNumber: true, ItemKeyTrackTotal: true,
-	ItemKeyDiscNumber: true, ItemKeyDiscTotal: true,
+// numberPairKeys are the meta.ItemKeys stored in "N/T" APE fields.
+var apeNumberPairKeys = map[meta.ItemKey]bool{
+	meta.ItemKeyTrackNumber: true, meta.ItemKeyTrackTotal: true,
+	meta.ItemKeyDiscNumber: true, meta.ItemKeyDiscTotal: true,
 }
 
 // TagFromApe converts a generic [Tag] to an [ApeTag].
-func ApeTagFromTag(input *Tag) *ApeTag {
+func ApeTagFromTag(input *meta.Tag) *ApeTag {
 	apeTag := NewApeTag()
 	for _, item := range input.Items() {
 		// Number pairs are merged below
@@ -587,21 +593,21 @@ func ApeTagFromTag(input *Tag) *ApeTag {
 		}
 		_ = apeTag.Insert(item)
 	}
-	for _, pair := range [][2]ItemKey{
-		{ItemKeyTrackNumber, ItemKeyTrackTotal},
-		{ItemKeyDiscNumber, ItemKeyDiscTotal},
+	for _, pair := range [][2]meta.ItemKey{
+		{meta.ItemKeyTrackNumber, meta.ItemKeyTrackTotal},
+		{meta.ItemKeyDiscNumber, meta.ItemKeyDiscTotal},
 	} {
-		parseNum := func(key ItemKey) Option[uint32] {
+		parseNum := func(key meta.ItemKey) meta.Option[uint32] {
 			// Rust `set_number` runs per item; each parseable value
 			// overwrites via the setter, so the last parseable wins.
-			var n Option[uint32]
+			var n meta.Option[uint32]
 			for _, item := range input.GetItems(key) {
 				text, ok := item.Value().IntoString()
 				if !ok {
 					continue
 				}
 				if parsed, err := strconv.ParseUint(strings.TrimSpace(text), 10, 32); err == nil {
-					n = Some(uint32(parsed))
+					n = meta.Some(uint32(parsed))
 				}
 			}
 			return n
@@ -610,13 +616,13 @@ func ApeTagFromTag(input *Tag) *ApeTag {
 		if n.IsNone() && tot.IsNone() {
 			continue
 		}
-		key, _ := pair[0].MapKey(TagTypeApe)
+		key, _ := pair[0].MapKey(meta.TagTypeApe)
 		apeTag.insertNumberPair(key, n, tot)
 	}
 	for _, pic := range input.Pictures() {
 		if key, ok := pic.PicType().AsApeKey(); ok {
 			picCopy := pic
-			apeTag.Push(&ApeItem{Key: key, Value: ItemValueBinary(picCopy.AsApeBytes())})
+			apeTag.Push(&ApeItem{Key: key, Value: meta.ItemValueBinary(picCopy.AsApeBytes())})
 		}
 	}
 	return apeTag
@@ -625,36 +631,36 @@ func ApeTagFromTag(input *Tag) *ApeTag {
 // --- read ---
 
 // ReadApeTagWithHeader reads an APE tag after the preamble+header was consumed.
-func ReadApeTagWithHeader(reader io.ReadSeeker, header *ApeHeader, parseOptions ParseOptions) (*ApeTag, error) {
+func ReadApeTagWithHeader(reader io.ReadSeeker, header *ApeHeader, parseOptions meta.ParseOptions) (*ApeTag, error) {
 	tag := NewApeTag()
 	remainingSize := header.Size
 
 	parseItemWithKey := func(key string, flags, valueSize uint32) (*ApeItem, error) {
 		readOnly := flags&1 == 1
 		itemType := (flags >> 1) & 3
-		value, err := tryByteSlice(int(valueSize))
+		value, err := util.TryByteSlice(int(valueSize))
 		if err != nil {
 			return nil, &ApeTagItemParseError{Key: key, Source: err}
 		}
 		if _, err := io.ReadFull(reader, value); err != nil {
 			return nil, &ApeTagItemParseError{Key: key, Source: err}
 		}
-		var parsed ItemValue
+		var parsed meta.ItemValue
 		switch itemType {
 		case 0:
-			v, err := utf8Decode(value)
+			v, err := util.Utf8Decode(value)
 			if err != nil {
 				return nil, &ApeTagItemParseError{Key: key, Source: err}
 			}
-			parsed = ItemValueText(v)
+			parsed = meta.ItemValueText(v)
 		case 1:
-			parsed = ItemValueBinary(value)
+			parsed = meta.ItemValueBinary(value)
 		case 2:
-			v, err := utf8Decode(value)
+			v, err := util.Utf8Decode(value)
 			if err != nil {
 				return nil, &ApeTagItemParseError{Key: key, Source: err}
 			}
-			parsed = ItemValueLocator(v)
+			parsed = meta.ItemValueLocator(v)
 		default:
 			return nil, &ApeTagItemParseError{Key: key, Message: "illegal item type"}
 		}
@@ -676,7 +682,7 @@ func ReadApeTagWithHeader(reader io.ReadSeeker, header *ApeHeader, parseOptions 
 		}
 		valueSize := binary.LittleEndian.Uint32(valueSizeBuf[:])
 		if valueSize > remainingSize {
-			return nil, &ApeTagParseError{Source: &SizeMismatchError{}}
+			return nil, &ApeTagParseError{Source: &meta.SizeMismatchError{}}
 		}
 		remainingSize -= 4
 		var flagsBuf [4]byte
@@ -710,12 +716,12 @@ func ReadApeTagWithHeader(reader io.ReadSeeker, header *ApeHeader, parseOptions 
 				return nil, &ApeTagParseError{Source: io.ErrUnexpectedEOF}
 			}
 		}
-		keyStr, err := utf8Decode(key)
+		keyStr, err := util.Utf8Decode(key)
 		if err != nil {
 			return nil, &ApeTagItemParseError{Source: err}
 		}
 
-		if indexOfStr(ApePictureTypes[:], keyStr) >= 0 && !parseOptions.ReadCoverArt {
+		if util.IndexOfStr(meta.ApePictureTypes[:], keyStr) >= 0 && !parseOptions.ReadCoverArt {
 			if _, err := reader.Seek(int64(valueSize), io.SeekCurrent); err != nil {
 				return nil, &ApeTagParseError{Source: err}
 			}
@@ -737,7 +743,7 @@ func ReadApeTagWithHeader(reader io.ReadSeeker, header *ApeHeader, parseOptions 
 
 // ReadApeTag reads an APE tag from the current position.
 // Returns (tag, header, found).
-func ReadApeTag(reader io.ReadSeeker, footer bool, parseOptions ParseOptions) (*ApeTag, *ApeHeader, error) {
+func ReadApeTag(reader io.ReadSeeker, footer bool, parseOptions meta.ParseOptions) (*ApeTag, *ApeHeader, error) {
 	var preamble [8]byte
 	if _, err := io.ReadFull(reader, preamble[:]); err != nil {
 		return nil, nil, err
@@ -761,7 +767,7 @@ func ReadApeTag(reader io.ReadSeeker, footer bool, parseOptions ParseOptions) (*
 
 // --- write ---
 
-func ApeWriteTo(file FileLike, tag *ApeTag, writeOptions WriteOptions) error {
+func ApeWriteTo(file meta.FileLike, tag *ApeTag, writeOptions meta.WriteOptions) error {
 	type apeTags struct {
 		readOnly      *ApeTag
 		header        [2]int64
@@ -776,7 +782,7 @@ func ApeWriteTo(file FileLike, tag *ApeTag, writeOptions WriteOptions) error {
 			return nil, err
 		}
 		// Skip ID3v2
-		if _, _, found, err := findId3v2(file, false, writeOptions.ParseOptions); err != nil {
+		if _, _, found, err := id3v2.FindId3v2(file, false, writeOptions.ParseOptions); err != nil {
 			return nil, err
 		} else if !found {
 			if _, err := file.Seek(0, io.SeekStart); err != nil {
@@ -818,7 +824,7 @@ func ApeWriteTo(file FileLike, tag *ApeTag, writeOptions WriteOptions) error {
 		// start, which is where the APE tag ends; otherwise the APE tag
 		// (if any) ends at EOF. Only seek to EOF when nothing was found.
 		id3v1Found := false
-		if _, _, _, found, err := findId3v1(file, false, writeOptions.ParseOptions.ParsingMode); err != nil {
+		if _, _, _, found, err := id3v1.FindId3v1(file, false, writeOptions.ParseOptions.ParsingMode); err != nil {
 			return nil, err
 		} else if found {
 			id3v1Found = true
@@ -827,7 +833,7 @@ func ApeWriteTo(file FileLike, tag *ApeTag, writeOptions WriteOptions) error {
 				return nil, err
 			}
 		}
-		if _, _, _, found, err := findLyrics3(file, false, writeOptions.ParseOptions); err != nil {
+		if _, _, _, found, err := lyrics3.FindLyrics3(file, false, writeOptions.ParseOptions); err != nil {
 			return nil, err
 		} else if !found && !id3v1Found {
 			if _, err := file.Seek(0, io.SeekEnd); err != nil {
@@ -874,7 +880,7 @@ func ApeWriteTo(file FileLike, tag *ApeTag, writeOptions WriteOptions) error {
 
 	existing, err := findExistingApeTags()
 	if err != nil {
-		return &FileEncodingError{Source: &TagParseError{TagType: TagTypeApe, HasTagType: true, Source: err}}
+		return &meta.FileEncodingError{Source: &meta.TagParseError{TagType: meta.TagTypeApe, HasTagType: true, Source: err}}
 	}
 
 	// Build the item list: new tag items + preserved read-only ones
@@ -904,17 +910,17 @@ func ApeWriteTo(file FileLike, tag *ApeTag, writeOptions WriteOptions) error {
 		var valueLen uint32
 		var itemFlags uint32
 		switch item.Value.Kind() {
-		case ItemValueKindText:
+		case meta.ItemValueKindText:
 			s, _ := item.Value.IntoString()
 			// multi-value text uses null separators
-			parts := splitNulls(s)
-			enc := []byte(joinNulls(parts))
+			parts := util.SplitNulls(s)
+			enc := []byte(util.JoinNulls(parts))
 			valueLen = uint32(len(enc))
-		case ItemValueKindLocator:
+		case meta.ItemValueKindLocator:
 			s, _ := item.Value.IntoString()
 			valueLen = uint32(len(s))
 			itemFlags = 2 << 1
-		case ItemValueKindBinary:
+		case meta.ItemValueKindBinary:
 			b, _ := item.Value.IntoBinary()
 			valueLen = uint32(len(b))
 			itemFlags = 1 << 1
@@ -927,7 +933,7 @@ func ApeWriteTo(file FileLike, tag *ApeTag, writeOptions WriteOptions) error {
 		content.WriteString(item.Key)
 		content.WriteByte(0)
 		switch item.Value.Kind() {
-		case ItemValueKindBinary:
+		case meta.ItemValueKindBinary:
 			b, _ := item.Value.IntoBinary()
 			content.Write(b)
 		default:
@@ -941,14 +947,14 @@ func ApeWriteTo(file FileLike, tag *ApeTag, writeOptions WriteOptions) error {
 	// with a splice, not a truncate (audio data may follow it).
 	insertPos := existing.writePosition
 	if existing.headerFound {
-		if err := Splice(file, uint64(existing.header[0]), uint64(existing.header[1]), nil); err != nil {
-			return &FileEncodingError{Source: err}
+		if err := meta.Splice(file, uint64(existing.header[0]), uint64(existing.header[1]), nil); err != nil {
+			return &meta.FileEncodingError{Source: err}
 		}
 	}
 	if existing.footerFound {
 		insertPos = existing.footer[0]
-		if err := Splice(file, uint64(existing.footer[0]), uint64(existing.footer[1]), nil); err != nil {
-			return &FileEncodingError{Source: err}
+		if err := meta.Splice(file, uint64(existing.footer[0]), uint64(existing.footer[1]), nil); err != nil {
+			return &meta.FileEncodingError{Source: err}
 		}
 	}
 
@@ -976,19 +982,19 @@ func ApeWriteTo(file FileLike, tag *ApeTag, writeOptions WriteOptions) error {
 	binary.LittleEndian.PutUint32(ftr[20:], apeHeaderContainsFooter|apeHeaderContainsHeader)
 	encoded.Write(ftr[:])
 
-	if err := Splice(file, uint64(insertPos), uint64(insertPos), encoded.Bytes()); err != nil {
-		return &FileEncodingError{Source: err}
+	if err := meta.Splice(file, uint64(insertPos), uint64(insertPos), encoded.Bytes()); err != nil {
+		return &meta.FileEncodingError{Source: err}
 	}
 	return nil
 }
 
 func init() {
-	RegisterTagDumper(TagTypeApe, func(tag *Tag, writer io.Writer, writeOptions WriteOptions) error {
+	meta.RegisterTagDumper(meta.TagTypeApe, func(tag *meta.Tag, writer io.Writer, writeOptions meta.WriteOptions) error {
 		at := ApeTagFromTag(tag)
 		if len(at.items) == 0 {
 			return nil
 		}
-		// Reuse the encoder: write into a buffer via ApeWriteTo on a memory FileLike
+		// Reuse the encoder: write into a buffer via ApeWriteTo on a memory meta.FileLike
 		var buf bytes.Buffer
 		var hdr [32]byte
 		copy(hdr[:8], apePreamble)
@@ -1008,11 +1014,11 @@ func init() {
 			var valueLen uint32
 			var itemFlags uint32
 			switch item.Value.Kind() {
-			case ItemValueKindLocator:
+			case meta.ItemValueKindLocator:
 				s, _ := item.Value.IntoString()
 				valueLen = uint32(len(s))
 				itemFlags = 2 << 1
-			case ItemValueKindBinary:
+			case meta.ItemValueKindBinary:
 				b, _ := item.Value.IntoBinary()
 				valueLen = uint32(len(b))
 				itemFlags = 1 << 1
@@ -1028,7 +1034,7 @@ func init() {
 			content.WriteString(item.Key)
 			content.WriteByte(0)
 			switch item.Value.Kind() {
-			case ItemValueKindBinary:
+			case meta.ItemValueKindBinary:
 				b, _ := item.Value.IntoBinary()
 				content.Write(b)
 			default:
@@ -1068,54 +1074,54 @@ type ApeProperties struct {
 	Channels       uint8
 }
 
-// FileProperties converts to generic [FileProperties].
-func (p ApeProperties) FileProperties() FileProperties {
-	return NewFileProperties(
+// FileProperties converts to generic [meta.FileProperties].
+func (p ApeProperties) FileProperties() meta.FileProperties {
+	return meta.NewFileProperties(
 		p.Duration,
-		Some(p.OverallBitrate),
-		Some(p.AudioBitrate),
-		Some(p.SampleRate),
-		Some(p.BitDepth),
-		Some(p.Channels),
-		None[ChannelMask](),
+		meta.Some(p.OverallBitrate),
+		meta.Some(p.AudioBitrate),
+		meta.Some(p.SampleRate),
+		meta.Some(p.BitDepth),
+		meta.Some(p.Channels),
+		meta.None[meta.ChannelMask](),
 	)
 }
 
 // ApeFile is an APE (Monkey's Audio) file.
 type ApeFile struct {
 	Properties ApeProperties
-	ID3v1      Option[*Id3v1Tag]
-	ID3v2      Option[*Id3v2Tag]
-	Ape        Option[*ApeTag]
+	ID3v1      meta.Option[*id3v1.Id3v1Tag]
+	ID3v2      meta.Option[*id3v2.Id3v2Tag]
+	Ape        meta.Option[*ApeTag]
 }
 
 // ApeFileReadFrom reads an [ApeFile] from a reader.
-func ApeFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*ApeFile, error) {
+func ApeFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*ApeFile, error) {
 	data := reader
 	start, err := data.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 	if _, err := data.Seek(0, io.SeekEnd); err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 	end, err := data.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 	streamLen := uint64(end - start)
 	fileLength := streamLen
 
-	var id3v2Tag *Id3v2Tag
-	var id3v1Tag *Id3v1Tag
+	var id3v2Tag *id3v2.Id3v2Tag
+	var id3v1Tag *id3v1.Id3v1Tag
 	var apev1, apev2 *ApeTag
 
 	if _, err := data.Seek(start, io.SeekStart); err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
-	header, _, found, err := findId3v2(data, parseOptions.ReadTags, parseOptions)
+	header, _, found, err := id3v2.FindId3v2(data, parseOptions.ReadTags, parseOptions)
 	if err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 	if found {
 		if newLen := streamLen - uint64(header.FullTagSize()); newLen > 0 {
@@ -1124,11 +1130,11 @@ func ApeFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*ApeFile,
 		if parseOptions.ReadTags {
 			// re-parse the tag
 			if _, err := data.Seek(start+int64(header.FullTagSize()-header.Size), io.SeekStart); err != nil {
-				return nil, &FileParseError{Source: err}
+				return nil, &meta.FileParseError{Source: err}
 			}
-			t, err := parseId3v2Tag(data, header, parseOptions)
+			t, err := id3v2.ParseId3v2Tag(data, header, parseOptions)
 			if err != nil {
-				return nil, &FileParseError{Source: err}
+				return nil, &meta.FileParseError{Source: err}
 			}
 			id3v2Tag = t
 		}
@@ -1149,20 +1155,20 @@ func ApeFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*ApeFile,
 		}
 	} else if err != nil {
 		// The failed APE preamble read consumed bytes. Rewind to start and
-		// re-skip a possible ID3v2 tag: findId3v2 leaves the reader after a
+		// re-skip a possible ID3v2 tag: id3v2.FindId3v2 leaves the reader after a
 		// found tag, or back at start when absent.
 		if _, err := data.Seek(start, io.SeekStart); err != nil {
-			return nil, &FileParseError{Source: err}
+			return nil, &meta.FileParseError{Source: err}
 		}
-		if _, _, _, err := findId3v2(data, false, parseOptions); err != nil {
-			return nil, &FileParseError{Source: err}
+		if _, _, _, err := id3v2.FindId3v2(data, false, parseOptions); err != nil {
+			return nil, &meta.FileParseError{Source: err}
 		}
 	}
 
 	// Find ID3v1 at the end
-	id3v1, _, _, foundI, err := findId3v1(data, parseOptions.ReadTags, parseOptions.ParsingMode)
+	id3v1, _, _, foundI, err := id3v1.FindId3v1(data, parseOptions.ReadTags, parseOptions.ParsingMode)
 	if err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 	if foundI {
 		id3v1Tag = id3v1
@@ -1170,7 +1176,7 @@ func ApeFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*ApeFile,
 	}
 
 	// Find Lyrics3
-	if _, _, _, foundL, err := findLyrics3(data, false, parseOptions); err == nil && foundL {
+	if _, _, _, foundL, err := lyrics3.FindLyrics3(data, false, parseOptions); err == nil && foundL {
 		// Lyrics3 consumed: the reader sits at its start
 		pos, _ := data.Seek(0, io.SeekCurrent)
 		if pos-start < int64(streamLen) {
@@ -1182,7 +1188,7 @@ func ApeFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*ApeFile,
 	// trailing ID3v1/Lyrics3 tags, which is where the APE tag ends.
 	endPos, err := data.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 	if _, err := data.Seek(endPos-32, io.SeekStart); err == nil {
 		if tag, apeHeader, err := ReadApeTag(data, true, parseOptions); err == nil && apeHeader != nil {
@@ -1208,16 +1214,16 @@ func ApeFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*ApeFile,
 	var properties *ApeProperties
 	if parseOptions.ReadProperties {
 		if _, err := data.Seek(start, io.SeekStart); err != nil {
-			return nil, &FileParseError{Source: err}
+			return nil, &meta.FileParseError{Source: err}
 		}
 		macStart, ferr := apeFindMacHeader(data)
 		if ferr != nil {
-			return nil, &FileParseError{Source: ferr}
+			return nil, &meta.FileParseError{Source: ferr}
 		}
 		if _, ferr := data.Seek(macStart, io.SeekStart); ferr == nil {
 			properties, ferr = apeReadProperties(data, streamLen, fileLength, parseOptions.ParsingMode)
-			if ferr != nil && parseOptions.ParsingMode == ParsingModeStrict {
-				return nil, &FileParseError{Source: ferr}
+			if ferr != nil && parseOptions.ParsingMode == meta.ParsingModeStrict {
+				return nil, &meta.FileParseError{Source: ferr}
 			}
 		}
 	}
@@ -1227,53 +1233,53 @@ func ApeFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*ApeFile,
 
 	return &ApeFile{
 		Properties: *properties,
-		ID3v1:      optionFromPtr(id3v1Tag),
-		ID3v2:      optionFromPtr(id3v2Tag),
+		ID3v1:      util.OptionFromPtr(id3v1Tag),
+		ID3v2:      util.OptionFromPtr(id3v2Tag),
 		Ape:        firstApe(apev2, apev1),
 	}, nil
 }
 
 // firstApe picks the primary APE tag (v2 preferred), mirroring Rust's single
 // `ape_tag` slot.
-func firstApe(v2, v1 *ApeTag) Option[*ApeTag] {
+func firstApe(v2, v1 *ApeTag) meta.Option[*ApeTag] {
 	if v2 != nil {
-		return Some(v2)
+		return meta.Some(v2)
 	}
-	return optionFromPtr(v1)
+	return util.OptionFromPtr(v1)
 }
 
-// FileType implements AudioFile.
-func (f *ApeFile) FileType() FileType { return FileTypeApe }
+// FileType implements meta.AudioFile.
+func (f *ApeFile) FileType() meta.FileType { return meta.FileTypeApe }
 
-// Properties implements AudioFile.
-func (f *ApeFile) GetProperties() *FileProperties {
+// Properties implements meta.AudioFile.
+func (f *ApeFile) GetProperties() *meta.FileProperties {
 	fp := f.Properties.FileProperties()
 	return &fp
 }
 
-// ContainsTag implements AudioFile.
+// ContainsTag implements meta.AudioFile.
 func (f *ApeFile) ContainsTag() bool {
 	return f.ID3v1.IsSome() || f.ID3v2.IsSome() || f.Ape.IsSome()
 }
 
-// ContainsTagType implements AudioFile.
-func (f *ApeFile) ContainsTagType(tagType TagType) bool {
+// ContainsTagType implements meta.AudioFile.
+func (f *ApeFile) ContainsTagType(tagType meta.TagType) bool {
 	switch tagType {
-	case TagTypeID3v1:
+	case meta.TagTypeID3v1:
 		return f.ID3v1.IsSome()
-	case TagTypeID3v2:
+	case meta.TagTypeID3v2:
 		return f.ID3v2.IsSome()
-	case TagTypeApe:
+	case meta.TagTypeApe:
 		return f.Ape.IsSome()
 	}
 	return false
 }
 
 // Tags implements TaggedFileAccessor-style conversion via TaggedFileFromFile.
-// TaggedFile converts to a [TaggedFile]. Tag order follows the Rust struct
+// TaggedFile converts to a [meta.TaggedFile]. Tag order follows the Rust struct
 // declaration order: ID3v1, ID3v2, Ape (both APE variants share one slot).
-func (f *ApeFile) TaggedFile() *TaggedFile {
-	var tags []*Tag
+func (f *ApeFile) TaggedFile() *meta.TaggedFile {
+	var tags []*meta.Tag
 	if t, ok := f.ID3v1.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
@@ -1283,30 +1289,30 @@ func (f *ApeFile) TaggedFile() *TaggedFile {
 	if t, ok := f.Ape.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
-	return NewTaggedFile(FileTypeApe, tags, *f.GetProperties())
+	return meta.NewTaggedFile(meta.FileTypeApe, tags, *f.GetProperties())
 }
 
 // SavePath saves the tags back to the file.
-func (f *ApeFile) SavePath(path string, writeOptions WriteOptions) error {
+func (f *ApeFile) SavePath(path string, writeOptions meta.WriteOptions) error {
 	if f.Ape.IsSome() {
-		return SaveToPath(path, f, TagTypeApe, writeOptions)
+		return meta.SaveToPath(path, f, meta.TagTypeApe, writeOptions)
 	}
-	return SaveToPath(path, f, f.primaryTagType(), writeOptions)
+	return meta.SaveToPath(path, f, f.primaryTagType(), writeOptions)
 }
 
-func (f *ApeFile) primaryTagType() TagType {
+func (f *ApeFile) primaryTagType() meta.TagType {
 	if f.ID3v2.IsSome() {
-		return TagTypeID3v2
+		return meta.TagTypeID3v2
 	}
 	if f.Ape.IsSome() {
-		return TagTypeApe
+		return meta.TagTypeApe
 	}
-	return TagTypeID3v1
+	return meta.TagTypeID3v1
 }
 
 // SaveFile writes the tags back to an open file.
-func (f *ApeFile) SaveFile(file FileLike, writeOptions WriteOptions) error {
-	var tags []*Tag
+func (f *ApeFile) SaveFile(file meta.FileLike, writeOptions meta.WriteOptions) error {
+	var tags []*meta.Tag
 	if t, ok := f.ID3v1.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
@@ -1316,12 +1322,12 @@ func (f *ApeFile) SaveFile(file FileLike, writeOptions WriteOptions) error {
 	if t, ok := f.Ape.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
-	return SaveTagFields(file, FileTypeApe, tags, writeOptions)
+	return meta.SaveTagFields(file, meta.FileTypeApe, tags, writeOptions)
 }
 
 // RemoveFromPath removes a tag type from the file at `path`.
-func (f *ApeFile) RemoveFromPath(path string, tagType TagType) error {
-	return RemoveTagFromPath(path, tagType)
+func (f *ApeFile) RemoveFromPath(path string, tagType meta.TagType) error {
+	return meta.RemoveTagFromPath(path, tagType)
 }
 
 // apeFindMacHeader scans for the "MAC " magic with a strict 4-byte window,
@@ -1372,7 +1378,7 @@ func apeFindMacHeader(data io.ReadSeeker) (int64, error) {
 }
 
 // apeReadProperties reads the APE audio properties.
-func apeReadProperties(data io.ReadSeeker, streamLen, fileLength uint64, parseMode ParsingMode) (*ApeProperties, error) {
+func apeReadProperties(data io.ReadSeeker, streamLen, fileLength uint64, parseMode meta.ParsingMode) (*ApeProperties, error) {
 	var versionBuf [2]byte
 	if _, err := io.ReadFull(data, versionBuf[:]); err != nil {
 		return nil, &ApeParseError{Message: "unable to read APE tag version"}
@@ -1433,7 +1439,7 @@ func apeReadProperties(data io.ReadSeeker, streamLen, fileLength uint64, parseMo
 	}
 
 	if p.Channels < 1 || p.Channels > 32 || totalFrames == 0 {
-		if parseMode == ParsingModeStrict {
+		if parseMode == meta.ParsingModeStrict {
 			return nil, &ApeParseError{Message: "file contains no frames or has an invalid channel count"}
 		}
 		return p, nil
@@ -1453,37 +1459,37 @@ func apeReadProperties(data io.ReadSeeker, streamLen, fileLength uint64, parseMo
 }
 
 func init() {
-	RegisterFormatReader(FileTypeApe, func(rs io.ReadSeeker, opts ParseOptions) (*TaggedFile, error) {
+	meta.RegisterFormatReader(meta.FileTypeApe, func(rs io.ReadSeeker, opts meta.ParseOptions) (*meta.TaggedFile, error) {
 		f, err := ApeFileReadFrom(rs, opts)
 		if err != nil {
 			return nil, err
 		}
 		return f.TaggedFile(), nil
 	})
-	RegisterFormatWriter(FileTypeApe, func(file *VerifiedFile, tag *Tag, writeOptions WriteOptions) error {
+	meta.RegisterFormatWriter(meta.FileTypeApe, func(file *meta.VerifiedFile, tag *meta.Tag, writeOptions meta.WriteOptions) error {
 		f := file.File()
 		switch tag.TagType() {
-		case TagTypeApe:
+		case meta.TagTypeApe:
 			return ApeWriteTo(f, ApeTagFromTag(tag), writeOptions)
-		case TagTypeID3v2:
-			return WriteId3v2(f, tag, writeOptions)
-		case TagTypeID3v1:
-			return WriteId3v1(f, Id3v1TagFromTag(tag), writeOptions)
+		case meta.TagTypeID3v2:
+			return id3v2.WriteId3v2(f, tag, writeOptions)
+		case meta.TagTypeID3v1:
+			return id3v1.WriteId3v1(f, id3v1.Id3v1TagFromTag(tag), writeOptions)
 		}
-		return &FileEncodingError{Source: &UnsupportedTagError{}}
+		return &meta.FileEncodingError{Source: &meta.UnsupportedTagError{}}
 	})
 }
 
 // ReadEndTags locates trailing ID3v1/Lyrics3/APEv2 tags.
-func ReadEndTags(reader io.ReadSeeker, start int64, streamLen uint64, parseOptions ParseOptions) (uint64, *Id3v1Tag, *ApeTag, error) {
-	id3v1, _, _, foundI, err := findId3v1(reader, parseOptions.ReadTags, parseOptions.ParsingMode)
+func ReadEndTags(reader io.ReadSeeker, start int64, streamLen uint64, parseOptions meta.ParseOptions) (uint64, *id3v1.Id3v1Tag, *ApeTag, error) {
+	id3v1, _, _, foundI, err := id3v1.FindId3v1(reader, parseOptions.ReadTags, parseOptions.ParsingMode)
 	if err != nil {
 		return 0, nil, nil, err
 	}
 	if foundI {
 		streamLen -= 128
 	}
-	if _, _, _, foundL, err := findLyrics3(reader, false, parseOptions); err == nil && foundL {
+	if _, _, _, foundL, err := lyrics3.FindLyrics3(reader, false, parseOptions); err == nil && foundL {
 		pos, _ := reader.Seek(0, io.SeekCurrent)
 		if pos-start < int64(streamLen) {
 			streamLen = uint64(pos - start)
@@ -1497,7 +1503,7 @@ func ReadEndTags(reader io.ReadSeeker, start int64, streamLen uint64, parseOptio
 	if _, err := reader.Seek(endPos-32, io.SeekStart); err == nil {
 		tag, apeHeader, err := ReadApeTag(reader, true, parseOptions)
 		if err != nil {
-			return 0, nil, nil, &TagParseError{Source: err}
+			return 0, nil, nil, &meta.TagParseError{Source: err}
 		}
 		if apeHeader != nil {
 			if parseOptions.ReadTags {
@@ -1513,19 +1519,19 @@ func ReadEndTags(reader io.ReadSeeker, start int64, streamLen uint64, parseOptio
 
 // DumpTo writes the tag to a writer, mirroring Rust `ApeTag::dump_to` — this
 // is only the tag data, not a usable file.
-func (t *ApeTag) DumpTo(writer io.Writer, writeOptions WriteOptions) error {
+func (t *ApeTag) DumpTo(writer io.Writer, writeOptions meta.WriteOptions) error {
 	_, err := writer.Write(encodeApeTag(t))
 	return err
 }
 
-// RemoveFrom removes an APE tag from a [FileLike].
-func (t *ApeTag) RemoveFrom(file FileLike, writeOptions WriteOptions) error {
-	return TagTypeApe.RemoveFrom(file, writeOptions)
+// RemoveFrom removes an APE tag from a [meta.FileLike].
+func (t *ApeTag) RemoveFrom(file meta.FileLike, writeOptions meta.WriteOptions) error {
+	return meta.TagTypeApe.RemoveFrom(file, writeOptions)
 }
 
 // RemoveFromPath removes an APE tag from a path.
-func (t *ApeTag) RemoveFromPath(path string, writeOptions WriteOptions) error {
-	return TagTypeApe.RemoveFromPath(path, writeOptions)
+func (t *ApeTag) RemoveFromPath(path string, writeOptions meta.WriteOptions) error {
+	return meta.TagTypeApe.RemoveFromPath(path, writeOptions)
 }
 
 // encodeApeTag serializes the tag as APEv2 (header + items + footer),
@@ -1546,11 +1552,11 @@ func encodeApeTag(t *ApeTag) []byte {
 		var itemFlags uint32
 		var val []byte
 		switch item.Value.Kind() {
-		case ItemValueKindLocator:
+		case meta.ItemValueKindLocator:
 			s, _ := item.Value.IntoString()
 			val = []byte(s)
 			itemFlags = 2 << 1
-		case ItemValueKindBinary:
+		case meta.ItemValueKindBinary:
 			b, _ := item.Value.IntoBinary()
 			val = b
 			itemFlags = 1 << 1

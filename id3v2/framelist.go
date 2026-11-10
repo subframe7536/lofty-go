@@ -3,6 +3,8 @@ package id3v2
 import (
 	"strings"
 
+	meta "github.com/subframe7536/lofty-go/internal/meta"
+
 	"github.com/subframe7536/lofty-go/internal/util"
 )
 
@@ -150,7 +152,7 @@ func (l *FrameList) Remove(id FrameId) []Frame {
 }
 
 // RemovePictureType removes all pictures of the given type.
-func (l *FrameList) RemovePictureType(pictureType PictureType) {
+func (l *FrameList) RemovePictureType(pictureType meta.PictureType) {
 	l.Retain(func(f Frame) bool {
 		if pf, ok := f.(*AttachedPictureFrame); ok {
 			return pf.Picture.PicType() != pictureType
@@ -176,11 +178,11 @@ func (l *FrameList) Retain(predicate func(Frame) bool) {
 // RetainMut is like [FrameList.Retain] but allows the predicate to mutate frames.
 func (l *FrameList) RetainMut(predicate func(Frame) bool) { l.Retain(predicate) }
 
-// InsertPicture inserts a [Picture] as an APIC frame, replacing an existing
+// InsertPicture inserts a [meta.Picture] as an APIC frame, replacing an existing
 // picture of type Icon or OtherIcon.
-func (l *FrameList) InsertPicture(picture Picture) Frame {
+func (l *FrameList) InsertPicture(picture meta.Picture) Frame {
 	var ret Frame
-	if picture.PicType() == PictureTypeIcon || picture.PicType() == PictureTypeOtherIcon {
+	if picture.PicType() == meta.PictureTypeIcon || picture.PicType() == meta.PictureTypeOtherIcon {
 		for i, f := range l.frames {
 			if pf, ok := f.(*AttachedPictureFrame); ok && pf.Picture.PicType() == picture.PicType() {
 				ret = f

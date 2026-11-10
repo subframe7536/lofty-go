@@ -6,6 +6,12 @@ import (
 	"io"
 	"math"
 	"time"
+
+	"github.com/subframe7536/lofty-go/ape"
+	"github.com/subframe7536/lofty-go/id3v1"
+	"github.com/subframe7536/lofty-go/id3v2"
+	meta "github.com/subframe7536/lofty-go/internal/meta"
+	"github.com/subframe7536/lofty-go/internal/util"
 )
 
 var mpckPreamble = []byte("MPCK")
@@ -106,49 +112,49 @@ type MpcProperties struct {
 }
 
 // FileProperties converts to generic [FileProperties].
-func (p MpcProperties) FileProperties() FileProperties {
-	return NewFileProperties(
+func (p MpcProperties) FileProperties() meta.FileProperties {
+	return meta.NewFileProperties(
 		p.Duration,
-		Some(p.OverallBitrate),
-		Some(p.AudioBitrate),
-		Some(p.SampleRate),
-		None[uint8](),
-		Some(p.Channels),
-		None[ChannelMask](),
+		meta.Some(p.OverallBitrate),
+		meta.Some(p.AudioBitrate),
+		meta.Some(p.SampleRate),
+		meta.None[uint8](),
+		meta.Some(p.Channels),
+		meta.None[meta.ChannelMask](),
 	)
 }
 
 // MusepackFile is a Musepack file.
 type MusepackFile struct {
 	Properties MpcProperties
-	ID3v1      Option[*Id3v1Tag]
-	ID3v2      Option[*Id3v2Tag]
-	Ape        Option[*ApeTag]
+	ID3v1      meta.Option[*id3v1.Id3v1Tag]
+	ID3v2      meta.Option[*id3v2.Id3v2Tag]
+	Ape        meta.Option[*ape.ApeTag]
 }
 
 var mpcSampleRates = [4]uint32{44100, 48000, 37800, 32000}
 
 // MusepackFileReadFrom reads a [MusepackFile] from a reader.
-func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*MusepackFile, error) {
+func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*MusepackFile, error) {
 	var file MusepackFile
 	start, err := reader.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 	streamEnd, err := reader.Seek(0, io.SeekEnd)
 	if err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 	streamLen := uint64(streamEnd - start)
 	if _, err := reader.Seek(start, io.SeekStart); err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 
-	var id3v2Tag *Id3v2Tag
+	var id3v2Tag *id3v2.Id3v2Tag
 	// ID3v2 at the start
-	header, _, found2, err := findId3v2(reader, parseOptions.ReadTags, parseOptions)
+	header, _, found2, err := id3v2.FindId3v2(reader, parseOptions.ReadTags, parseOptions)
 	if err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 	var id3v2Size uint64
 	if found2 {
@@ -158,45 +164,45 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*Mus
 		}
 		if parseOptions.ReadTags {
 			if _, err := reader.Seek(start+int64(header.FullTagSize()-header.Size), io.SeekStart); err != nil {
-				return nil, &FileParseError{Source: err}
+				return nil, &meta.FileParseError{Source: err}
 			}
-			if t, err := parseId3v2Tag(reader, header, parseOptions); err == nil {
+			if t, err := id3v2.ParseId3v2Tag(reader, header, parseOptions); err == nil {
 				id3v2Tag = t
 			}
 		}
 	}
 
 	// End tags
-	newLen, id3v1Tag, apeTag, err := ReadEndTags(reader, start, streamLen, parseOptions)
+	newLen, id3v1Tag, apeTag, err := ape.ReadEndTags(reader, start, streamLen, parseOptions)
 	if err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 	streamLen = newLen
 
 	// Read MPC stream info
 	if _, err := reader.Seek(start+int64(id3v2Size), io.SeekStart); err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 
 	p := &file.Properties
 	var sig [3]byte
 	if _, err := io.ReadFull(reader, sig[:]); err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 	if bytes.Equal(sig[:], mpckPreamble[:3]) {
 		// SV8: "MPCK" + SH packet: [2B key "SH"][varint size][data]
 		var sig2 [1]byte
 		if _, err := io.ReadFull(reader, sig2[:]); err != nil {
-			return nil, &FileParseError{Source: err}
+			return nil, &meta.FileParseError{Source: err}
 		}
 		if sig2[0] != 'K' {
-			return nil, &FileParseError{Source: &FakeTagError{}}
+			return nil, &meta.FileParseError{Source: &meta.FakeTagError{}}
 		}
 		p.Version = 8
 		// Scan packets; stream_length accumulates each packet's content
 		// length (size field minus key and size bytes) until SE or EOF.
 		var sv8StreamLen, sampleCount, beginningSilence uint64
-		foundSH, foundSE := false, false
+		foundSH, foundSE, foundRG := false, false, false
 		for {
 			pktStart, err := reader.Seek(0, io.SeekCurrent)
 			if err != nil {
@@ -204,6 +210,14 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*Mus
 			}
 			var key [2]byte
 			if _, err := io.ReadFull(reader, key[:]); err != nil {
+				break
+			}
+			// Rust: packet keys are two uppercase ASCII bytes; anything else
+			// ends the packet scan (erroring in strict mode).
+			if key[0] < 'A' || key[0] > 'Z' || key[1] < 'A' || key[1] > 'Z' {
+				if parseOptions.ParsingMode == meta.ParsingModeStrict {
+					return nil, &meta.FileParseError{Source: &MpcParseError{Message: "invalid packet key"}}
+				}
 				break
 			}
 			size, sizeBytes, err := mpcReadSizeCount(reader)
@@ -221,27 +235,29 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*Mus
 				// beginning silence(varint), then 2 flag bytes
 				var crc [4]byte
 				if _, err := io.ReadFull(reader, crc[:]); err != nil {
-					return nil, &FileParseError{Source: err}
+					return nil, &meta.FileParseError{Source: err}
 				}
 				var ver [1]byte
 				if _, err := io.ReadFull(reader, ver[:]); err != nil {
-					return nil, &FileParseError{Source: err}
+					return nil, &meta.FileParseError{Source: err}
 				}
 				if sampleCount, err = mpcReadSize(reader); err != nil {
-					return nil, &FileParseError{Source: err}
+					return nil, &meta.FileParseError{Source: err}
 				}
 				if beginningSilence, err = mpcReadSize(reader); err != nil {
-					return nil, &FileParseError{Source: err}
+					return nil, &meta.FileParseError{Source: err}
 				}
 				var bits [2]byte
 				if _, err := io.ReadFull(reader, bits[:]); err != nil {
-					return nil, &FileParseError{Source: err}
+					return nil, &meta.FileParseError{Source: err}
 				}
 				p.SampleRate = mpcSampleRates[(int(bits[0])>>5)&7]
 				p.Channels = uint8((int(bits[1]) >> 4) + 1)
 				foundSH = true
 			case "SE":
 				foundSE = true
+			case "RG":
+				foundRG = true
 			}
 			if _, err := reader.Seek(pktStart+int64(size), io.SeekStart); err != nil {
 				break
@@ -251,34 +267,37 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*Mus
 			}
 		}
 		if !foundSH {
-			if parseOptions.ParsingMode == ParsingModeStrict {
-				return nil, &FileParseError{Source: &MpcParseError{Message: "file is missing a Stream Header packet"}}
+			if parseOptions.ParsingMode == meta.ParsingModeStrict {
+				return nil, &meta.FileParseError{Source: &MpcParseError{Message: "file is missing a Stream Header packet"}}
 			}
 		} else if parseOptions.ReadProperties {
 			if beginningSilence > sampleCount {
-				return nil, &FileParseError{Source: &MpcParseError{Message: "beginning silence is greater than the total sample count"}}
+				return nil, &meta.FileParseError{Source: &MpcParseError{Message: "beginning silence is greater than the total sample count"}}
 			}
 			totalSamples := sampleCount - beginningSilence
 			if p.SampleRate > 0 && totalSamples > 0 {
-				length := divRound(totalSamples*1000, uint64(p.SampleRate))
+				length := util.DivRound(totalSamples*1000, uint64(p.SampleRate))
 				p.Duration = time.Duration(length) * time.Millisecond
 				bitrate := uint32(sv8StreamLen * 8 * uint64(p.SampleRate) / (totalSamples * 1000))
 				p.OverallBitrate = bitrate
 				p.AudioBitrate = bitrate
 			}
 		}
-		if sv8StreamLen == 0 && parseOptions.ParsingMode == ParsingModeStrict {
-			return nil, &FileParseError{Source: &MpcParseError{Message: "file is missing an Audio packet"}}
+		if sv8StreamLen == 0 && parseOptions.ParsingMode == meta.ParsingModeStrict {
+			return nil, &meta.FileParseError{Source: &MpcParseError{Message: "file is missing an Audio packet"}}
 		}
-		if !foundSE && parseOptions.ParsingMode == ParsingModeStrict {
-			return nil, &FileParseError{Source: &MpcParseError{Message: "file is missing a Stream End packet"}}
+		if !foundSE && parseOptions.ParsingMode == meta.ParsingModeStrict {
+			return nil, &meta.FileParseError{Source: &MpcParseError{Message: "file is missing a Stream End packet"}}
+		}
+		if !foundRG && parseOptions.ParsingMode == meta.ParsingModeStrict {
+			return nil, &meta.FileParseError{Source: &MpcParseError{Message: "file is missing a ReplayGain packet"}}
 		}
 	} else {
 		// SV7: signature is "MP+" with the version in the same u32.
 		// Anything else falls back to the SV4-6 raw header.
 		var rest [29]byte
 		if _, err := io.ReadFull(reader, rest[:]); err != nil {
-			return nil, &FileParseError{Source: err}
+			return nil, &meta.FileParseError{Source: err}
 		}
 		// First 3 bytes were 'M','P','+' or part of the signature dword.
 		// SV7 dword: sig "MP+" in low 24 bits, version in high 8
@@ -307,7 +326,7 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*Mus
 			if p.TrueGapless {
 				p.LastFrameLength = uint16((chunk5 >> 20) & 0x7FF)
 				if p.LastFrameLength > 1152 {
-					return nil, &FileParseError{Source: &TooMuchDataError{}}
+					return nil, &meta.FileParseError{Source: &meta.TooMuchDataError{}}
 				}
 			}
 			p.FastSeekingSafe = (chunk5>>19)&1 == 1
@@ -346,7 +365,7 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*Mus
 			p.MidSideStereo = (headerData[0]>>21)&1 == 1
 			version := uint16((headerData[0] >> 11) & 0x3FF)
 			if version < 4 || version > 6 {
-				return nil, &FileParseError{Source: &MpcParseError{Message: "invalid stream version encountered"}}
+				return nil, &meta.FileParseError{Source: &MpcParseError{Message: "invalid stream version encountered"}}
 			}
 			p.Version = uint8(version)
 			p.MaxBand = uint8((headerData[0] >> 6) & 0x1F)
@@ -356,15 +375,15 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*Mus
 			} else {
 				p.FrameCount = headerData[1] >> 16
 			}
-			if parseOptions.ParsingMode == ParsingModeStrict {
+			if parseOptions.ParsingMode == meta.ParsingModeStrict {
 				if averageBitrate != 0 {
-					return nil, &FileParseError{Source: &MpcParseError{Message: "encountered CBR stream"}}
+					return nil, &meta.FileParseError{Source: &MpcParseError{Message: "encountered CBR stream"}}
 				}
 				if p.IntensityStereo {
-					return nil, &FileParseError{Source: &MpcParseError{Message: "stream uses intensity stereo coding"}}
+					return nil, &meta.FileParseError{Source: &MpcParseError{Message: "stream uses intensity stereo coding"}}
 				}
 				if blockSize != 1 {
-					return nil, &FileParseError{Source: &MpcParseError{Message: "stream has an invalid block size (must be 1)"}}
+					return nil, &meta.FileParseError{Source: &MpcParseError{Message: "stream has an invalid block size (must be 1)"}}
 				}
 			}
 			if version < 6 && p.FrameCount > 0 {
@@ -376,7 +395,7 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*Mus
 				const mpcFrameLength = 1152
 				const mpcDecoderSynthDelay = 481
 				samples := uint64(p.FrameCount)*mpcFrameLength - mpcDecoderSynthDelay
-				p.Duration = time.Duration(divRound(samples*1000, uint64(p.SampleRate))) * time.Millisecond
+				p.Duration = time.Duration(util.DivRound(samples*1000, uint64(p.SampleRate))) * time.Millisecond
 				pcmFrames := uint64(p.FrameCount)*mpcFrameLength - 576
 				bitrate := uint32(float64(streamLen) * 8.0 * float64(p.SampleRate) / float64(pcmFrames) / mpcFrameLength)
 				p.OverallBitrate = bitrate
@@ -386,12 +405,12 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*Mus
 	}
 
 	if parseOptions.ReadTags {
-		file.ID3v2 = optionFromPtr(id3v2Tag)
+		file.ID3v2 = util.OptionFromPtr(id3v2Tag)
 		if apeTag != nil {
-			file.Ape = Some(apeTag)
+			file.Ape = meta.Some(apeTag)
 		}
 		if id3v1Tag != nil {
-			file.ID3v1 = Some(id3v1Tag)
+			file.ID3v1 = meta.Some(id3v1Tag)
 		}
 	}
 	return &file, nil
@@ -414,7 +433,7 @@ func mpcReadSizeCount(reader io.Reader) (uint64, uint8, error) {
 		}
 		count++
 		if count > 9 {
-			return 0, count, &TooMuchDataError{}
+			return 0, count, &meta.TooMuchDataError{}
 		}
 		n = (n << 7) | uint64(b[0]&0x7F)
 		if b[0]&0x80 == 0 {
@@ -425,10 +444,10 @@ func mpcReadSizeCount(reader io.Reader) (uint64, uint8, error) {
 }
 
 // FileType implements AudioFile.
-func (f *MusepackFile) FileType() FileType { return FileTypeMpc }
+func (f *MusepackFile) FileType() meta.FileType { return meta.FileTypeMpc }
 
 // GetProperties implements AudioFile.
-func (f *MusepackFile) GetProperties() *FileProperties {
+func (f *MusepackFile) GetProperties() *meta.FileProperties {
 	fp := f.Properties.FileProperties()
 	return &fp
 }
@@ -439,13 +458,13 @@ func (f *MusepackFile) ContainsTag() bool {
 }
 
 // ContainsTagType implements AudioFile.
-func (f *MusepackFile) ContainsTagType(t TagType) bool {
+func (f *MusepackFile) ContainsTagType(t meta.TagType) bool {
 	switch t {
-	case TagTypeID3v1:
+	case meta.TagTypeID3v1:
 		return f.ID3v1.IsSome()
-	case TagTypeID3v2:
+	case meta.TagTypeID3v2:
 		return f.ID3v2.IsSome()
-	case TagTypeApe:
+	case meta.TagTypeApe:
 		return f.Ape.IsSome()
 	}
 	return false
@@ -453,8 +472,8 @@ func (f *MusepackFile) ContainsTagType(t TagType) bool {
 
 // TaggedFile converts to a [TaggedFile]. Tag order follows the Rust struct
 // declaration order: ID3v2, ID3v1, Ape.
-func (f *MusepackFile) TaggedFile() *TaggedFile {
-	var tags []*Tag
+func (f *MusepackFile) TaggedFile() *meta.TaggedFile {
+	var tags []*meta.Tag
 	if t, ok := f.ID3v2.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
@@ -464,17 +483,17 @@ func (f *MusepackFile) TaggedFile() *TaggedFile {
 	if t, ok := f.Ape.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
-	return NewTaggedFile(FileTypeMpc, tags, *f.GetProperties())
+	return meta.NewTaggedFile(meta.FileTypeMpc, tags, *f.GetProperties())
 }
 
 // SavePath implements AudioFile.
-func (f *MusepackFile) SavePath(path string, wo WriteOptions) error {
-	return SaveToPath(path, f, TagTypeApe, wo)
+func (f *MusepackFile) SavePath(path string, wo meta.WriteOptions) error {
+	return meta.SaveToPath(path, f, meta.TagTypeApe, wo)
 }
 
 // SaveFile implements AudioFile.
-func (f *MusepackFile) SaveFile(file FileLike, wo WriteOptions) error {
-	var tags []*Tag
+func (f *MusepackFile) SaveFile(file meta.FileLike, wo meta.WriteOptions) error {
+	var tags []*meta.Tag
 	if t, ok := f.ID3v1.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
@@ -484,12 +503,12 @@ func (f *MusepackFile) SaveFile(file FileLike, wo WriteOptions) error {
 	if t, ok := f.Ape.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
-	return SaveTagFields(file, FileTypeMpc, tags, wo)
+	return meta.SaveTagFields(file, meta.FileTypeMpc, tags, wo)
 }
 
 // RemoveFromPath implements AudioFile.
-func (f *MusepackFile) RemoveFromPath(path string, t TagType) error {
-	return RemoveTagFromPath(path, t)
+func (f *MusepackFile) RemoveFromPath(path string, t meta.TagType) error {
+	return meta.RemoveTagFromPath(path, t)
 }
 
 type MpcParseError struct {
@@ -532,7 +551,7 @@ func mpcReplayPeak(peak uint16) uint16 {
 }
 
 func init() {
-	RegisterFormatReader(FileTypeMpc, func(rs io.ReadSeeker, opts ParseOptions) (*TaggedFile, error) {
+	meta.RegisterFormatReader(meta.FileTypeMpc, func(rs io.ReadSeeker, opts meta.ParseOptions) (*meta.TaggedFile, error) {
 		f, err := MusepackFileReadFrom(rs, opts)
 		if err != nil {
 			return nil, err
@@ -540,15 +559,15 @@ func init() {
 		return f.TaggedFile(), nil
 	})
 
-	RegisterFormatWriter(FileTypeMpc, func(file *VerifiedFile, tag *Tag, writeOptions WriteOptions) error {
+	meta.RegisterFormatWriter(meta.FileTypeMpc, func(file *meta.VerifiedFile, tag *meta.Tag, writeOptions meta.WriteOptions) error {
 		switch tag.TagType() {
-		case TagTypeApe:
-			return ApeWriteTo(file.File(), ApeTagFromTag(tag), writeOptions)
-		case TagTypeID3v1:
-			return WriteId3v1(file.File(), Id3v1TagFromTag(tag), writeOptions)
-		case TagTypeID3v2:
-			return WriteId3v2(file.File(), tag, writeOptions)
+		case meta.TagTypeApe:
+			return ape.ApeWriteTo(file.File(), ape.ApeTagFromTag(tag), writeOptions)
+		case meta.TagTypeID3v1:
+			return id3v1.WriteId3v1(file.File(), id3v1.Id3v1TagFromTag(tag), writeOptions)
+		case meta.TagTypeID3v2:
+			return id3v2.WriteId3v2(file.File(), tag, writeOptions)
 		}
-		return &FileEncodingError{Source: &UnsupportedTagError{}}
+		return &meta.FileEncodingError{Source: &meta.UnsupportedTagError{}}
 	})
 }

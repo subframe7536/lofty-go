@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/subframe7536/lofty-go/internal/meta"
 )
 
 // Ported from id3/lyrics3/v1/tests.rs
@@ -38,7 +40,7 @@ func TestLyrics3ReRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if err := parsed.DumpTo(&buf, NewWriteOptions()); err != nil {
+	if err := parsed.DumpTo(&buf, meta.NewWriteOptions()); err != nil {
 		t.Fatal(err)
 	}
 	re, err := ParseLyrics3Tag(buf.Bytes())
@@ -56,14 +58,14 @@ func TestLyrics3ToTag(t *testing.T) {
 		t.Fatal(err)
 	}
 	tag := parsed.Tag()
-	if s, ok := tag.GetString(ItemKeyLyrics); !ok || s != lyrics3v1Expected().Lyrics {
+	if s, ok := tag.GetString(meta.ItemKeyLyrics); !ok || s != lyrics3v1Expected().Lyrics {
 		t.Fatalf("got %q", s)
 	}
 }
 
 func TestTagToLyrics3(t *testing.T) {
-	tag := NewTag(TagTypeLyrics3)
-	tag.InsertText(ItemKeyLyrics, lyrics3v1Expected().Lyrics)
+	tag := meta.NewTag(meta.TagTypeLyrics3)
+	tag.InsertText(meta.ItemKeyLyrics, lyrics3v1Expected().Lyrics)
 	l3 := Lyrics3TagFromTag(tag)
 	if l3.Lyrics != lyrics3v1Expected().Lyrics {
 		t.Fatalf("got %q", l3.Lyrics)
@@ -77,7 +79,7 @@ func TestForbiddenLyrics3Content(t *testing.T) {
 		"fooÿbar",
 	} {
 		tag := &Lyrics3Tag{Lyrics: content}
-		wo := NewWriteOptions()
+		wo := meta.NewWriteOptions()
 		wo.LossyTextEncoding = false
 		if err := tag.DumpTo(&bytes.Buffer{}, wo); err == nil {
 			t.Fatalf("expected error for %q", content)
@@ -116,39 +118,39 @@ func lyrics3v2TagBytes() []byte {
 func lyrics3v2ExpectedConcrete() *Lyrics3v2Tag {
 	return &Lyrics3v2Tag{
 		Flags:              Lyrics3v2TagFlags{SynchronizedLyrics: true, RandomSelection: false},
-		Lyrics:             Some("[00:00]Awesome lyrics\r\n[00:10]Written by Lofty"),
-		Info:               Some("This track has lots of interesting info.\r\nSo much in fact, that it spans multiple lines!"),
-		Author:             Some("Serial-ATA"),
-		ExtendedAlbumName:  Some("Lofty Stuff"),
-		ExtendedArtistName: Some("Foo & the Bars"),
-		ExtendedTrackTitle: Some("BazLand"),
+		Lyrics:             meta.Some("[00:00]Awesome lyrics\r\n[00:10]Written by Lofty"),
+		Info:               meta.Some("This track has lots of interesting info.\r\nSo much in fact, that it spans multiple lines!"),
+		Author:             meta.Some("Serial-ATA"),
+		ExtendedAlbumName:  meta.Some("Lofty Stuff"),
+		ExtendedArtistName: meta.Some("Foo & the Bars"),
+		ExtendedTrackTitle: meta.Some("BazLand"),
 		Images: []Lyrics3v2Image{
 			{
 				Filename:    "foo.jpg",
-				Description: Some("foo is a great picture"),
-				Timestamp:   &Timestamp{Minute: Some(uint8(15)), Second: Some(uint8(1))},
+				Description: meta.Some("foo is a great picture"),
+				Timestamp:   &meta.Timestamp{Minute: meta.Some(uint8(15)), Second: meta.Some(uint8(1))},
 			},
 			{
 				Filename:  "no_description.jpg",
-				Timestamp: &Timestamp{Minute: Some(uint8(15)), Second: Some(uint8(1))},
+				Timestamp: &meta.Timestamp{Minute: meta.Some(uint8(15)), Second: meta.Some(uint8(1))},
 			},
 			{Filename: "filename_only.jpg"},
 		},
 	}
 }
 
-func lyrics3v2ExpectedTag() *Tag {
-	tag := NewTag(TagTypeLyrics3v2)
-	tag.InsertText(ItemKeyLyrics, "[00:00]Awesome lyrics\r\n[00:10]Written by Lofty")
-	tag.InsertText(ItemKeyComment, "This track has lots of interesting info.\r\nSo much in fact, that it spans multiple lines!")
-	tag.InsertText(ItemKeyLyricist, "Serial-ATA")
-	tag.InsertText(ItemKeyAlbumTitle, "Lofty Stuff")
-	tag.InsertText(ItemKeyTrackArtist, "Foo & the Bars")
-	tag.InsertText(ItemKeyTrackTitle, "BazLand")
+func lyrics3v2ExpectedTag() *meta.Tag {
+	tag := meta.NewTag(meta.TagTypeLyrics3v2)
+	tag.InsertText(meta.ItemKeyLyrics, "[00:00]Awesome lyrics\r\n[00:10]Written by Lofty")
+	tag.InsertText(meta.ItemKeyComment, "This track has lots of interesting info.\r\nSo much in fact, that it spans multiple lines!")
+	tag.InsertText(meta.ItemKeyLyricist, "Serial-ATA")
+	tag.InsertText(meta.ItemKeyAlbumTitle, "Lofty Stuff")
+	tag.InsertText(meta.ItemKeyTrackArtist, "Foo & the Bars")
+	tag.InsertText(meta.ItemKeyTrackTitle, "BazLand")
 	return tag
 }
 
-func optStrEq(t *testing.T, name string, got, want Option[string]) {
+func optStrEq(t *testing.T, name string, got, want meta.Option[string]) {
 	t.Helper()
 	gv, gok := got.Get()
 	wv, wok := want.Get()
@@ -187,8 +189,8 @@ func lyrics3v2Eq(t *testing.T, got, want *Lyrics3v2Tag) {
 }
 
 func TestParseLyrics3v2(t *testing.T) {
-	opts := NewParseOptions()
-	opts.ParsingMode = ParsingModeStrict
+	opts := meta.NewParseOptions()
+	opts.ParsingMode = meta.ParsingModeStrict
 	parsed, err := ParseLyrics3v2Tag(lyrics3v2TagBytes(), opts)
 	if err != nil {
 		t.Fatal(err)
@@ -197,14 +199,14 @@ func TestParseLyrics3v2(t *testing.T) {
 }
 
 func TestLyrics3v2ReRead(t *testing.T) {
-	opts := NewParseOptions()
-	opts.ParsingMode = ParsingModeStrict
+	opts := meta.NewParseOptions()
+	opts.ParsingMode = meta.ParsingModeStrict
 	parsed, err := ParseLyrics3v2Tag(lyrics3v2TagBytes(), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if err := parsed.DumpTo(&buf, NewWriteOptions()); err != nil {
+	if err := parsed.DumpTo(&buf, meta.NewWriteOptions()); err != nil {
 		t.Fatal(err)
 	}
 	re, err := ParseLyrics3v2Tag(buf.Bytes(), opts)
@@ -215,8 +217,8 @@ func TestLyrics3v2ReRead(t *testing.T) {
 }
 
 func TestLyrics3v2ToTag(t *testing.T) {
-	opts := NewParseOptions()
-	opts.ParsingMode = ParsingModeStrict
+	opts := meta.NewParseOptions()
+	opts.ParsingMode = meta.ParsingModeStrict
 	parsed, err := ParseLyrics3v2Tag(lyrics3v2TagBytes(), opts)
 	if err != nil {
 		t.Fatal(err)
@@ -250,8 +252,8 @@ func TestLyrics3v2SpecialItemsRoundtrip(t *testing.T) {
 }
 
 func TestForbiddenLyrics3v2Content(t *testing.T) {
-	tag := &Lyrics3v2Tag{Lyrics: Some("fooÿbar")}
-	wo := NewWriteOptions()
+	tag := &Lyrics3v2Tag{Lyrics: meta.Some("fooÿbar")}
+	wo := meta.NewWriteOptions()
 	wo.LossyTextEncoding = false
 	if err := tag.DumpTo(&bytes.Buffer{}, wo); err == nil {
 		t.Fatal("expected error")
@@ -260,25 +262,25 @@ func TestForbiddenLyrics3v2Content(t *testing.T) {
 
 func TestLyrics3v2FieldsTruncate(t *testing.T) {
 	tag := &Lyrics3v2Tag{
-		Lyrics: Some(strings.Repeat("W", lyrics3v2FieldMaxSize+1)),
-		Author: Some(strings.Repeat("X", lyrics3v2BasicMaxSize+1)),
+		Lyrics: meta.Some(strings.Repeat("W", lyrics3v2FieldMaxSize+1)),
+		Author: meta.Some(strings.Repeat("X", lyrics3v2BasicMaxSize+1)),
 		Images: []Lyrics3v2Image{{
 			Filename:    strings.Repeat("Y", lyrics3v2PathMax+1),
-			Description: Some(strings.Repeat("Z", lyrics3v2BasicMaxSize+1)),
+			Description: meta.Some(strings.Repeat("Z", lyrics3v2BasicMaxSize+1)),
 		}},
 	}
 	var buf bytes.Buffer
-	if err := tag.DumpTo(&buf, NewWriteOptions()); err != nil {
+	if err := tag.DumpTo(&buf, meta.NewWriteOptions()); err != nil {
 		t.Fatal(err)
 	}
-	opts := NewParseOptions()
-	opts.ParsingMode = ParsingModeStrict
+	opts := meta.NewParseOptions()
+	opts.ParsingMode = meta.ParsingModeStrict
 	parsed, err := ParseLyrics3v2Tag(buf.Bytes(), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	optStrEq(t, "lyrics", parsed.Lyrics, Some(strings.Repeat("W", lyrics3v2FieldMaxSize)))
-	optStrEq(t, "author", parsed.Author, Some(strings.Repeat("X", lyrics3v2BasicMaxSize)))
+	optStrEq(t, "lyrics", parsed.Lyrics, meta.Some(strings.Repeat("W", lyrics3v2FieldMaxSize)))
+	optStrEq(t, "author", parsed.Author, meta.Some(strings.Repeat("X", lyrics3v2BasicMaxSize)))
 	if len(parsed.Images) != 1 {
 		t.Fatalf("images len = %d", len(parsed.Images))
 	}
@@ -286,7 +288,7 @@ func TestLyrics3v2FieldsTruncate(t *testing.T) {
 	if img.Filename != strings.Repeat("Y", lyrics3v2PathMax) {
 		t.Fatalf("filename len = %d", len(img.Filename))
 	}
-	optStrEq(t, "img desc", img.Description, Some(strings.Repeat("Z", lyrics3v2BasicMaxSize)))
+	optStrEq(t, "img desc", img.Description, meta.Some(strings.Repeat("Z", lyrics3v2BasicMaxSize)))
 }
 
 func TestIgnoreUnknownLyrics3v2Fields(t *testing.T) {
@@ -301,8 +303,8 @@ func TestIgnoreUnknownLyrics3v2Fields(t *testing.T) {
 	tag = append(tag, []byte("000069")...)
 	tag = append(tag, lyrics3v2Footer...)
 
-	opts := NewParseOptions()
-	opts.ParsingMode = ParsingModeStrict
+	opts := meta.NewParseOptions()
+	opts.ParsingMode = meta.ParsingModeStrict
 	parsed, err := ParseLyrics3v2Tag(tag, opts)
 	if err != nil {
 		t.Fatal(err)

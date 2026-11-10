@@ -6,7 +6,12 @@ import (
 	"io"
 	"time"
 
+	"github.com/subframe7536/lofty-go/ape"
+	"github.com/subframe7536/lofty-go/id3v1"
+	"github.com/subframe7536/lofty-go/id3v2"
+	meta "github.com/subframe7536/lofty-go/internal/meta"
 	"github.com/subframe7536/lofty-go/internal/util"
+	"github.com/subframe7536/lofty-go/lyrics3"
 )
 
 // MpegParseError is returned when an MPEG file fails to parse.
@@ -24,17 +29,17 @@ func (e *MpegParseError) Error() string {
 func (e *MpegParseError) Unwrap() error { return e.Source }
 
 // MpegVersion is the MPEG audio version.
-type MpegVersion int
+type MpegVersion = meta.MpegVersion
 
 const (
 	// MpegVersion1 is MPEG-1.
-	MpegVersion1 MpegVersion = iota
+	MpegVersion1 = meta.MpegVersion1
 	// MpegVersion2 is MPEG-2.
-	MpegVersion2
+	MpegVersion2 = meta.MpegVersion2
 	// MpegVersion25 is MPEG-2.5.
-	MpegVersion25
+	MpegVersion25 = meta.MpegVersion25
 	// MpegVersion4 is MPEG-4 (AAC container framing).
-	MpegVersion4
+	MpegVersion4 = meta.MpegVersion4
 )
 
 // MpegLayer is the MPEG audio layer.
@@ -83,13 +88,13 @@ type mpegHeader struct {
 	sampleRate    uint32 // Hz
 	channels      uint8
 	channelMode   ChannelMode
-	modeExtension Option[uint8]
+	modeExtension meta.Option[uint8]
 	frameLen      uint32
 	samples       uint32
 	copyrighted   bool
 	original      bool
 	crc           bool
-	emphasis      Option[Emphasis]
+	emphasis      meta.Option[Emphasis]
 }
 
 // Bitrate lookup tables [version!=1][layer][index].
@@ -128,7 +133,7 @@ func parseMpegHeader(b []byte, firstHeader *mpegHeader) (*mpegHeader, error) {
 	}
 	h2 := &mpegHeader{}
 	if e := Emphasis(h & 3); e != 0 {
-		h2.emphasis = Some(e)
+		h2.emphasis = meta.Some(e)
 	}
 	ver := (h >> 19) & 3
 	switch ver {
@@ -187,7 +192,7 @@ func parseMpegHeader(b []byte, firstHeader *mpegHeader) (*mpegHeader, error) {
 	padding := (h >> 9) & 1
 	h2.channelMode = ChannelMode((h >> 6) & 3)
 	if h2.channelMode == ChannelModeJointStereo {
-		h2.modeExtension = Some(uint8((h >> 4) & 3))
+		h2.modeExtension = meta.Some(uint8((h >> 4) & 3))
 	}
 	if h2.channelMode == ChannelModeMono {
 		h2.channels = 1
@@ -231,12 +236,10 @@ func parseMpegHeader(b []byte, firstHeader *mpegHeader) (*mpegHeader, error) {
 	return h2, nil
 }
 
-// xingOffset returns the offset of the Xing/Info header from the start of the frame.
+// xingOffset returns the offset of the Xing/Info header from the start of the
+// frame — Rust's `data_start` (SIDE_INFORMATION_SIZES + 4, no CRC term).
 func (h *mpegHeader) xingOffset() int64 {
 	off := int64(4)
-	if h.crc {
-		off += 2
-	}
 	if h.version == MpegVersion1 {
 		if h.channelMode == ChannelModeMono {
 			off += 17
@@ -252,9 +255,6 @@ func (h *mpegHeader) xingOffset() int64 {
 	}
 	return off
 }
-
-// vbriOffset is fixed at 32 bytes after the 4-byte header.
-const vbriOffset = 36
 
 type vbrHeaderType uint8
 
@@ -310,32 +310,55 @@ func parseVbri(data []byte) (*vbrHeader, error) {
 }
 
 // findNextFrame searches for the next valid MPEG frame header.
-// Returns (header, offset of the frame start relative to the reader's start when called).
+// Like Rust's `find_next_frame`, a candidate is only accepted when the
+// following frame's masked header (`cmp_header`, HEADER_MASK 0xFFFE0C00)
+// matches; otherwise scanning continues. Returns (header, absolute offset,
+// error) with the reader positioned just after the header.
 func findNextFrame(reader io.ReadSeeker) (*mpegHeader, int64, error) {
-	start, err := reader.Seek(0, io.SeekCurrent)
+	pos, err := reader.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return nil, 0, err
 	}
-	var foundHeader *mpegHeader
-	offset, found, err := util.ChunkedScan(reader, 3, -1, func(window []byte) int {
-		for i := 0; i+4 <= len(window); i++ {
-			if h, err := parseMpegHeader(window[i:i+4], nil); err == nil {
-				foundHeader = h
-				return i
+	for {
+		var foundHeader *mpegHeader
+		var raw uint32
+		offset, found, err := util.ChunkedScan(reader, 3, -1, func(window []byte) int {
+			for i := 0; i+4 <= len(window); i++ {
+				if h, err := parseMpegHeader(window[i:i+4], nil); err == nil {
+					foundHeader = h
+					raw = binary.BigEndian.Uint32(window[i:])
+					return i
+				}
 			}
+			return -1
+		})
+		if err != nil {
+			return nil, 0, err
 		}
-		return -1
-	})
-	if err != nil {
-		return nil, 0, err
+		if !found {
+			return nil, 0, nil
+		}
+		abs := pos + offset
+		// cmp_header: the next frame at abs+frameLen must match (masked)
+		var nb [4]byte
+		if _, err := reader.Seek(abs+int64(foundHeader.frameLen), io.SeekStart); err != nil {
+			return nil, 0, nil // Rust HeaderCmpResult::Undetermined
+		}
+		if _, err := io.ReadFull(reader, nb[:]); err != nil {
+			return nil, 0, nil
+		}
+		if binary.BigEndian.Uint32(nb[:])&0xFFFE0C00 == raw&0xFFFE0C00 {
+			if _, err := reader.Seek(abs+4, io.SeekStart); err != nil {
+				return nil, 0, err
+			}
+			return foundHeader, abs, nil
+		}
+		// Not equal — keep scanning past the candidate
+		if _, err := reader.Seek(abs+1, io.SeekStart); err != nil {
+			return nil, 0, err
+		}
+		pos = abs + 1
 	}
-	if !found {
-		return nil, 0, nil
-	}
-	if _, err := reader.Seek(start+offset+4, io.SeekStart); err != nil {
-		return nil, 0, err
-	}
-	return foundHeader, start + offset, nil
 }
 
 // MpegProperties are the audio properties of an MPEG file.
@@ -351,23 +374,23 @@ type MpegProperties struct {
 	Copyrighted     bool
 	Original        bool
 	CRC             bool
-	Emphasis        Option[Emphasis]
-	ModeExtension   Option[uint8]
+	Emphasis        meta.Option[Emphasis]
+	ModeExtension   meta.Option[uint8]
 	VBR             bool
-	Encoder         Option[string]
-	EncoderSettings Option[string]
+	Encoder         meta.Option[string]
+	EncoderSettings meta.Option[string]
 }
 
-// FileProperties converts to generic [FileProperties].
-func (p MpegProperties) FileProperties() FileProperties {
-	return NewFileProperties(
+// FileProperties converts to generic [meta.FileProperties].
+func (p MpegProperties) FileProperties() meta.FileProperties {
+	return meta.NewFileProperties(
 		p.Duration,
-		Some(p.OverallBitrate),
-		Some(p.AudioBitrate),
-		Some(p.SampleRate),
-		None[uint8](),
-		Some(p.Channels),
-		None[ChannelMask](),
+		meta.Some(p.OverallBitrate),
+		meta.Some(p.AudioBitrate),
+		meta.Some(p.SampleRate),
+		meta.None[uint8](),
+		meta.Some(p.Channels),
+		meta.None[meta.ChannelMask](),
 	)
 }
 
@@ -392,31 +415,23 @@ func mpegReadProperties(
 		ModeExtension: firstHeader.modeExtension,
 	}
 
-	// Check for VBR headers
+	// Check for VBR headers — Rust reads 32 bytes at `data_start` and lets
+	// VbrHeader::read match Xing/Info or VBRI in that same window.
 	var vbr *vbrHeader
-	// Xing: firstFrameOffset + xingOffset
 	if _, err := data.Seek(int64(firstFrameOffset)+firstHeader.xingOffset(), io.SeekStart); err == nil {
 		var buf [32]byte
-		if n, err := data.Read(buf[:]); err == nil && n >= 8 {
+		if n, err := data.Read(buf[:]); err == nil {
 			if v, err := parseXing(buf[:n]); err == nil {
 				vbr = v
-			}
-		}
-	}
-	if vbr == nil {
-		if _, err := data.Seek(int64(firstFrameOffset)+vbriOffset, io.SeekStart); err == nil {
-			var buf [26]byte
-			if n, err := data.Read(buf[:]); err == nil && n >= 26 {
-				if v, err := parseVbri(buf[:n]); err == nil {
-					vbr = v
-				}
+			} else if v, err := parseVbri(buf[:n]); err == nil {
+				vbr = v
 			}
 		}
 	}
 
 	if vbr != nil && firstHeader.sampleRate > 0 && vbr.isValid() {
 		p.VBR = vbr.ty != vbrTypeInfo
-		length := divRound(uint64(firstHeader.samples)*1000*vbr.frames, uint64(firstHeader.sampleRate))
+		length := util.DivRound(uint64(firstHeader.samples)*1000*vbr.frames, uint64(firstHeader.sampleRate))
 		p.Duration = time.Duration(length) * time.Millisecond
 		if length > 0 {
 			p.OverallBitrate = uint32(fileLength * 8 / length)
@@ -465,7 +480,7 @@ func mpegReadProperties(
 	}
 
 	p.AudioBitrate = firstHeader.bitrate
-	length := divRound((streamEnd-firstFrameOffset)*8, uint64(p.AudioBitrate))
+	length := util.DivRound((streamEnd-firstFrameOffset)*8, uint64(p.AudioBitrate))
 	p.Duration = time.Duration(length) * time.Millisecond
 	if length > 0 {
 		p.OverallBitrate = uint32(fileLength * 8 / length)
@@ -518,15 +533,15 @@ func (h *mpegHeader) cmp(other *mpegHeader) bool {
 // MpegFile is an MPEG audio file (MP1/MP2/MP3).
 type MpegFile struct {
 	Properties MpegProperties
-	ID3v1      Option[*Id3v1Tag]
-	ID3v2      Option[*Id3v2Tag]
-	APE        Option[*ApeTag]
-	Lyrics3    Option[*Lyrics3Tag]
-	Lyrics3v2  Option[*Lyrics3v2Tag]
+	ID3v1      meta.Option[*id3v1.Id3v1Tag]
+	ID3v2      meta.Option[*id3v2.Id3v2Tag]
+	APE        meta.Option[*ape.ApeTag]
+	Lyrics3    meta.Option[*lyrics3.Lyrics3Tag]
+	Lyrics3v2  meta.Option[*lyrics3.Lyrics3v2Tag]
 }
 
 // MpegFileReadFrom reads an [MpegFile] from a reader.
-func MpegFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*MpegFile, error) {
+func MpegFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*MpegFile, error) {
 	var file MpegFile
 	var firstFrameOffset uint64
 	var firstHeader *mpegHeader
@@ -534,7 +549,7 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*MpegFil
 	// Skip zero padding at the start
 	startPos, err := reader.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return nil, &FileParseError{Source: &MpegParseError{Source: err}}
+		return nil, &meta.FileParseError{Source: &MpegParseError{Source: err}}
 	}
 	firstNonZero, foundNonZero, err := util.ChunkedScan(reader, 0, -1, func(window []byte) int {
 		for i, b := range window {
@@ -545,13 +560,13 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*MpegFil
 		return -1
 	})
 	if err != nil {
-		return nil, &FileParseError{Source: &MpegParseError{Source: err}}
+		return nil, &meta.FileParseError{Source: &MpegParseError{Source: err}}
 	}
 	if !foundNonZero {
-		return nil, &FileParseError{Source: &MpegParseError{Source: io.EOF}}
+		return nil, &meta.FileParseError{Source: &MpegParseError{Source: io.EOF}}
 	}
 	if _, err := reader.Seek(startPos+firstNonZero, io.SeekStart); err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 
 	var id3v2End uint64
@@ -562,16 +577,16 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*MpegFil
 		}
 		if bytes.Equal(headerBuf[:3], []byte("ID3")) {
 			if _, err := reader.Seek(-4, io.SeekCurrent); err != nil {
-				return nil, &FileParseError{Source: err}
+				return nil, &meta.FileParseError{Source: err}
 			}
-			header, err := ParseId3v2HeaderRaw(reader)
+			header, err := id3v2.ParseId3v2HeaderRaw(reader)
 			if err != nil {
-				return nil, &FileParseError{Source: &TagParseError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
+				return nil, &meta.FileParseError{Source: &meta.TagParseError{TagType: meta.TagTypeID3v2, HasTagType: true, Source: err}}
 			}
 			if parseOptions.ReadTags {
-				tag, err := parseId3v2Tag(reader, header, parseOptions)
+				tag, err := id3v2.ParseId3v2Tag(reader, header, parseOptions)
 				if err != nil {
-					return nil, &FileParseError{Source: &TagParseError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
+					return nil, &meta.FileParseError{Source: &meta.TagParseError{TagType: meta.TagTypeID3v2, HasTagType: true, Source: err}}
 				}
 				if existing, ok := file.ID3v2.Get(); ok {
 					// Merge duplicate tags; frames in later tags replace earlier ones
@@ -580,15 +595,15 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*MpegFil
 					}
 					continue
 				}
-				file.ID3v2 = Some(tag)
+				file.ID3v2 = meta.Some(tag)
 			} else {
 				if _, err := reader.Seek(int64(header.Size), io.SeekCurrent); err != nil {
-					return nil, &FileParseError{Source: err}
+					return nil, &meta.FileParseError{Source: err}
 				}
 			}
 			if header.Flags.Footer {
 				if _, err := reader.Seek(10, io.SeekCurrent); err != nil {
-					return nil, &FileParseError{Source: err}
+					return nil, &meta.FileParseError{Source: err}
 				}
 			}
 			continue
@@ -596,35 +611,35 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*MpegFil
 		if bytes.Equal(headerBuf[:], []byte("APET")) {
 			var rest [4]byte
 			if _, err := io.ReadFull(reader, rest[:]); err != nil {
-				return nil, &FileParseError{Source: err}
+				return nil, &meta.FileParseError{Source: err}
 			}
 			if !bytes.Equal(rest[:], []byte("AGEX")) {
-				return nil, &FileParseError{Source: &FakeTagError{}}
+				return nil, &meta.FileParseError{Source: &meta.FakeTagError{}}
 			}
-			apeHeader, err := ReadApeHeader(reader, false)
+			apeHeader, err := ape.ReadApeHeader(reader, false)
 			if err != nil {
-				return nil, &FileParseError{Source: &TagParseError{TagType: TagTypeApe, HasTagType: true, Source: err}}
+				return nil, &meta.FileParseError{Source: &meta.TagParseError{TagType: meta.TagTypeApe, HasTagType: true, Source: err}}
 			}
 			if parseOptions.ReadTags {
-				tag, err := ReadApeTagWithHeader(reader, apeHeader, parseOptions)
+				tag, err := ape.ReadApeTagWithHeader(reader, apeHeader, parseOptions)
 				if err != nil {
-					return nil, &FileParseError{Source: &TagParseError{TagType: TagTypeApe, HasTagType: true, Source: err}}
+					return nil, &meta.FileParseError{Source: &meta.TagParseError{TagType: meta.TagTypeApe, HasTagType: true, Source: err}}
 				}
-				file.APE = Some(tag)
+				file.APE = meta.Some(tag)
 			} else {
 				if _, err := reader.Seek(int64(apeHeader.Size), io.SeekCurrent); err != nil {
-					return nil, &FileParseError{Source: err}
+					return nil, &meta.FileParseError{Source: err}
 				}
 			}
 			continue
 		}
 		// Not a tag: search for the frame sync
 		if _, err := reader.Seek(-4, io.SeekCurrent); err != nil {
-			return nil, &FileParseError{Source: err}
+			return nil, &meta.FileParseError{Source: err}
 		}
 		h, offset, err := findNextFrame(reader)
 		if err != nil {
-			return nil, &FileParseError{Source: err}
+			return nil, &meta.FileParseError{Source: err}
 		}
 		if h == nil {
 			break
@@ -633,18 +648,18 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*MpegFil
 		firstHeader = h
 
 		// Check for a buried ID3v2 tag
-		if file.ID3v2.IsNone() && parseOptions.ParsingMode != ParsingModeStrict && offset > 0 {
+		if file.ID3v2.IsNone() && parseOptions.ParsingMode != meta.ParsingModeStrict && offset > 0 {
 			if _, err := reader.Seek(0, io.SeekStart); err == nil {
-				if _, junkEnd, found, err := findId3v2(reader, parseOptions.ReadTags, parseOptions); err == nil && found {
+				if _, junkEnd, found, err := id3v2.FindId3v2(reader, parseOptions.ReadTags, parseOptions); err == nil && found {
 					if parseOptions.ReadTags {
-						var hdr Id3v2Header
+						var hdr id3v2.Id3v2Header
 						_ = hdr
 					}
 					id3v2End = uint64(junkEnd)
 				}
 			}
 			if _, err := reader.Seek(int64(firstFrameOffset), io.SeekStart); err != nil {
-				return nil, &FileParseError{Source: err}
+				return nil, &meta.FileParseError{Source: err}
 			}
 		}
 		break
@@ -652,7 +667,7 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*MpegFil
 
 	if firstHeader == nil {
 		if parseOptions.ReadProperties {
-			return nil, &FileParseError{Source: &MpegParseError{Message: "no MPEG frames found"}}
+			return nil, &meta.FileParseError{Source: &MpegParseError{Message: "no MPEG frames found"}}
 		}
 		// No frames and no properties: still collect trailing tags below.
 	}
@@ -660,51 +675,51 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*MpegFil
 	// Re-parse buried ID3v2 if found in junk
 	if id3v2End > 0 && parseOptions.ReadTags && file.ID3v2.IsNone() {
 		if _, err := reader.Seek(0, io.SeekStart); err == nil {
-			header, end, found, err := findId3v2(reader, false, parseOptions)
+			header, end, found, err := id3v2.FindId3v2(reader, false, parseOptions)
 			if err == nil && found {
 				contentStart := end - int64(header.Size)
 				if header.Flags.Footer {
 					contentStart -= 10
 				}
 				if _, err := reader.Seek(contentStart, io.SeekStart); err == nil {
-					tag, err := parseId3v2Tag(reader, header, parseOptions)
+					tag, err := id3v2.ParseId3v2Tag(reader, header, parseOptions)
 					if err == nil {
-						file.ID3v2 = Some(tag)
+						file.ID3v2 = meta.Some(tag)
 					}
 				}
 			}
 		}
 		if _, err := reader.Seek(int64(firstFrameOffset), io.SeekStart); err != nil {
-			return nil, &FileParseError{Source: err}
+			return nil, &meta.FileParseError{Source: err}
 		}
 	}
 
 	// Find the end of the stream: skip ID3v1/Lyrics3/APE at the end
 	streamEnd, err := reader.Seek(0, io.SeekEnd)
 	if err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 	endOffset := uint64(streamEnd)
 
 	// ID3v1
-	var id3v1Tag *Id3v1Tag
-	if t, start, _, found, err := findId3v1(reader, parseOptions.ReadTags, parseOptions.ParsingMode); err == nil && found {
+	var id3v1Tag *id3v1.Id3v1Tag
+	if t, start, _, found, err := id3v1.FindId3v1(reader, parseOptions.ReadTags, parseOptions.ParsingMode); err == nil && found {
 		id3v1Tag = t
 		if uint64(start) < endOffset {
 			endOffset = uint64(start)
 		}
 	}
 	if _, err := reader.Seek(int64(endOffset), io.SeekStart); err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 
 	// Lyrics3
-	if start, _, t, found, err := findLyrics3(reader, parseOptions.ReadTags, parseOptions); err == nil && found {
+	if start, _, t, found, err := lyrics3.FindLyrics3(reader, parseOptions.ReadTags, parseOptions); err == nil && found {
 		switch v := t.(type) {
-		case *Lyrics3Tag:
-			file.Lyrics3 = Some(v)
-		case *Lyrics3v2Tag:
-			file.Lyrics3v2 = Some(v)
+		case *lyrics3.Lyrics3Tag:
+			file.Lyrics3 = meta.Some(v)
+		case *lyrics3.Lyrics3v2Tag:
+			file.Lyrics3v2 = meta.Some(v)
 		}
 
 		if uint64(start) < endOffset {
@@ -712,15 +727,15 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*MpegFil
 		}
 	}
 	if _, err := reader.Seek(int64(endOffset), io.SeekStart); err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 
 	// APE at the end
 	if endOffset >= 32 {
 		if _, err := reader.Seek(int64(endOffset)-32, io.SeekStart); err == nil {
-			if tag, apeHeader, err := ReadApeTag(reader, true, parseOptions); err == nil && apeHeader != nil {
+			if tag, apeHeader, err := ape.ReadApeTag(reader, true, parseOptions); err == nil && apeHeader != nil {
 				if parseOptions.ReadTags {
-					file.APE = Some(tag)
+					file.APE = meta.Some(tag)
 				}
 				if int64(endOffset)-32-int64(apeHeader.Size)+32 > 0 {
 					endOffset = uint64(int64(endOffset) - int64(apeHeader.Size))
@@ -733,52 +748,52 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*MpegFil
 	if parseOptions.ReadProperties {
 		streamLen := endOffset - firstFrameOffset
 		if _, err := reader.Seek(int64(firstFrameOffset), io.SeekStart); err != nil {
-			return nil, &FileParseError{Source: err}
+			return nil, &meta.FileParseError{Source: err}
 		}
 		properties = mpegReadProperties(reader, firstHeader, firstFrameOffset, streamLen, uint64(streamEnd))
 	} else {
 		properties = &MpegProperties{}
 	}
 	file.Properties = *properties
-	file.ID3v1 = optionFromPtr(id3v1Tag)
+	file.ID3v1 = util.OptionFromPtr(id3v1Tag)
 	return &file, nil
 }
 
-// FileType implements AudioFile.
-func (f *MpegFile) FileType() FileType { return FileTypeMpeg }
+// FileType implements meta.AudioFile.
+func (f *MpegFile) FileType() meta.FileType { return meta.FileTypeMpeg }
 
-// GetProperties implements AudioFile.
-func (f *MpegFile) GetProperties() *FileProperties {
+// GetProperties implements meta.AudioFile.
+func (f *MpegFile) GetProperties() *meta.FileProperties {
 	fp := f.Properties.FileProperties()
 	return &fp
 }
 
-// ContainsTag implements AudioFile.
+// ContainsTag implements meta.AudioFile.
 func (f *MpegFile) ContainsTag() bool {
 	return f.ID3v1.IsSome() || f.ID3v2.IsSome() || f.APE.IsSome() || f.Lyrics3.IsSome() || f.Lyrics3v2.IsSome()
 }
 
-// ContainsTagType implements AudioFile.
-func (f *MpegFile) ContainsTagType(tagType TagType) bool {
+// ContainsTagType implements meta.AudioFile.
+func (f *MpegFile) ContainsTagType(tagType meta.TagType) bool {
 	switch tagType {
-	case TagTypeID3v1:
+	case meta.TagTypeID3v1:
 		return f.ID3v1.IsSome()
-	case TagTypeID3v2:
+	case meta.TagTypeID3v2:
 		return f.ID3v2.IsSome()
-	case TagTypeApe:
+	case meta.TagTypeApe:
 		return f.APE.IsSome()
-	case TagTypeLyrics3:
+	case meta.TagTypeLyrics3:
 		return f.Lyrics3.IsSome()
-	case TagTypeLyrics3v2:
+	case meta.TagTypeLyrics3v2:
 		return f.Lyrics3v2.IsSome()
 	}
 	return false
 }
 
-// TaggedFile converts to a [TaggedFile]. Tag order follows the Rust struct
+// TaggedFile converts to a [meta.TaggedFile]. Tag order follows the Rust struct
 // declaration order: ID3v2, ID3v1, Lyrics3, Lyrics3v2, Ape.
-func (f *MpegFile) TaggedFile() *TaggedFile {
-	var tags []*Tag
+func (f *MpegFile) TaggedFile() *meta.TaggedFile {
+	var tags []*meta.Tag
 	if t, ok := f.ID3v2.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
@@ -795,52 +810,52 @@ func (f *MpegFile) TaggedFile() *TaggedFile {
 		tags = append(tags, t.Tag())
 	}
 
-	return NewTaggedFile(FileTypeMpeg, tags, *f.GetProperties())
+	return meta.NewTaggedFile(meta.FileTypeMpeg, tags, *f.GetProperties())
 }
 
 // SavePath saves the file's tags back to the path.
-func (f *MpegFile) SavePath(path string, writeOptions WriteOptions) error {
-	return SaveToPath(path, f, f.primaryTagType(), writeOptions)
+func (f *MpegFile) SavePath(path string, writeOptions meta.WriteOptions) error {
+	return meta.SaveToPath(path, f, f.primaryTagType(), writeOptions)
 }
 
-func (f *MpegFile) primaryTagType() TagType {
+func (f *MpegFile) primaryTagType() meta.TagType {
 	if f.ID3v2.IsSome() {
-		return TagTypeID3v2
+		return meta.TagTypeID3v2
 	}
 	if f.APE.IsSome() {
-		return TagTypeApe
+		return meta.TagTypeApe
 	}
 	if f.ID3v1.IsSome() {
-		return TagTypeID3v1
+		return meta.TagTypeID3v1
 	}
-	return TagTypeID3v2
+	return meta.TagTypeID3v2
 }
 
 // SaveFile writes tags to an open file.
-func (f *MpegFile) SaveFile(file FileLike, writeOptions WriteOptions) error {
+func (f *MpegFile) SaveFile(file meta.FileLike, writeOptions meta.WriteOptions) error {
 	// Write ID3v2 at the start, ID3v1 at the end
 	if t, ok := f.ID3v2.Get(); ok {
-		if err := t.SaveToVerified(NewVerifiedFileOf(FileTypeMpeg, file), writeOptions); err != nil {
+		if err := t.SaveToVerified(meta.NewVerifiedFileOf(meta.FileTypeMpeg, file), writeOptions); err != nil {
 			return err
 		}
 	}
 	if t, ok := f.ID3v1.Get(); ok {
-		if err := WriteId3v1(file, t, writeOptions); err != nil {
+		if err := id3v1.WriteId3v1(file, t, writeOptions); err != nil {
 			return err
 		}
 	}
 	if t, ok := f.APE.Get(); ok {
-		if err := ApeWriteTo(file, t, writeOptions); err != nil {
+		if err := ape.ApeWriteTo(file, t, writeOptions); err != nil {
 			return err
 		}
 	}
 	if t, ok := f.Lyrics3v2.Get(); ok {
-		if err := Lyrics3v2WriteTo(file, t, writeOptions); err != nil {
+		if err := lyrics3.Lyrics3v2WriteTo(file, t, writeOptions); err != nil {
 			return err
 		}
 	}
 	if t, ok := f.Lyrics3.Get(); ok {
-		if err := Lyrics3v1WriteTo(file, t, writeOptions); err != nil {
+		if err := lyrics3.Lyrics3v1WriteTo(file, t, writeOptions); err != nil {
 			return err
 		}
 	}
@@ -848,32 +863,32 @@ func (f *MpegFile) SaveFile(file FileLike, writeOptions WriteOptions) error {
 }
 
 // RemoveFromPath removes a tag type.
-func (f *MpegFile) RemoveFromPath(path string, tagType TagType) error {
-	return RemoveTagFromPath(path, tagType)
+func (f *MpegFile) RemoveFromPath(path string, tagType meta.TagType) error {
+	return meta.RemoveTagFromPath(path, tagType)
 }
 
 func init() {
-	RegisterFormatReader(FileTypeMpeg, func(rs io.ReadSeeker, opts ParseOptions) (*TaggedFile, error) {
+	meta.RegisterFormatReader(meta.FileTypeMpeg, func(rs io.ReadSeeker, opts meta.ParseOptions) (*meta.TaggedFile, error) {
 		f, err := MpegFileReadFrom(rs, opts)
 		if err != nil {
 			return nil, err
 		}
 		return f.TaggedFile(), nil
 	})
-	RegisterFormatWriter(FileTypeMpeg, func(file *VerifiedFile, tag *Tag, writeOptions WriteOptions) error {
+	meta.RegisterFormatWriter(meta.FileTypeMpeg, func(file *meta.VerifiedFile, tag *meta.Tag, writeOptions meta.WriteOptions) error {
 		f := file.File()
 		switch tag.TagType() {
-		case TagTypeID3v2:
-			return WriteId3v2(f, tag, writeOptions)
-		case TagTypeID3v1:
-			return WriteId3v1(f, Id3v1TagFromTag(tag), writeOptions)
-		case TagTypeApe:
-			return ApeWriteTo(f, ApeTagFromTag(tag), writeOptions)
-		case TagTypeLyrics3v2:
-			return Lyrics3v2WriteTo(f, Lyrics3v2TagFromTag(tag), writeOptions)
-		case TagTypeLyrics3:
-			return Lyrics3v1WriteTo(f, Lyrics3TagFromTag(tag), writeOptions)
+		case meta.TagTypeID3v2:
+			return id3v2.WriteId3v2(f, tag, writeOptions)
+		case meta.TagTypeID3v1:
+			return id3v1.WriteId3v1(f, id3v1.Id3v1TagFromTag(tag), writeOptions)
+		case meta.TagTypeApe:
+			return ape.ApeWriteTo(f, ape.ApeTagFromTag(tag), writeOptions)
+		case meta.TagTypeLyrics3v2:
+			return lyrics3.Lyrics3v2WriteTo(f, lyrics3.Lyrics3v2TagFromTag(tag), writeOptions)
+		case meta.TagTypeLyrics3:
+			return lyrics3.Lyrics3v1WriteTo(f, lyrics3.Lyrics3TagFromTag(tag), writeOptions)
 		}
-		return &FileEncodingError{Source: &UnsupportedTagError{}}
+		return &meta.FileEncodingError{Source: &meta.UnsupportedTagError{}}
 	})
 }

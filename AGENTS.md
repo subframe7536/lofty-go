@@ -94,6 +94,10 @@ most debugging:
   (Rust quirk); APE `file_length` is the reader position after the trailing
   tag attempt, not EOF; MP4 `dfLa` payload contains a 4-byte FLAC block
   header before STREAMINFO.
+- **APE remaining size**: Go subtracts `8 + len(key) + valueSize` per item
+  loop iteration (actual item size); Rust `ape/tag/read.rs` only subtracts 4
+  (`value_size`), which is an upstream oversight that miscounts remaining
+  bytes. Go's strict accounting is an intentional deviation for robustness.
 
 ## Fixture paths
 
@@ -109,7 +113,10 @@ ID3v2 is a full native port — `Id3v2Tag`/`FrameList`/`Frame`/`FrameId`/
 restrictions, extended headers, unsynchronisation, v2.3↔v2.4 conversion,
 `Id3v2TagFlags`-aware writing (`create_tag`/`create_tag_v3` in
 `id3v2/write.go`). MP4 writes update `stco`/`co64`/`tfhd` chunk offsets
-(Rust `AtomWriterCompanion::update_offsets` parity).
+(Rust `AtomWriterCompanion::update_offsets` parity). MP4 write does not
+currently support promoting 32-bit boxes to 64-bit extended boxes when
+metadata crosses 4 GiB; attempting to write boxes >4 GiB returns
+`TooMuchDataError`.
 
 ## Conventions
 

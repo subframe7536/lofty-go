@@ -1,6 +1,10 @@
 package id3v2
 
-import "fmt"
+import (
+	"fmt"
+
+	meta "github.com/subframe7536/lofty-go/internal/meta"
+)
 
 // Id3v2ParseError is returned when an ID3v2 tag fails to parse.
 type Id3v2ParseError struct {
@@ -54,7 +58,7 @@ func (e *FrameIdParseError) Error() string {
 
 // FrameParseError is returned when an ID3v2 frame fails to parse.
 type FrameParseError struct {
-	ID      Option[FrameId]
+	ID      meta.Option[FrameId]
 	Message string
 	Source  error
 }
@@ -67,35 +71,35 @@ func (e *FrameParseError) Error() string {
 }
 func (e *FrameParseError) Unwrap() error { return e.Source }
 
-func frameParseError(id Option[FrameId], source error) *FrameParseError {
+func frameParseError(id meta.Option[FrameId], source error) *FrameParseError {
 	return &FrameParseError{ID: id, Source: source}
 }
 
-func frameParseErrorMsg(id Option[FrameId], message string) *FrameParseError {
+func frameParseErrorMsg(id meta.Option[FrameId], message string) *FrameParseError {
 	return &FrameParseError{ID: id, Message: message}
 }
 
 func frameParseUndersized(id FrameId) *FrameParseError {
-	return frameParseErrorMsg(Some(id), "frame isn't long enough to extract the necessary information")
+	return frameParseErrorMsg(meta.Some(id), "frame isn't long enough to extract the necessary information")
 }
 
 func frameParseMissingDLI(id FrameId) *FrameParseError {
-	return frameParseErrorMsg(Some(id), "encountered an encrypted frame without a data length indicator")
+	return frameParseErrorMsg(meta.Some(id), "encountered an encrypted frame without a data length indicator")
 }
 
 func frameParseInvalidLanguage(language [3]byte) *FrameParseError {
-	return frameParseErrorMsg(None[FrameId](),
+	return frameParseErrorMsg(meta.None[FrameId](),
 		fmt.Sprintf("invalid frame language found: %q (expected 3 ascii characters)", language))
 }
 
 func frameParseUnsupportedVersion(version Id3v2Version) *FrameParseError {
-	return frameParseErrorMsg(None[FrameId](),
+	return frameParseErrorMsg(meta.None[FrameId](),
 		"attempted to read frame in version "+id3v2VersionString(version))
 }
 
 // FrameEncodingError is returned when an ID3v2 frame fails to encode.
 type FrameEncodingError struct {
-	ID      Option[FrameId]
+	ID      meta.Option[FrameId]
 	Message string
 	Source  error
 }
@@ -108,25 +112,25 @@ func (e *FrameEncodingError) Error() string {
 }
 func (e *FrameEncodingError) Unwrap() error { return e.Source }
 
-func frameEncodingError(id Option[FrameId], source error) *FrameEncodingError {
+func frameEncodingError(id meta.Option[FrameId], source error) *FrameEncodingError {
 	return &FrameEncodingError{ID: id, Source: source}
 }
 
-func frameEncodingErrorMsg(id Option[FrameId], message string) *FrameEncodingError {
+func frameEncodingErrorMsg(id meta.Option[FrameId], message string) *FrameEncodingError {
 	return &FrameEncodingError{ID: id, Message: message}
 }
 
 func frameEncodingMissingDLI(id FrameId) *FrameEncodingError {
-	return frameEncodingErrorMsg(Some(id), "encountered an encrypted frame without a data length indicator")
+	return frameEncodingErrorMsg(meta.Some(id), "encountered an encrypted frame without a data length indicator")
 }
 
 func frameEncodingInvalidLanguage(language [3]byte) *FrameEncodingError {
-	return frameEncodingErrorMsg(None[FrameId](),
+	return frameEncodingErrorMsg(meta.None[FrameId](),
 		fmt.Sprintf("invalid frame language found: %q (expected 3 ascii characters)", language))
 }
 
 func frameEncodingUnsupportedVersion(version Id3v2Version) *FrameEncodingError {
-	return frameEncodingErrorMsg(None[FrameId](),
+	return frameEncodingErrorMsg(meta.None[FrameId](),
 		"attempted to write frame in version "+id3v2VersionString(version))
 }
 

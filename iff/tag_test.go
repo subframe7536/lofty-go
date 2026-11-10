@@ -7,6 +7,8 @@ import (
 	"os"
 	"testing"
 
+	meta "github.com/subframe7536/lofty-go/internal/meta"
+
 	"github.com/subframe7536/lofty-go/internal/testutil"
 )
 
@@ -42,37 +44,49 @@ func TestRiffInfoParse(t *testing.T) {
 	expected.InsertKV("IPRT", "1")
 
 	data := readRiffAsset(t)
-	po := NewParseOptions()
-	po.ParsingMode = ParsingModeStrict
-	parsed := parseRiffInfoList(bytes.NewReader(data), int64(len(data)), po)
+	po := meta.NewParseOptions()
+	po.ParsingMode = meta.ParsingModeStrict
+	parsed, perr := parseRiffInfoList(bytes.NewReader(data), int64(len(data)), po)
+	if perr != nil {
+		t.Fatal(perr)
+	}
 	riffInfoItemsEqual(t, expected, parsed)
 }
 
 func TestRiffInfoReRead(t *testing.T) {
 	data := readRiffAsset(t)
-	po := NewParseOptions()
-	po.ParsingMode = ParsingModeStrict
-	parsed := parseRiffInfoList(bytes.NewReader(data), int64(len(data)), po)
+	po := meta.NewParseOptions()
+	po.ParsingMode = meta.ParsingModeStrict
+	parsed, perr := parseRiffInfoList(bytes.NewReader(data), int64(len(data)), po)
+	if perr != nil {
+		t.Fatal(perr)
+	}
 	var buf bytes.Buffer
-	if err := parsed.DumpTo(&buf, NewWriteOptions()); err != nil {
+	if err := parsed.DumpTo(&buf, meta.NewWriteOptions()); err != nil {
 		t.Fatal(err)
 	}
 	// Skip the 12-byte LIST+size+INFO header
-	reParsed := parseRiffInfoList(bytes.NewReader(buf.Bytes()[12:]), int64(buf.Len()), po)
+	reParsed, rerr := parseRiffInfoList(bytes.NewReader(buf.Bytes()[12:]), int64(buf.Len()-12), po)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
 	riffInfoItemsEqual(t, parsed, reParsed)
 }
 
 func TestRiffInfoToTag(t *testing.T) {
 	data := readRiffAsset(t)
-	po := NewParseOptions()
-	po.ParsingMode = ParsingModeStrict
-	info := parseRiffInfoList(bytes.NewReader(data), int64(len(data)), po)
+	po := meta.NewParseOptions()
+	po.ParsingMode = meta.ParsingModeStrict
+	info, ierr := parseRiffInfoList(bytes.NewReader(data), int64(len(data)), po)
+	if ierr != nil {
+		t.Fatal(ierr)
+	}
 	tag := info.Tag()
 	testutil.VerifyTagCommon(t, tag, true, false)
 }
 
 func TestTagToRiffInfo(t *testing.T) {
-	info := RiffInfoTagFromTag(testutil.CreateTagCommon(TagTypeRiffInfo))
+	info := RiffInfoTagFromTag(testutil.CreateTagCommon(meta.TagTypeRiffInfo))
 	check := func(key, want string) {
 		t.Helper()
 		if got, _ := info.Get(key); got != want {
@@ -113,7 +127,7 @@ func TestRiffInfoCompanionTagRoundtrip(t *testing.T) {
 
 func readAiffTextTag(t *testing.T, data []byte) *AiffTextTag {
 	t.Helper()
-	po := NewParseOptions()
+	po := meta.NewParseOptions()
 	po.ReadProperties = false
 	f, err := AiffFileReadFrom(bytes.NewReader(data), po)
 	if err != nil {
@@ -167,7 +181,7 @@ func TestAiffTextReRead(t *testing.T) {
 	// Fake AIFF signature + chunks
 	writer := []byte{'F', 'O', 'R', 'M', 0, 0, 0, 0xC6, 'A', 'I', 'F', 'F'}
 	var buf bytes.Buffer
-	if err := tag.DumpTo(&buf, NewWriteOptions()); err != nil {
+	if err := tag.DumpTo(&buf, meta.NewWriteOptions()); err != nil {
 		t.Fatal(err)
 	}
 	writer = append(writer, buf.Bytes()...)
@@ -189,7 +203,7 @@ func TestAiffTextReReadOddSizedComments(t *testing.T) {
 	}
 	writer := []byte{'F', 'O', 'R', 'M', 0, 0, 0, 0, 'A', 'I', 'F', 'F'}
 	var buf bytes.Buffer
-	if err := tag.DumpTo(&buf, NewWriteOptions()); err != nil {
+	if err := tag.DumpTo(&buf, meta.NewWriteOptions()); err != nil {
 		t.Fatal(err)
 	}
 	writer = append(writer, buf.Bytes()...)
@@ -257,9 +271,9 @@ func TestAiffParseComtInvalidPadding(t *testing.T) {
 	}
 
 	// Strict mode should fail
-	po := NewParseOptions()
+	po := meta.NewParseOptions()
 	po.ReadProperties = false
-	po.ParsingMode = ParsingModeStrict
+	po.ParsingMode = meta.ParsingModeStrict
 	if _, err := AiffFileReadFrom(bytes.NewReader(aiff), po); err == nil {
 		t.Fatal("expected strict-mode failure")
 	}
@@ -271,28 +285,28 @@ func TestAiffTextToTag(t *testing.T) {
 		t.Fatal(err)
 	}
 	tag := readAiffTextTag(t, data).Tag()
-	if v, _ := tag.GetString(ItemKeyTrackTitle); v != "Foo title" {
+	if v, _ := tag.GetString(meta.ItemKeyTrackTitle); v != "Foo title" {
 		t.Fatalf("title = %q", v)
 	}
-	if v, _ := tag.GetString(ItemKeyTrackArtist); v != "Bar artist" {
+	if v, _ := tag.GetString(meta.ItemKeyTrackArtist); v != "Bar artist" {
 		t.Fatalf("artist = %q", v)
 	}
-	if v, _ := tag.GetString(ItemKeyCopyrightMessage); v != "Baz copyright" {
+	if v, _ := tag.GetString(meta.ItemKeyCopyrightMessage); v != "Baz copyright" {
 		t.Fatalf("copyright = %q", v)
 	}
-	comments := tag.GetStrings(ItemKeyComment)
+	comments := tag.GetStrings(meta.ItemKeyComment)
 	if len(comments) != 2 || comments[0] != "Qux annotation" || comments[1] != "Quux annotation" {
 		t.Fatalf("comments = %v", comments)
 	}
 }
 
 func TestTagToAiffText(t *testing.T) {
-	tag := NewTag(TagTypeAiffText)
-	tag.InsertText(ItemKeyTrackTitle, "Foo title")
-	tag.InsertText(ItemKeyTrackArtist, "Bar artist")
-	tag.InsertText(ItemKeyCopyrightMessage, "Baz copyright")
-	tag.PushUnchecked(NewTagItem(ItemKeyComment, ItemValueText("Qux annotation")))
-	tag.PushUnchecked(NewTagItem(ItemKeyComment, ItemValueText("Quux annotation")))
+	tag := meta.NewTag(meta.TagTypeAiffText)
+	tag.InsertText(meta.ItemKeyTrackTitle, "Foo title")
+	tag.InsertText(meta.ItemKeyTrackArtist, "Bar artist")
+	tag.InsertText(meta.ItemKeyCopyrightMessage, "Baz copyright")
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyComment, meta.ItemValueText("Qux annotation")))
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyComment, meta.ItemValueText("Quux annotation")))
 
 	aiffText := AiffTextTagFromTag(tag)
 	if v, _ := aiffText.Name.Get(); v != "Foo title" {

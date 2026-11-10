@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"os"
 	"testing"
+
+	"github.com/subframe7536/lofty-go/internal/util"
 )
 
 // --- src/mpeg/header.rs ---
@@ -17,7 +19,7 @@ func TestSearchForFrameSync(t *testing.T) {
 		{[]byte{0x00, 0x00, 0x01, 0xFF, 0xFB}, 3},
 		{[]byte{0x01, 0xFF}, -1},
 	} {
-		got, err := searchForFrameSync(bytes.NewReader(tc.data))
+		got, err := util.SearchForFrameSync(bytes.NewReader(tc.data))
 		if err != nil {
 			t.Fatal(err)
 		}

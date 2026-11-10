@@ -6,6 +6,8 @@ import (
 	"io"
 	"sort"
 
+	meta "github.com/subframe7536/lofty-go/internal/meta"
+
 	"github.com/subframe7536/lofty-go/internal/util"
 )
 
@@ -46,7 +48,7 @@ func (f *TextInformationFrame) frameBytes(ctx *frameEncodingContext) ([]byte, er
 	}
 	content, err := encoding.Encode(f.Value, false, ctx.writeOptions.LossyTextEncoding)
 	if err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	return append([]byte{uint8(encoding)}, content...), nil
 }
@@ -57,7 +59,7 @@ func (f *TextInformationFrame) cloneFrame() Frame {
 }
 
 // parseTextInformationFrame reads a TextInformationFrame; returns nil when the
-// content is empty (Rust `TextInformationFrame::parse` -> Option).
+// content is empty (Rust `TextInformationFrame::parse` -> meta.Option).
 func parseTextInformationFrame(reader io.Reader, id FrameId, frameFlags FrameFlags, version Id3v2Version) (*TextInformationFrame, error) {
 	var encByte [1]byte
 	if _, err := reader.Read(encByte[:]); err != nil {
@@ -69,7 +71,7 @@ func parseTextInformationFrame(reader io.Reader, id FrameId, frameFlags FrameFla
 	}
 	res, err := decodeText(reader, textDecodeOpts(encoding, false))
 	if err != nil {
-		return nil, frameParseError(Some(id), err)
+		return nil, frameParseError(meta.Some(id), err)
 	}
 	return &TextInformationFrame{
 		header:   NewFrameHeader(id, frameFlags),
@@ -106,7 +108,7 @@ func (f *UrlLinkFrame) frameName() string          { return "Url" }
 func (f *UrlLinkFrame) frameBytes(ctx *frameEncodingContext) ([]byte, error) {
 	b, err := util.TextEncodingLatin1.Encode(f.Content, false, ctx.writeOptions.LossyTextEncoding)
 	if err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	return b, nil
 }
@@ -131,7 +133,7 @@ func (f *UrlLinkFrame) SetUrl(url string) bool {
 func parseUrlLinkFrame(reader io.Reader, id FrameId, frameFlags FrameFlags) (*UrlLinkFrame, error) {
 	res, err := decodeText(reader, textDecodeOpts(util.TextEncodingLatin1, true))
 	if err != nil {
-		return nil, frameParseError(Some(id), err)
+		return nil, frameParseError(meta.Some(id), err)
 	}
 	if res.BytesRead == 0 {
 		return nil, nil
@@ -146,7 +148,7 @@ func parseUrlLinkFrame(reader io.Reader, id FrameId, frameFlags FrameFlags) (*Ur
 
 type languageFrame struct {
 	encoding    TextEncoding
-	language    Lang
+	language    meta.Lang
 	description string
 	content     string
 }
@@ -162,11 +164,11 @@ func parseLanguageFrame(reader io.Reader, version Id3v2Version) (*languageFrame,
 	}
 	var language [3]byte
 	if _, err := io.ReadFull(reader, language[:]); err != nil {
-		return nil, frameParseError(None[FrameId](), err)
+		return nil, frameParseError(meta.None[FrameId](), err)
 	}
 	descRes, err := decodeText(reader, textDecodeOpts(encoding, true))
 	if err != nil {
-		return nil, frameParseError(None[FrameId](), err)
+		return nil, frameParseError(meta.None[FrameId](), err)
 	}
 
 	var content string
@@ -177,25 +179,25 @@ func parseLanguageFrame(reader io.Reader, version Id3v2Version) (*languageFrame,
 		}
 		content, _, err = util.Utf16DecodeTerminatedMaybeBom(reader, order)
 		if err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 	} else {
 		res, err := decodeText(reader, textDecodeOpts(encoding, false))
 		if err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 		content = res.Content
 	}
 
 	return &languageFrame{
 		encoding:    encoding,
-		language:    Lang(language),
+		language:    meta.Lang(language),
 		description: descRes.Content,
 		content:     content,
 	}, nil
 }
 
-func languageFrameBytes(encoding TextEncoding, language [3]byte, description, content string, writeOptions WriteOptions) ([]byte, error) {
+func languageFrameBytes(encoding TextEncoding, language [3]byte, description, content string, writeOptions meta.WriteOptions) ([]byte, error) {
 	if writeOptions.UseID3v23 {
 		encoding = encoding.ToID3v23()
 	}
@@ -208,12 +210,12 @@ func languageFrameBytes(encoding TextEncoding, language [3]byte, description, co
 	bytes_ = append(bytes_, language[:]...)
 	desc, err := encoding.Encode(description, true, writeOptions.LossyTextEncoding)
 	if err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	bytes_ = append(bytes_, desc...)
 	cont, err := encoding.Encode(content, false, writeOptions.LossyTextEncoding)
 	if err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	bytes_ = append(bytes_, cont...)
 	return bytes_, nil
@@ -229,13 +231,13 @@ func isASCIIAlphabetic(c byte) bool {
 type CommentFrame struct {
 	header      FrameHeader
 	Encoding    TextEncoding
-	Language    Lang
+	Language    meta.Lang
 	Description string
 	Content     string
 }
 
 // NewCommentFrame creates a new [CommentFrame].
-func NewCommentFrame(encoding TextEncoding, language Lang, description, content string) *CommentFrame {
+func NewCommentFrame(encoding TextEncoding, language meta.Lang, description, content string) *CommentFrame {
 	return &CommentFrame{
 		header:      NewFrameHeader(FrameIdValid("COMM"), FrameFlags{}),
 		Encoding:    encoding,
@@ -289,13 +291,13 @@ func parseCommentFrame(reader io.Reader, frameFlags FrameFlags, version Id3v2Ver
 type UnsynchronizedTextFrame struct {
 	header      FrameHeader
 	Encoding    TextEncoding
-	Language    Lang
+	Language    meta.Lang
 	Description string
 	Content     string
 }
 
 // NewUnsynchronizedTextFrame creates a new [UnsynchronizedTextFrame].
-func NewUnsynchronizedTextFrame(encoding TextEncoding, language Lang, description, content string) *UnsynchronizedTextFrame {
+func NewUnsynchronizedTextFrame(encoding TextEncoding, language meta.Lang, description, content string) *UnsynchronizedTextFrame {
 	return &UnsynchronizedTextFrame{
 		header:      NewFrameHeader(FrameIdValid("USLT"), FrameFlags{}),
 		Encoding:    encoding,
@@ -383,12 +385,12 @@ func (f *ExtendedTextFrame) frameBytes(ctx *frameEncodingContext) ([]byte, error
 	bytes_ := []byte{uint8(encoding)}
 	desc, err := encoding.Encode(f.Description, true, ctx.writeOptions.LossyTextEncoding)
 	if err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	bytes_ = append(bytes_, desc...)
 	cont, err := encoding.Encode(f.Content, false, ctx.writeOptions.LossyTextEncoding)
 	if err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	return append(bytes_, cont...), nil
 }
@@ -410,21 +412,21 @@ func parseExtendedTextFrame(reader io.Reader, frameFlags FrameFlags, version Id3
 		}
 		descRes, err := decodeText(reader, textDecodeOpts(encoding, true))
 		if err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 
 		var frameContent string
 		if encoding != util.TextEncodingUTF16 {
 			res, err := decodeText(reader, textDecodeOpts(encoding, false))
 			if err != nil {
-				return nil, frameParseError(None[FrameId](), err)
+				return nil, frameParseError(meta.None[FrameId](), err)
 			}
 			frameContent = res.Content
 		} else {
 			// It's possible for the description to be the only string with a BOM
 			rawText, err := io.ReadAll(reader)
 			if err != nil {
-				return nil, frameParseError(None[FrameId](), err)
+				return nil, frameParseError(meta.None[FrameId](), err)
 			}
 			if len(rawText) == 0 {
 				frameContent = ""
@@ -442,19 +444,19 @@ func parseExtendedTextFrame(reader io.Reader, frameFlags FrameFlags, version Id3
 				case [2]byte{0xFE, 0xFF}:
 					order = util.BigEndian
 				case [2]byte{0x00, 0x00}:
-					return nil, frameParseError(None[FrameId](), &TextDecodingError{
+					return nil, frameParseError(meta.None[FrameId](), &meta.TextDecodingError{
 						Encoding: util.TextEncodingUTF16,
 						Message:  "UTF-16 string has an invalid byte order mark",
 					})
 				default:
-					return nil, frameParseError(None[FrameId](), &TextDecodingError{
+					return nil, frameParseError(meta.None[FrameId](), &meta.TextDecodingError{
 						Encoding: util.TextEncodingUTF16,
 						Message:  "UTF-16 string has an invalid byte order mark",
 					})
 				}
 				frameContent, err = util.Utf16DecodeBytes(rawText, order)
 				if err != nil {
-					return nil, frameParseError(None[FrameId](), err)
+					return nil, frameParseError(meta.None[FrameId](), err)
 				}
 			}
 		}
@@ -512,12 +514,12 @@ func (f *ExtendedUrlFrame) frameBytes(ctx *frameEncodingContext) ([]byte, error)
 	bytes_ := []byte{uint8(encoding)}
 	desc, err := encoding.Encode(f.Description, true, ctx.writeOptions.LossyTextEncoding)
 	if err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	bytes_ = append(bytes_, desc...)
 	cont, err := encoding.Encode(f.Content, false, ctx.writeOptions.LossyTextEncoding)
 	if err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	return append(bytes_, cont...), nil
 }
@@ -539,11 +541,11 @@ func parseExtendedUrlFrame(reader io.Reader, frameFlags FrameFlags, version Id3v
 		}
 		descRes, err := decodeText(reader, textDecodeOpts(encoding, true))
 		if err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 		contentRes, err := decodeText(reader, textDecodeOpts(util.TextEncodingLatin1, false))
 		if err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 		return &ExtendedUrlFrame{
 			header:      NewFrameHeader(FrameIdValid("WXXX"), frameFlags),
@@ -608,12 +610,12 @@ func (f *KeyValueFrame) frameBytes(ctx *frameEncodingContext) ([]byte, error) {
 	for _, kv := range f.KeyValuePairs {
 		k, err := encoding.Encode(kv[0], true, ctx.writeOptions.LossyTextEncoding)
 		if err != nil {
-			return nil, frameEncodingError(None[FrameId](), err)
+			return nil, frameEncodingError(meta.None[FrameId](), err)
 		}
 		content = append(content, k...)
 		v, err := encoding.Encode(kv[1], true, ctx.writeOptions.LossyTextEncoding)
 		if err != nil {
-			return nil, frameEncodingError(None[FrameId](), err)
+			return nil, frameEncodingError(meta.None[FrameId](), err)
 		}
 		content = append(content, v...)
 	}
@@ -629,7 +631,7 @@ func (f *KeyValueFrame) cloneFrame() Frame {
 func parseKeyValueFrame(reader io.Reader, id FrameId, frameFlags FrameFlags, version Id3v2Version) (*KeyValueFrame, error) {
 	var encByte [1]byte
 	if _, err := io.ReadFull(reader, encByte[:]); err != nil {
-		return nil, frameParseError(Some(id), err)
+		return nil, frameParseError(meta.Some(id), err)
 	}
 	encoding, err := verifyEncoding(encByte[0], version)
 	if err != nil {
@@ -642,7 +644,7 @@ func parseKeyValueFrame(reader io.Reader, id FrameId, frameFlags FrameFlags, ver
 	// The first key/value pair may be the only string with a BOM
 	firstKey, err := decodeText(reader, opts)
 	if err != nil {
-		return nil, frameParseError(Some(id), err)
+		return nil, frameParseError(meta.Some(id), err)
 	}
 	if firstKey.BytesRead == 0 {
 		return nil, nil
@@ -652,18 +654,18 @@ func parseKeyValueFrame(reader io.Reader, id FrameId, frameFlags FrameFlags, ver
 	}
 	firstValue, err := decodeText(reader, opts)
 	if err != nil {
-		return nil, frameParseError(Some(id), err)
+		return nil, frameParseError(meta.Some(id), err)
 	}
 	values = append(values, [2]string{firstKey.Content, firstValue.Content})
 
 	for {
 		key, err := decodeText(reader, opts)
 		if err != nil {
-			return nil, frameParseError(Some(id), err)
+			return nil, frameParseError(meta.Some(id), err)
 		}
 		value, err := decodeText(reader, opts)
 		if err != nil {
-			return nil, frameParseError(Some(id), err)
+			return nil, frameParseError(meta.Some(id), err)
 		}
 		if key.BytesRead == 0 || value.BytesRead == 0 {
 			break
@@ -708,12 +710,12 @@ func (f *PopularimeterFrame) frameEqual(other Frame) bool {
 }
 
 func (f *PopularimeterFrame) frameIsEmpty() (bool, bool) { return false, false }
-func (f *PopularimeterFrame) frameName() string          { return "Popularimeter" }
+func (f *PopularimeterFrame) frameName() string          { return "meta.Popularimeter" }
 
 func (f *PopularimeterFrame) frameBytes(ctx *frameEncodingContext) ([]byte, error) {
 	content, err := util.TextEncodingLatin1.Encode(f.Email, true, ctx.writeOptions.LossyTextEncoding)
 	if err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	content = append(content, f.Rating)
 	if f.Counter <= 0xFFFFFFFF {
@@ -737,12 +739,12 @@ func (f *PopularimeterFrame) cloneFrame() Frame {
 	return &c
 }
 
-// PopularimeterFrameFromPopularimeter creates a [PopularimeterFrame] from a generic [Popularimeter].
-func PopularimeterFrameFromPopularimeter(p Popularimeter) *PopularimeterFrame {
+// PopularimeterFrameFromPopularimeter creates a [PopularimeterFrame] from a generic [meta.Popularimeter].
+func PopularimeterFrameFromPopularimeter(p meta.Popularimeter) *PopularimeterFrame {
 	return &PopularimeterFrame{
 		header:  NewFrameHeader(FrameIdValid("POPM"), FrameFlags{}),
 		Email:   p.Email(),
-		Rating:  p.MappedValue(TagTypeID3v2),
+		Rating:  p.MappedValue(meta.TagTypeID3v2),
 		Counter: p.PlayCounter,
 	}
 }
@@ -751,15 +753,15 @@ func parsePopularimeterFrame(reader io.Reader, frameFlags FrameFlags) (*Populari
 	ret, err := func() (*PopularimeterFrame, error) {
 		email, err := decodeText(reader, textDecodeOpts(util.TextEncodingLatin1, true))
 		if err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 		var ratingByte [1]byte
 		if _, err := io.ReadFull(reader, ratingByte[:]); err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 		counterContent, err := io.ReadAll(reader)
 		if err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 		var counter uint64
 		if len(counterContent) > 8 {
@@ -817,7 +819,7 @@ func (f *UniqueFileIdentifierFrame) frameName() string { return "UniqueFileIdent
 func (f *UniqueFileIdentifierFrame) frameBytes(ctx *frameEncodingContext) ([]byte, error) {
 	content, err := util.TextEncodingLatin1.Encode(f.Owner, true, ctx.writeOptions.LossyTextEncoding)
 	if err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	return append(content, f.Identifier...), nil
 }
@@ -828,23 +830,23 @@ func (f *UniqueFileIdentifierFrame) cloneFrame() Frame {
 	return &c
 }
 
-func parseUniqueFileIdentifierFrame(reader io.Reader, frameFlags FrameFlags, parseMode ParsingMode) (*UniqueFileIdentifierFrame, error) {
+func parseUniqueFileIdentifierFrame(reader io.Reader, frameFlags FrameFlags, parseMode meta.ParsingMode) (*UniqueFileIdentifierFrame, error) {
 	ret, err := func() (*UniqueFileIdentifierFrame, error) {
 		ownerRes, err := decodeText(reader, textDecodeOpts(util.TextEncodingLatin1, true))
 		if err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 		var owner string
 		if valid := ownerRes.TextOrNone(); valid.IsSome() {
 			owner, _ = valid.Get()
-		} else if parseMode == ParsingModeBestAttempt {
+		} else if parseMode == meta.ParsingModeBestAttempt {
 			owner = ""
 		} else {
-			return nil, frameParseErrorMsg(None[FrameId](), "empty owner field")
+			return nil, frameParseErrorMsg(meta.None[FrameId](), "empty owner field")
 		}
 		identifier, err := io.ReadAll(reader)
 		if err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 		return &UniqueFileIdentifierFrame{
 			header:     NewFrameHeader(FrameIdValid("UFID"), frameFlags),
@@ -902,17 +904,17 @@ func (f *OwnershipFrame) frameBytes(ctx *frameEncodingContext) ([]byte, error) {
 	bytes_ := []byte{uint8(encoding)}
 	price, err := util.TextEncodingLatin1.Encode(f.PricePaid, true, ctx.writeOptions.LossyTextEncoding)
 	if err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	bytes_ = append(bytes_, price...)
 	if len(f.DateOfPurchase) < 8 {
-		return nil, frameEncodingErrorMsg(Some(FrameIdValid("OWNE")),
+		return nil, frameEncodingErrorMsg(meta.Some(FrameIdValid("OWNE")),
 			"`date_of_purchase` field is too short (must be 8 characters)")
 	}
 	bytes_ = append(bytes_, f.DateOfPurchase[:8]...)
 	seller, err := encoding.Encode(f.Seller, false, ctx.writeOptions.LossyTextEncoding)
 	if err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	return append(bytes_, seller...), nil
 }
@@ -929,24 +931,24 @@ func parseOwnershipFrame(reader io.Reader, frameFlags FrameFlags) (*OwnershipFra
 			return nil, nil
 		}
 		if encByte[0] > 3 {
-			return nil, frameParseError(None[FrameId](), &BadTextEncodingError{})
+			return nil, frameParseError(meta.None[FrameId](), &meta.BadTextEncodingError{})
 		}
 		encoding := TextEncoding(encByte[0])
 		priceRes, err := decodeText(reader, textDecodeOpts(util.TextEncodingLatin1, true))
 		if err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 		var dateBytes [8]byte
 		if _, err := io.ReadFull(reader, dateBytes[:]); err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 		dateStr, err := util.Utf8DecodeStr(dateBytes[:])
 		if err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 		sellerRes, err := decodeText(reader, textDecodeOpts(encoding, false))
 		if err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 		return &OwnershipFrame{
 			header:         NewFrameHeader(FrameIdValid("OWNE"), frameFlags),
@@ -968,11 +970,11 @@ func parseOwnershipFrame(reader io.Reader, frameFlags FrameFlags) (*OwnershipFra
 type TimestampFrame struct {
 	header    FrameHeader
 	Encoding  TextEncoding
-	Timestamp Timestamp
+	Timestamp meta.Timestamp
 }
 
 // NewTimestampFrame creates a new [TimestampFrame].
-func NewTimestampFrame(id FrameId, encoding TextEncoding, timestamp Timestamp) *TimestampFrame {
+func NewTimestampFrame(id FrameId, encoding TextEncoding, timestamp meta.Timestamp) *TimestampFrame {
 	return &TimestampFrame{
 		header:    NewFrameHeader(id, FrameFlags{}),
 		Encoding:  encoding,
@@ -991,7 +993,7 @@ func (f *TimestampFrame) frameEqual(other Frame) bool {
 }
 
 func (f *TimestampFrame) frameIsEmpty() (bool, bool) { return false, false }
-func (f *TimestampFrame) frameName() string          { return "Timestamp" }
+func (f *TimestampFrame) frameName() string          { return "meta.Timestamp" }
 
 func (f *TimestampFrame) frameBytes(ctx *frameEncodingContext) ([]byte, error) {
 	encoding := f.Encoding
@@ -999,11 +1001,11 @@ func (f *TimestampFrame) frameBytes(ctx *frameEncodingContext) ([]byte, error) {
 		encoding = encoding.ToID3v23()
 	}
 	if err := f.Timestamp.Verify(); err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	encoded, err := encoding.Encode(f.Timestamp.String(), false, ctx.writeOptions.LossyTextEncoding)
 	if err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	return append([]byte{uint8(encoding)}, encoded...), nil
 }
@@ -1013,26 +1015,26 @@ func (f *TimestampFrame) cloneFrame() Frame {
 	return &c
 }
 
-func parseTimestampFrame(reader io.Reader, id FrameId, frameFlags FrameFlags, parseMode ParsingMode) (*TimestampFrame, error) {
+func parseTimestampFrame(reader io.Reader, id FrameId, frameFlags FrameFlags, parseMode meta.ParsingMode) (*TimestampFrame, error) {
 	var encByte [1]byte
 	if _, err := io.ReadFull(reader, encByte[:]); err != nil {
-		return nil, frameParseError(Some(id), err)
+		return nil, frameParseError(meta.Some(id), err)
 	}
 	if encByte[0] > 3 {
-		if parseMode != ParsingModeRelaxed {
-			return nil, frameParseError(Some(id), &BadTextEncodingError{})
+		if parseMode != meta.ParsingModeRelaxed {
+			return nil, frameParseError(meta.Some(id), &meta.BadTextEncodingError{})
 		}
 		return nil, nil
 	}
 	encoding := TextEncoding(encByte[0])
 	res, err := decodeText(reader, textDecodeOpts(encoding, false))
 	if err != nil {
-		return nil, frameParseError(Some(id), err)
+		return nil, frameParseError(meta.Some(id), err)
 	}
-	tsOpt, err := TimestampParse(bytes.NewReader([]byte(res.Content)), parseMode)
+	tsOpt, err := util.TimestampParse(bytes.NewReader([]byte(res.Content)), parseMode)
 	if err != nil {
-		if parseMode != ParsingModeRelaxed {
-			return nil, frameParseError(Some(id), err)
+		if parseMode != meta.ParsingModeRelaxed {
+			return nil, frameParseError(meta.Some(id), err)
 		}
 		return nil, nil
 	}
@@ -1184,7 +1186,7 @@ func parseEventTimingCodesFrame(reader io.Reader, frameFlags FrameFlags) (*Event
 		}
 		tf, err := TimestampFormatFromU8(fmtByte[0])
 		if err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 		var events []Event
 		for {
@@ -1194,7 +1196,7 @@ func parseEventTimingCodesFrame(reader io.Reader, frameFlags FrameFlags) (*Event
 				break
 			}
 			if _, err := io.ReadFull(reader, evByte[1:5]); err != nil {
-				return nil, frameParseError(None[FrameId](), err)
+				return nil, frameParseError(meta.None[FrameId](), err)
 			}
 			events = append(events, Event{
 				EventType: EventTypeFromU8(evByte[0]),
@@ -1248,7 +1250,7 @@ func (f *PrivateFrame) frameName() string          { return "Private" }
 func (f *PrivateFrame) frameBytes(ctx *frameEncodingContext) ([]byte, error) {
 	content, err := util.TextEncodingLatin1.Encode(f.Owner, true, ctx.writeOptions.LossyTextEncoding)
 	if err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	return append(content, f.PrivateData...), nil
 }
@@ -1267,7 +1269,7 @@ func parsePrivateFrame(reader io.Reader, frameFlags FrameFlags) (*PrivateFrame, 
 		}
 		data, err := io.ReadAll(reader)
 		if err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 		return &PrivateFrame{
 			header:      NewFrameHeader(FrameIdValid("PRIV"), frameFlags),
@@ -1311,7 +1313,7 @@ type ChannelInformation struct {
 	ChannelType          ChannelType
 	VolumeAdjustment     int16
 	BitsRepresentingPeak uint8
-	PeakVolume           Option[[]byte]
+	PeakVolume           meta.Option[[]byte]
 }
 
 // RelativeVolumeAdjustmentFrame is an ID3v2 "RVA2" frame.
@@ -1345,7 +1347,7 @@ func (f *RelativeVolumeAdjustmentFrame) frameName() string          { return "Re
 func (f *RelativeVolumeAdjustmentFrame) frameBytes(ctx *frameEncodingContext) ([]byte, error) {
 	content, err := util.TextEncodingLatin1.Encode(f.Identification, true, ctx.writeOptions.LossyTextEncoding)
 	if err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	for channelType, info := range f.Channels {
 		bitsRepresentingPeak := info.BitsRepresentingPeak
@@ -1393,11 +1395,11 @@ func (f *RelativeVolumeAdjustmentFrame) cloneFrame() Frame {
 	return &c
 }
 
-func parseRelativeVolumeAdjustmentFrame(reader io.Reader, frameFlags FrameFlags, parseMode ParsingMode) (*RelativeVolumeAdjustmentFrame, error) {
+func parseRelativeVolumeAdjustmentFrame(reader io.Reader, frameFlags FrameFlags, parseMode meta.ParsingMode) (*RelativeVolumeAdjustmentFrame, error) {
 	ret, err := func() (*RelativeVolumeAdjustmentFrame, error) {
 		identRes, err := decodeText(reader, textDecodeOpts(util.TextEncodingLatin1, true))
 		if err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 		channels := make(map[ChannelType]ChannelInformation)
 		for {
@@ -1408,33 +1410,33 @@ func parseRelativeVolumeAdjustmentFrame(reader io.Reader, frameFlags FrameFlags,
 			}
 			channelType, err := ChannelTypeFromU8(ctByte[0])
 			if err != nil {
-				if parseMode == ParsingModeBestAttempt {
+				if parseMode == meta.ParsingModeBestAttempt {
 					channelType = ChannelTypeOther
 				} else {
-					return nil, frameParseError(None[FrameId](), err)
+					return nil, frameParseError(meta.None[FrameId](), err)
 				}
 			}
 			var vaBytes [2]byte
 			if _, err := io.ReadFull(reader, vaBytes[:]); err != nil {
-				return nil, frameParseError(None[FrameId](), err)
+				return nil, frameParseError(meta.None[FrameId](), err)
 			}
 			volumeAdjustment := int16(binary.BigEndian.Uint16(vaBytes[:]))
 			var peakBits [1]byte
 			if _, err := io.ReadFull(reader, peakBits[:]); err != nil {
-				return nil, frameParseError(None[FrameId](), err)
+				return nil, frameParseError(meta.None[FrameId](), err)
 			}
 			bitsRepresentingPeak := peakBits[0]
-			var peakVolume Option[[]byte]
+			var peakVolume meta.Option[[]byte]
 			if bitsRepresentingPeak > 0 {
 				peakBytes := (int(bitsRepresentingPeak) + 7) >> 3
-				pv, err := tryByteSlice(peakBytes)
+				pv, err := util.TryByteSlice(peakBytes)
 				if err != nil {
-					return nil, frameParseError(None[FrameId](), err)
+					return nil, frameParseError(meta.None[FrameId](), err)
 				}
 				if _, err := io.ReadFull(reader, pv); err != nil {
-					return nil, frameParseError(None[FrameId](), err)
+					return nil, frameParseError(meta.None[FrameId](), err)
 				}
-				peakVolume = Some(pv)
+				peakVolume = meta.Some(pv)
 			}
 			channels[channelType] = ChannelInformation{
 				ChannelType:          channelType,
@@ -1499,7 +1501,7 @@ func (f *BinaryFrame) AsBytes() []byte {
 func parseBinaryFrame(reader io.Reader, id FrameId, frameFlags FrameFlags) (*BinaryFrame, error) {
 	data, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, frameParseError(Some(id), err)
+		return nil, frameParseError(meta.Some(id), err)
 	}
 	return &BinaryFrame{header: NewFrameHeader(id, frameFlags), Data: data}, nil
 }
@@ -1510,11 +1512,11 @@ func parseBinaryFrame(reader io.Reader, id FrameId, frameFlags FrameFlags) (*Bin
 type AttachedPictureFrame struct {
 	header   FrameHeader
 	Encoding TextEncoding
-	Picture  Picture
+	Picture  meta.Picture
 }
 
 // NewAttachedPictureFrame creates a new [AttachedPictureFrame].
-func NewAttachedPictureFrame(encoding TextEncoding, picture Picture) *AttachedPictureFrame {
+func NewAttachedPictureFrame(encoding TextEncoding, picture meta.Picture) *AttachedPictureFrame {
 	return &AttachedPictureFrame{
 		header:   NewFrameHeader(FrameIdValid("APIC"), FrameFlags{}),
 		Encoding: encoding,
@@ -1532,7 +1534,7 @@ func (f *AttachedPictureFrame) frameEqual(other Frame) bool {
 		f.Encoding == o.Encoding && picturesEqual(f.Picture, o.Picture)
 }
 
-func picturesEqual(a, b Picture) bool {
+func picturesEqual(a, b meta.Picture) bool {
 	if a.PicType() != b.PicType() {
 		return false
 	}
@@ -1563,12 +1565,12 @@ func (f *AttachedPictureFrame) frameBytes(ctx *frameEncodingContext) ([]byte, er
 	desc, _ := f.Picture.Description()
 	descBytes, err := encoding.Encode(desc, true, ctx.writeOptions.LossyTextEncoding)
 	if err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	data = append(data, descBytes...)
 	data = append(data, f.Picture.Data()...)
 	if uint64(len(data)) > uint64(^uint32(0)) {
-		return nil, frameEncodingError(None[FrameId](), &TooMuchDataError{})
+		return nil, frameEncodingError(meta.None[FrameId](), &meta.TooMuchDataError{})
 	}
 	return data, nil
 }
@@ -1582,59 +1584,59 @@ func parseAttachedPictureFrame(reader io.Reader, frameFlags FrameFlags, version 
 	ret, err := func() (*AttachedPictureFrame, error) {
 		var encByte [1]byte
 		if _, err := io.ReadFull(reader, encByte[:]); err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 		if encByte[0] > 3 {
-			return nil, frameParseError(None[FrameId](), &BadTextEncodingError{})
+			return nil, frameParseError(meta.None[FrameId](), &meta.BadTextEncodingError{})
 		}
 		encoding := TextEncoding(encByte[0])
 
-		var mimeType *MimeType
+		var mimeType *meta.MimeType
 		if version == id3v2Version2 {
 			var format [3]byte
 			if _, err := io.ReadFull(reader, format[:]); err != nil {
-				return nil, frameParseError(None[FrameId](), err)
+				return nil, frameParseError(meta.None[FrameId](), err)
 			}
 			switch string(format[:]) {
 			case "PNG":
-				m := MimeTypePng
+				m := meta.MimeTypePng
 				mimeType = &m
 			case "JPG":
-				m := MimeTypeJpeg
+				m := meta.MimeTypeJpeg
 				mimeType = &m
 			default:
-				return nil, frameParseErrorMsg(Some(FrameIdValid("APIC")),
+				return nil, frameParseErrorMsg(meta.Some(FrameIdValid("APIC")),
 					"unexpected picture format \""+string(format[:])+"\"")
 			}
 		} else {
 			mimeRes, err := decodeText(reader, textDecodeOpts(util.TextEncodingLatin1, true))
 			if err != nil {
-				return nil, frameParseError(None[FrameId](), err)
+				return nil, frameParseError(meta.None[FrameId](), err)
 			}
 			if ms := mimeRes.TextOrNone(); ms.IsSome() {
 				s, _ := ms.Get()
-				m := MimeTypeFromStr(s)
+				m := meta.MimeTypeFromStr(s)
 				mimeType = &m
 			}
 		}
 
 		var typeByte [1]byte
 		if _, err := io.ReadFull(reader, typeByte[:]); err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
-		picType := PictureType(typeByte[0])
+		picType := meta.PictureType(typeByte[0])
 
 		descRes, err := decodeText(reader, textDecodeOpts(encoding, true))
 		if err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 
 		data, err := io.ReadAll(reader)
 		if err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 
-		pb := PictureUnchecked(data).PicType(picType)
+		pb := meta.PictureUnchecked(data).PicType(picType)
 		if mimeType != nil {
 			pb = pb.MimeType(*mimeType)
 		}
@@ -1660,11 +1662,11 @@ func setFrameErrID(err error, id FrameId) error {
 	switch e := err.(type) {
 	case *FrameParseError:
 		if e.ID.IsNone() {
-			e.ID = Some(id)
+			e.ID = meta.Some(id)
 		}
 	case *FrameEncodingError:
 		if e.ID.IsNone() {
-			e.ID = Some(id)
+			e.ID = meta.Some(id)
 		}
 	}
 	return err

@@ -18,15 +18,32 @@ func NewProbe(reader io.ReadSeeker) *Probe {
 	return &Probe{inner: reader}
 }
 
-// ProbeWithFileType creates a new [Probe] with the [FileType] already known.
-// NewProbeFromPath creates a [Probe] from a path, mirroring Rust's `Probe::open`.
+// NewProbeFromPath creates a [Probe] from a path, mirroring Rust's
+// `Probe::open`: the file type is guessed from the path's extension.
+//
+// The probe owns the open file; call [Probe.Close] when done.
 func NewProbeFromPath(path string) (*Probe, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, &FileParseError{Source: err}
 	}
-	return &Probe{inner: f, fTy: None[FileType]()}, nil
+	var fTy Option[FileType]
+	if ft, ok := FileTypeFromPath(path); ok {
+		fTy = Some(ft)
+	}
+	return &Probe{inner: f, fTy: fTy}, nil
 }
+
+// Close closes the underlying reader when it is an [io.Closer] (e.g. a probe
+// created by [NewProbeFromPath]).
+func (p *Probe) Close() error {
+	if c, ok := p.inner.(io.Closer); ok {
+		return c.Close()
+	}
+	return nil
+}
+
+// ProbeWithFileType creates a new [Probe] with the [FileType] already known.
 
 func ProbeWithFileType(reader io.ReadSeeker, fileType FileType) *Probe {
 	return &Probe{inner: reader, fTy: Some(fileType)}
@@ -192,9 +209,8 @@ func (p *Probe) Read() (*TaggedFile, error) {
 	if !ok {
 		return nil, &FileParseError{Source: &UnknownFormatError{}}
 	}
-	if _, err := p.inner.Seek(0, io.SeekStart); err != nil {
-		return nil, &FileParseError{Source: err}
-	}
+	// Like Rust's `read_inner`, reading begins at the reader's current
+	// position; `GuessFileType` restores it after sniffing.
 	return ReadFormat(fTy, p.inner, options)
 }
 

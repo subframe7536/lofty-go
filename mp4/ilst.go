@@ -9,6 +9,9 @@ import (
 	"math"
 	"strings"
 	"unicode/utf8"
+
+	meta "github.com/subframe7536/lofty-go/internal/meta"
+	"github.com/subframe7536/lofty-go/internal/util"
 )
 
 // AtomDataKind identifies the payload variant of an [AtomData], mirroring
@@ -28,13 +31,13 @@ const (
 // AtomData is a single `data` atom payload inside an [Atom].
 type AtomData struct {
 	Kind AtomDataKind
-	Text string   // UTF8/UTF16
-	Bool bool     // Bool
-	Pic  Picture  // Picture
-	Int  int64    // SignedInt
-	Uint uint64   // UnsignedInt
-	Code DataType // Unknown — the original data-type code
-	Data []byte   // Unknown — raw payload
+	Text string       // UTF8/UTF16
+	Bool bool         // Bool
+	Pic  meta.Picture // meta.Picture
+	Int  int64        // SignedInt
+	Uint uint64       // UnsignedInt
+	Code DataType     // Unknown — the original data-type code
+	Data []byte       // Unknown — raw payload
 }
 
 // DataType is the `data` atom's type code, mirroring Rust's `DataType`.
@@ -106,7 +109,7 @@ func ilstIdentFromString(key string) AtomIdent {
 	return FourccIdent(key)
 }
 
-// key returns the string form used for ItemKey lookups.
+// key returns the string form used for meta.ItemKey lookups.
 func (i AtomIdent) key() string {
 	if i.Freeform {
 		return "----:" + i.Mean + ":" + i.Name
@@ -183,8 +186,8 @@ func (l *Ilst) ReplaceAtom(atom Atom) {
 }
 
 // InsertPicture appends a picture to the shared `covr` atom.
-func (l *Ilst) InsertPicture(p Picture) {
-	p.SetPicType(PictureTypeOther)
+func (l *Ilst) InsertPicture(p meta.Picture) {
+	p.SetPicType(meta.PictureTypeOther)
 	d := AtomData{Kind: AtomDataPicture, Pic: p}
 	if a := l.Get(FourccIdent("covr")); a != nil {
 		a.Data = append(a.Data, d)
@@ -204,13 +207,13 @@ func (l *Ilst) Remove(ident AtomIdent) {
 }
 
 // Tag converts the `Ilst` to a generic [Tag] (Rust `SplitTag`/`From<Ilst> for Tag`).
-func (l *Ilst) Tag() *Tag {
-	tag := NewTag(TagTypeMp4Ilst)
+func (l *Ilst) Tag() *meta.Tag {
+	tag := meta.NewTag(meta.TagTypeMp4Ilst)
 	var remainder []Atom
 
 	for _, atom := range l.atoms {
 		keyStr := atom.Ident.key()
-		ik, mapped := ItemKeyFromKey(TagTypeMp4Ilst, keyStr)
+		ik, mapped := meta.ItemKeyFromKey(meta.TagTypeMp4Ilst, keyStr)
 		isCovr := !atom.Ident.Freeform && atom.Ident.Fourcc == [4]byte{'c', 'o', 'v', 'r'}
 		if !mapped && !isCovr {
 			remainder = append(remainder, atom)
@@ -222,17 +225,17 @@ func (l *Ilst) Tag() *Tag {
 			switch d.Kind {
 			case AtomDataUTF8, AtomDataUTF16:
 				if mapped {
-					if ik == ItemKeyPopularimeter {
+					if ik == meta.ItemKeyPopularimeter {
 						if rate, ok := u8FromString(d.Text); ok {
-							if popm, ok := PopularimeterMapped("", TagTypeMp4Ilst, rate, 0); ok {
-								tag.PushUnchecked(NewTagItem(ik, ItemValueText(popm.String())))
+							if popm, ok := meta.PopularimeterMapped("", meta.TagTypeMp4Ilst, rate, 0); ok {
+								tag.PushUnchecked(meta.NewTagItem(ik, meta.ItemValueText(popm.String())))
 								continue
 							}
 						}
 						remaining = append(remaining, d)
 						continue
 					}
-					tag.PushUnchecked(NewTagItem(ik, ItemValueText(d.Text)))
+					tag.PushUnchecked(meta.NewTagItem(ik, meta.ItemValueText(d.Text)))
 				}
 			case AtomDataBool:
 				if mapped {
@@ -240,7 +243,7 @@ func (l *Ilst) Tag() *Tag {
 					if d.Bool {
 						text = "1"
 					}
-					tag.PushUnchecked(NewTagItem(ik, ItemValueText(text)))
+					tag.PushUnchecked(meta.NewTagItem(ik, meta.ItemValueText(text)))
 				}
 			case AtomDataPicture:
 				if isCovr {
@@ -248,10 +251,10 @@ func (l *Ilst) Tag() *Tag {
 				}
 			case AtomDataUnknown:
 				if d.Code == 0 && len(d.Data) >= 6 && !atom.Ident.Freeform {
-					numKey, totKey := ItemKeyTrackNumber, ItemKeyTrackTotal
+					numKey, totKey := meta.ItemKeyTrackNumber, meta.ItemKeyTrackTotal
 					fourcc := mp4AtomName(atom.Ident.Fourcc)
 					if fourcc == "disk" {
-						numKey, totKey = ItemKeyDiscNumber, ItemKeyDiscTotal
+						numKey, totKey = meta.ItemKeyDiscNumber, meta.ItemKeyDiscTotal
 					} else if fourcc != "trkn" {
 						remaining = append(remaining, d)
 						continue
@@ -259,10 +262,10 @@ func (l *Ilst) Tag() *Tag {
 					cur := binary.BigEndian.Uint16(d.Data[2:])
 					tot := binary.BigEndian.Uint16(d.Data[4:])
 					if cur > 0 {
-						tag.InsertText(numKey, itoa(int(cur)))
+						tag.InsertText(numKey, util.Itoa(int(cur)))
 					}
 					if tot > 0 {
-						tag.InsertText(totKey, itoa(int(tot)))
+						tag.InsertText(totKey, util.Itoa(int(tot)))
 					}
 					continue
 				}
@@ -303,34 +306,34 @@ func (l *Ilst) Tag() *Tag {
 		}
 		if hasRaw {
 			if rating, ok := advisoryRatingFromU8(raw); ok {
-				tag.InsertText(ItemKeyParentalAdvisory, itoa(int(rating)))
+				tag.InsertText(meta.ItemKeyParentalAdvisory, util.Itoa(int(rating)))
 				remainder = append(remainder[:i], remainder[i+1:]...)
 			}
 		}
 		break
 	}
 
-	if getGlobalOptions().PreserveFormatSpecificItems && len(remainder) > 0 {
+	if util.GetGlobalOptions().PreserveFormatSpecificItems && len(remainder) > 0 {
 		tag.SetCompanionTag(&Ilst{atoms: remainder})
 	}
 	return tag
 }
 
 // IlstFromTag converts a generic [Tag] to an `Ilst` (Rust `MergeTag`/`From<Tag> for Ilst`).
-func IlstFromTag(tag *Tag) *Ilst {
+func IlstFromTag(tag *meta.Tag) *Ilst {
 	merged := &Ilst{}
-	if getGlobalOptions().PreserveFormatSpecificItems {
+	if util.GetGlobalOptions().PreserveFormatSpecificItems {
 		if comp, ok := tag.CompanionTag().(*Ilst); ok && comp != nil {
 			merged = comp
 		}
 	}
 
-	var tracks, discs [2]Option[uint16]
+	var tracks, discs [2]meta.Option[uint16]
 
 	for _, item := range tag.Items() {
-		key, ok := item.Key().MapKey(TagTypeMp4Ilst)
+		key, ok := item.Key().MapKey(meta.TagTypeMp4Ilst)
 		if !ok {
-			if item.Key() == ItemKeyUnknown &&
+			if item.Key() == meta.ItemKeyUnknown &&
 				(len(item.Description) == 4 || strings.HasPrefix(item.Description, "----:")) {
 				key = item.Description
 			} else {
@@ -343,37 +346,37 @@ func IlstFromTag(tag *Tag) *Ilst {
 		}
 		ident := ilstIdentFromString(key)
 		switch item.Key() {
-		case ItemKeyTrackNumber:
+		case meta.ItemKeyTrackNumber:
 			tracks[0] = u16FromStringOpt(text)
 			continue
-		case ItemKeyTrackTotal:
+		case meta.ItemKeyTrackTotal:
 			tracks[1] = u16FromStringOpt(text)
 			continue
-		case ItemKeyDiscNumber:
+		case meta.ItemKeyDiscNumber:
 			discs[0] = u16FromStringOpt(text)
 			continue
-		case ItemKeyDiscTotal:
+		case meta.ItemKeyDiscTotal:
 			discs[1] = u16FromStringOpt(text)
 			continue
-		case ItemKeyFlagCompilation, ItemKeyFlagPodcast:
+		case meta.ItemKeyFlagCompilation, meta.ItemKeyFlagPodcast:
 			if b, ok := flagItemFromText(text); ok {
 				merged.atoms = append(merged.atoms, Atom{ident, []AtomData{{Kind: AtomDataBool, Bool: b}}})
 			}
 			continue
-		case ItemKeyParentalAdvisory:
+		case meta.ItemKeyParentalAdvisory:
 			if v, ok := u8FromString(text); ok {
 				if rating, ok := advisoryRatingFromU8(v); ok {
 					merged.atoms = append(merged.atoms, Atom{ident, []AtomData{{Kind: AtomDataSignedInt, Int: int64(rating)}}})
 				}
 			}
 			continue
-		case ItemKeyPopularimeter:
-			if popm, err := PopularimeterFromStr(text); err == nil {
-				merged.atoms = append(merged.atoms, Atom{ident, []AtomData{{Kind: AtomDataUTF8, Text: itoa(int(popm.MappedValue(TagTypeMp4Ilst)))}}})
+		case meta.ItemKeyPopularimeter:
+			if popm, err := meta.PopularimeterFromStr(text); err == nil {
+				merged.atoms = append(merged.atoms, Atom{ident, []AtomData{{Kind: AtomDataUTF8, Text: util.Itoa(int(popm.MappedValue(meta.TagTypeMp4Ilst)))}}})
 			}
 			continue
 		default:
-			if item.Key() == ItemKeyUnknown {
+			if item.Key() == meta.ItemKeyUnknown {
 				if _, ok := item.Value().IntoBinary(); ok {
 					data, _ := item.Value().IntoBinary()
 					merged.atoms = append(merged.atoms, Atom{ident, []AtomData{{Kind: AtomDataUnknown, Code: 0, Data: data}}})
@@ -389,7 +392,7 @@ func IlstFromTag(tag *Tag) *Ilst {
 		merged.InsertPicture(pic)
 	}
 
-	createIntPair := func(fourcc string, pair [2]Option[uint16]) {
+	createIntPair := func(fourcc string, pair [2]meta.Option[uint16]) {
 		if pair[0].IsNone() && pair[1].IsNone() {
 			return
 		}
@@ -412,10 +415,10 @@ func IlstFromTag(tag *Tag) *Ilst {
 }
 
 // DumpTo writes the encoded `ilst` atom (with header) to a writer.
-func (l *Ilst) DumpTo(writer io.Writer, writeOptions WriteOptions) error {
+func (l *Ilst) DumpTo(writer io.Writer, writeOptions meta.WriteOptions) error {
 	data, err := encodeIlst(l)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	_, err = writer.Write(data)
 	return err
@@ -451,11 +454,11 @@ func encodeIlst(ilst *Ilst) ([]byte, error) {
 			mt, _ := d.Pic.MimeType().Get()
 			code := uint8(13)
 			switch mt {
-			case MimeTypePng:
+			case meta.MimeTypePng:
 				code = 14
-			case MimeTypeBmp:
+			case meta.MimeTypeBmp:
 				code = 27
-			case MimeTypeGif:
+			case meta.MimeTypeGif:
 				code = 12
 			}
 			return code, d.Pic.Data()
@@ -531,11 +534,11 @@ func intPayload(v int64, signed bool) (uint8, []byte) {
 	return 22, append([]byte(nil), out...)
 }
 
-func u16FromStringOpt(s string) Option[uint16] {
-	if v, ok := u32FromString(s); ok && v <= 0xFFFF {
-		return Some(uint16(v))
+func u16FromStringOpt(s string) meta.Option[uint16] {
+	if v, ok := util.U32FromString(s); ok && v <= 0xFFFF {
+		return meta.Some(uint16(v))
 	}
-	return None[uint16]()
+	return meta.None[uint16]()
 }
 
 func flagItemFromText(s string) (bool, bool) {
@@ -549,7 +552,7 @@ func flagItemFromText(s string) (bool, bool) {
 }
 
 func u8FromString(s string) (uint8, bool) {
-	v, ok := u32FromString(s)
+	v, ok := util.U32FromString(s)
 	if !ok || v > 0xFF {
 		return 0, false
 	}
@@ -585,11 +588,11 @@ func advisoryRatingFromU8(v uint8) (AdvisoryRating, bool) {
 }
 
 func utf16BEEncode(s string) []byte {
-	return utf16Encode(s, bigEndian, false, false)
+	return util.Utf16Encode(s, util.BigEndian, false, false)
 }
 
 // ParseIlst parses the atoms inside an `ilst` atom body into an [Ilst].
-func ParseIlst(reader io.ReadSeeker, end int64, parseOptions ParseOptions) (*Ilst, error) {
+func ParseIlst(reader io.ReadSeeker, end int64, parseOptions meta.ParseOptions) (*Ilst, error) {
 	ilst := &Ilst{}
 	var upgradedGnres []AtomData
 	for {
@@ -598,7 +601,7 @@ func ParseIlst(reader io.ReadSeeker, end int64, parseOptions ParseOptions) (*Ils
 			break
 		}
 		atom, err := mp4ReadBox(reader)
-		if err != nil {
+		if err != nil || atom == nil {
 			break
 		}
 		// Rust's AtomInfo validates ident bytes (0x20–0x7E or 0xA9); an
@@ -628,30 +631,13 @@ func ParseIlst(reader io.ReadSeeker, end int64, parseOptions ParseOptions) (*Ils
 		}
 		var ident AtomIdent
 		if name == "----" {
-			mean := mp4BoxPayload(reader, atomEnd, "mean")
-			nameB := mp4BoxPayload(reader, atomEnd, "name")
-			if mean == nil || nameB == nil {
-				if _, err := reader.Seek(atomEnd, io.SeekStart); err != nil {
-					break
-				}
-				continue
+			// Rust `parse_freeform`: ordered mean-then-name sub-boxes,
+			// each a fullbox with a UTF-8 payload; errors are fatal.
+			id, err := mp4ParseFreeform(reader, atom, atomEnd)
+			if err != nil {
+				return nil, err
 			}
-			ident = FreeformIdent(string(mean), string(nameB))
-			// Rust's AtomReader consumes the mean/name sub-boxes when
-			// resolving the freeform ident — skip them here so the data
-			// loop only sees `data` children.
-			if _, err := reader.Seek(atom.pos, io.SeekStart); err != nil {
-				break
-			}
-			for i := 0; i < 2; i++ {
-				ch, err := mp4ReadBox(reader)
-				if err != nil {
-					break
-				}
-				if _, err := reader.Seek(ch.pos+int64(ch.size), io.SeekStart); err != nil {
-					break
-				}
-			}
+			ident = id
 		} else {
 			ident = AtomIdent{Fourcc: atom.name}
 		}
@@ -675,19 +661,19 @@ func ParseIlst(reader io.ReadSeeker, end int64, parseOptions ParseOptions) (*Ils
 				break
 			}
 			ch, err := mp4ReadBox(reader)
-			if err != nil {
+			if err != nil || ch == nil {
 				break
 			}
 			childEnd := ch.pos + int64(ch.size)
 			// ch.size is the payload size; a data atom needs >= 8 (type+locale)
 			if ch.size < 8 {
-				if parseOptions.ParsingMode == ParsingModeStrict {
-					return nil, newNotEnoughDataError(16)
+				if parseOptions.ParsingMode == meta.ParsingModeStrict {
+					return nil, util.NewNotEnoughDataError(16)
 				}
 				break
 			}
 			if string(ch.name[:]) != "data" {
-				if parseOptions.ParsingMode == ParsingModeStrict {
+				if parseOptions.ParsingMode == meta.ParsingModeStrict {
 					return nil, &Mp4ParseError{Message: `expected atom "data" to follow name`}
 				}
 				if _, err := reader.Seek(childEnd, io.SeekStart); err != nil {
@@ -701,7 +687,7 @@ func ParseIlst(reader io.ReadSeeker, end int64, parseOptions ParseOptions) (*Ils
 			}
 			// type indicator: [type_set, type ×3]; only the well-known set (0) is valid
 			if dh[0] != 0 {
-				if parseOptions.ParsingMode == ParsingModeStrict {
+				if parseOptions.ParsingMode == meta.ParsingModeStrict {
 					return nil, &Mp4ParseError{Message: "unknown type set in data atom"}
 				}
 				if _, err := reader.Seek(childEnd, io.SeekStart); err != nil {
@@ -717,7 +703,7 @@ func ParseIlst(reader io.ReadSeeker, end int64, parseOptions ParseOptions) (*Ils
 				}
 				continue
 			}
-			payload, err := tryByteSlice(contentLen)
+			payload, err := util.TryByteSlice(contentLen)
 			if err != nil {
 				return nil, err
 			}
@@ -726,31 +712,37 @@ func ParseIlst(reader io.ReadSeeker, end int64, parseOptions ParseOptions) (*Ils
 			}
 			switch {
 			case isCovr:
-				var mt MimeType
-				ok := true
+				var mt meta.MimeType
+				mtSet := true
 				switch code {
+				case 0: // implicit type: no MIME (Rust DataType::Reserved)
+					mtSet = false
 				case 13:
-					mt = MimeTypeJpeg
+					mt = meta.MimeTypeJpeg
 				case 14:
-					mt = MimeTypePng
+					mt = meta.MimeTypePng
 				case 12:
-					mt = MimeTypeGif
+					mt = meta.MimeTypeGif
 				case 27:
-					mt = MimeTypeBmp
+					mt = meta.MimeTypeBmp
 				default:
-					ok = false
-				}
-				if !ok {
-					if parseOptions.ParsingMode == ParsingModeStrict {
+					if parseOptions.ParsingMode == meta.ParsingModeStrict {
 						return nil, &Mp4ParseError{Message: "unknown covr data type"}
 					}
+					// Rust discards the whole atom on an unknown covr type
+					datas = nil
+					goto atomDone
+				}
+				b := meta.PictureUnchecked(payload).PicType(meta.PictureTypeOther)
+				if mtSet {
+					b = b.MimeType(mt)
+				}
+				datas = append(datas, AtomData{Kind: AtomDataPicture, Pic: b.Build()})
+			case isBool:
+				if len(datas) > 0 {
+					// Rust keeps only the first `data` for bool atoms
 					break
 				}
-				datas = append(datas, AtomData{
-					Kind: AtomDataPicture,
-					Pic:  PictureUnchecked(payload).PicType(PictureTypeOther).MimeType(mt).Build(),
-				})
-			case isBool:
 				isTrue := false
 				for _, b := range payload {
 					if b != 0 {
@@ -762,7 +754,7 @@ func ParseIlst(reader io.ReadSeeker, end int64, parseOptions ParseOptions) (*Ils
 			default:
 				d, derr := ilstInterpretAtomContent(code, payload, fourcc, parseOptions)
 				if derr != nil {
-					if parseOptions.ParsingMode == ParsingModeStrict {
+					if parseOptions.ParsingMode == meta.ParsingModeStrict {
 						return nil, derr
 					}
 					// Drop the whole atom (Rust `handle_error`)
@@ -770,20 +762,29 @@ func ParseIlst(reader io.ReadSeeker, end int64, parseOptions ParseOptions) (*Ils
 					_, _ = reader.Seek(atomEnd, io.SeekStart)
 					break
 				}
-				datas = append(datas, d)
+				// Rust only keeps 8-byte `plID` payloads
+				if fourcc != [4]byte{'p', 'l', 'I', 'D'} || len(payload) == 8 {
+					datas = append(datas, d)
+				}
 			}
 			if _, err := reader.Seek(childEnd, io.SeekStart); err != nil {
 				break
 			}
 		}
+	atomDone:
 		// The next iteration re-seeks to atom.pos, so a failed
 		// reposition is harmless here.
 		_, _ = reader.Seek(atomEnd, io.SeekStart)
 		if len(datas) > 0 {
-			// Upgraded `gnre` values are collected and pushed as ©gen after
-			// the loop (discarded if a ©gen atom already exists)
-			if fourcc == [4]byte{'g', 'n', 'r', 'e'} && parseOptions.ImplicitConversions && datas[0].Kind == AtomDataUTF8 {
-				upgradedGnres = append(upgradedGnres, datas...)
+			// Upgraded `gnre` values are collected per-`data` and pushed
+			// as ©gen after the loop (discarded if a ©gen atom exists);
+			// the `gnre` atom itself is never retained.
+			if fourcc == [4]byte{'g', 'n', 'r', 'e'} && parseOptions.ImplicitConversions {
+				for _, d := range datas {
+					if d.Kind == AtomDataUTF8 {
+						upgradedGnres = append(upgradedGnres, d)
+					}
+				}
 				continue
 			}
 			ilst.atoms = append(ilst.atoms, Atom{Ident: ident, Data: datas})
@@ -802,7 +803,7 @@ func ParseIlst(reader io.ReadSeeker, end int64, parseOptions ParseOptions) (*Ils
 
 // ilstInterpretAtomContent maps a `data` payload to an [AtomData] per Rust's
 // `interpret_atom_content` + `gnre`/`plID` special cases.
-func ilstInterpretAtomContent(code uint8, payload []byte, fourcc [4]byte, parseOptions ParseOptions) (AtomData, error) {
+func ilstInterpretAtomContent(code uint8, payload []byte, fourcc [4]byte, parseOptions meta.ParseOptions) (AtomData, error) {
 	// gnre: upgrade to UTF8 ©gen when implicit conversions are on
 	if fourcc == [4]byte{'g', 'n', 'r', 'e'} {
 		if parseOptions.ImplicitConversions && len(payload) >= 2 {
@@ -814,7 +815,7 @@ func ilstInterpretAtomContent(code uint8, payload []byte, fourcc [4]byte, parseO
 		}
 		return AtomData{Kind: AtomDataUnknown, Code: DataType(code), Data: payload}, nil
 	}
-	// plID: always Unknown (64-bit), preserve raw
+	// plID: only 8-byte payloads are kept (64-bit), others are dropped
 	if fourcc == [4]byte{'p', 'l', 'I', 'D'} {
 		return AtomData{Kind: AtomDataUnknown, Code: DataType(code), Data: payload}, nil
 	}
@@ -825,31 +826,95 @@ func ilstInterpretAtomContent(code uint8, payload []byte, fourcc [4]byte, parseO
 		}
 		return AtomData{Kind: AtomDataUTF8, Text: string(payload)}, nil
 	case 2:
-		text, err := utf16DecodeBytes(payload, bigEndian)
+		text, err := util.Utf16DecodeBytes(payload, util.BigEndian)
 		if err != nil {
 			return AtomData{}, &Mp4ParseError{Source: err}
 		}
 		return AtomData{Kind: AtomDataUTF16, Text: text}, nil
 	case 21:
-		return AtomData{Kind: AtomDataSignedInt, Int: parseBEInt(payload, true)}, nil
+		v, err := parseBEInt(payload, true)
+		if err != nil {
+			return AtomData{}, err
+		}
+		return AtomData{Kind: AtomDataSignedInt, Int: int64(v)}, nil
 	case 22:
-		return AtomData{Kind: AtomDataUnsignedInt, Uint: uint64(parseBEInt(payload, false))}, nil
+		v, err := parseBEInt(payload, false)
+		if err != nil {
+			return AtomData{}, err
+		}
+		return AtomData{Kind: AtomDataUnsignedInt, Uint: uint64(v)}, nil
 	default:
 		return AtomData{Kind: AtomDataUnknown, Code: DataType(code), Data: payload}, nil
 	}
 }
 
-func parseBEInt(b []byte, signed bool) int64 {
-	var v uint64
-	for _, c := range b {
-		v = (v << 8) | uint64(c)
+// parseBEInt decodes a 1–4-byte big-endian integer like Rust's
+// `parse_int`/`parse_uint` (larger payloads are an error). For `signed`, a
+// 1-byte value is treated as unsigned (Rust `i32::from(u8)`).
+func parseBEInt(b []byte, signed bool) (int32, error) {
+	var v int32
+	switch len(b) {
+	case 1:
+		v = int32(b[0])
+	case 2:
+		if signed {
+			v = int32(int16(binary.BigEndian.Uint16(b)))
+		} else {
+			v = int32(binary.BigEndian.Uint16(b))
+		}
+	case 3:
+		var pad byte
+		if signed && b[0]&0x80 != 0 {
+			pad = 0xFF
+		}
+		v = int32(binary.BigEndian.Uint32([]byte{pad, b[0], b[1], b[2]}))
+	case 4:
+		v = int32(binary.BigEndian.Uint32(b))
+	default:
+		return 0, &Mp4ParseError{Message: `unexpected atom size for type "BE integer"`}
 	}
-	if signed && len(b) > 0 && len(b) < 8 && b[0]&0x80 != 0 {
-		// sign-extend
-		shift := uint(64 - len(b)*8)
-		return int64(v<<shift) >> shift
+	return v, nil
+}
+
+// mp4ParseFreeform parses a `----` atom's ordered `mean`/`name` sub-boxes,
+// mirroring Rust's `parse_freeform`/`freeform_chunk` (errors propagate).
+func mp4ParseFreeform(reader io.ReadSeeker, atom *mp4BoxHeader, atomEnd int64) (AtomIdent, error) {
+	if atom.size < 24 {
+		return AtomIdent{}, &Mp4ParseError{Source: util.NewNotEnoughDataError(24)}
 	}
-	return int64(v)
+	if _, err := reader.Seek(atom.pos, io.SeekStart); err != nil {
+		return AtomIdent{}, &Mp4ParseError{Source: err}
+	}
+	var values [2]string
+	for i, want := range [2]string{"mean", "name"} {
+		pos, _ := reader.Seek(0, io.SeekCurrent)
+		ch, err := mp4ReadBoxBound(reader, uint64(atomEnd-pos), meta.ParsingModeRelaxed)
+		if err != nil {
+			return AtomIdent{}, err
+		}
+		if ch == nil || string(ch.name[:]) != want {
+			return AtomIdent{}, &Mp4ParseError{Message: `expected "` + want + `" chunk in freeform atom`}
+		}
+		if ch.size < 4 {
+			return AtomIdent{}, &Mp4ParseError{Source: util.NewNotEnoughDataError(12)}
+		}
+		if _, err := reader.Seek(4, io.SeekCurrent); err != nil {
+			return AtomIdent{}, &Mp4ParseError{Source: err}
+		}
+		content, err := util.TryByteSlice(int(ch.size) - 4)
+		if err != nil {
+			return AtomIdent{}, &Mp4ParseError{Source: err}
+		}
+		if _, err := io.ReadFull(reader, content); err != nil {
+			return AtomIdent{}, &Mp4ParseError{Source: err}
+		}
+		v, err := util.Utf8Decode(content)
+		if err != nil {
+			return AtomIdent{}, &Mp4ParseError{Source: err}
+		}
+		values[i] = v
+	}
+	return FreeformIdent(values[0], values[1]), nil
 }
 
 // firstText returns the text of the atom's first UTF8/UTF16 data value.
@@ -1002,18 +1067,18 @@ func (l *Ilst) RemoveDiskTotal() {
 	l.setNumber(diskFourcc, 6, 0)
 }
 
-// Date returns the "©day" atom parsed as a [Timestamp].
-func (l *Ilst) Date() (Timestamp, bool) {
+// Date returns the "©day" atom parsed as a [meta.Timestamp].
+func (l *Ilst) Date() (meta.Timestamp, bool) {
 	if s, ok := l.firstText(FourccIdent("©day")); ok {
-		if ts, ok := tryParseTimestamp(s).Get(); ok {
+		if ts, ok := util.TryParseTimestamp(s).Get(); ok {
 			return ts, true
 		}
 	}
-	return Timestamp{}, false
+	return meta.Timestamp{}, false
 }
 
 // SetDate sets the "©day" atom.
-func (l *Ilst) SetDate(v Timestamp) { l.setText("©day", v.String()) }
+func (l *Ilst) SetDate(v meta.Timestamp) { l.setText("©day", v.String()) }
 
 // RemoveDate removes the "©day" atom.
 func (l *Ilst) RemoveDate() { l.Remove(FourccIdent("©day")) }
@@ -1072,40 +1137,40 @@ func (l *Ilst) RemovePictures() { l.Remove(FourccIdent("covr")) }
 
 // SaveTo writes the ilst atom into an MP4 file, mirroring Rust
 // `TagExt::save_to`.
-func (l *Ilst) SaveTo(file FileLike, writeOptions WriteOptions) error {
-	vf, err := NewVerifiedFile(file, writeOptions.ParseOptions)
+func (l *Ilst) SaveTo(file meta.FileLike, writeOptions meta.WriteOptions) error {
+	vf, err := meta.NewVerifiedFile(file, writeOptions.ParseOptions)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	format := vf.Format()
-	support := format.TagSupport(TagTypeMp4Ilst)
-	if support == TagSupportUnsupported || (!support.IsWritable() && !l.IsEmpty()) {
-		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	support := format.TagSupport(meta.TagTypeMp4Ilst)
+	if support == meta.TagSupportUnsupported || (!support.IsWritable() && !l.IsEmpty()) {
+		return &meta.FileEncodingError{FileType: format, Source: &meta.UnsupportedTagError{}}
 	}
 	return mp4WriteIlstData(vf.File(), l, writeOptions)
 }
 
 // SaveToPath writes the ilst atom to a path.
-func (l *Ilst) SaveToPath(path string, writeOptions WriteOptions) error {
-	vf, f, err := VerifiedFileFromPath(path, writeOptions.ParseOptions)
+func (l *Ilst) SaveToPath(path string, writeOptions meta.WriteOptions) error {
+	vf, f, err := meta.VerifiedFileFromPath(path, writeOptions.ParseOptions)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	defer f.Close()
 	format := vf.Format()
-	support := format.TagSupport(TagTypeMp4Ilst)
-	if support == TagSupportUnsupported || (!support.IsWritable() && !l.IsEmpty()) {
-		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	support := format.TagSupport(meta.TagTypeMp4Ilst)
+	if support == meta.TagSupportUnsupported || (!support.IsWritable() && !l.IsEmpty()) {
+		return &meta.FileEncodingError{FileType: format, Source: &meta.UnsupportedTagError{}}
 	}
 	return mp4WriteIlstData(vf.File(), l, writeOptions)
 }
 
-// RemoveFrom removes the ilst atom from a [FileLike].
-func (l *Ilst) RemoveFrom(file FileLike, writeOptions WriteOptions) error {
-	return TagTypeMp4Ilst.RemoveFrom(file, writeOptions)
+// RemoveFrom removes the ilst atom from a [meta.FileLike].
+func (l *Ilst) RemoveFrom(file meta.FileLike, writeOptions meta.WriteOptions) error {
+	return meta.TagTypeMp4Ilst.RemoveFrom(file, writeOptions)
 }
 
 // RemoveFromPath removes the ilst atom from a path.
-func (l *Ilst) RemoveFromPath(path string, writeOptions WriteOptions) error {
-	return TagTypeMp4Ilst.RemoveFromPath(path, writeOptions)
+func (l *Ilst) RemoveFromPath(path string, writeOptions meta.WriteOptions) error {
+	return meta.TagTypeMp4Ilst.RemoveFromPath(path, writeOptions)
 }

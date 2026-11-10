@@ -198,3 +198,35 @@ func ChannelMaskFromDsfChannelType(channelType uint8) Option[ChannelMask] {
 	}
 	return None[ChannelMask]()
 }
+
+// MpegVersion is the MPEG audio version.
+type MpegVersion int
+
+const (
+	// MpegVersion1 is MPEG-1.
+	MpegVersion1 MpegVersion = iota
+	// MpegVersion2 is MPEG-2.
+	MpegVersion2
+	// MpegVersion25 is MPEG-2.5.
+	MpegVersion25
+	// MpegVersion4 is MPEG-4 (AAC container framing).
+	MpegVersion4
+)
+
+// AudioObjectType is an MPEG-4 Part 3 audio object type.
+type AudioObjectType uint8
+
+const (
+	// AudioObjectTypeNull is the null/unknown object type.
+	AudioObjectTypeNull AudioObjectType = 0
+	// AudioObjectTypeAacMain is AAC Main Profile.
+	AudioObjectTypeAacMain AudioObjectType = 1
+	// AudioObjectTypeAacLowComplexity is AAC Low Complexity.
+	AudioObjectTypeAacLowComplexity AudioObjectType = 2
+	// AudioObjectTypeAacScalableSampleRate is AAC Scalable Sample Rate.
+	AudioObjectTypeAacScalableSampleRate AudioObjectType = 3
+	// AudioObjectTypeAacLongTermPrediction is AAC Long Term Predictor.
+	AudioObjectTypeAacLongTermPrediction AudioObjectType = 4
+	// AudioObjectTypeAudioLosslessCoding is MPEG-4 ALS.
+	AudioObjectTypeAudioLosslessCoding AudioObjectType = 36
+)

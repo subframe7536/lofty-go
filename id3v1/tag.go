@@ -4,20 +4,22 @@ import (
 	"bytes"
 	"io"
 
-	"github.com/subframe7536/lofty-go/internal/meta"
+	meta "github.com/subframe7536/lofty-go/internal/meta"
+	"github.com/subframe7536/lofty-go/internal/util"
+	"github.com/subframe7536/lofty-go/lyrics3"
 )
 
 var Id3v1TagMarker = []byte("TAG")
 
 // Id3v1Tag is an ID3v1 tag.
 type Id3v1Tag struct {
-	Title       Option[string]
-	Artist      Option[string]
-	Album       Option[string]
-	Year        Option[uint16]
-	Comment     Option[string]
-	TrackNumber Option[uint8]
-	Genre       Option[uint8]
+	Title       meta.Option[string]
+	Artist      meta.Option[string]
+	Album       meta.Option[string]
+	Year        meta.Option[uint16]
+	Comment     meta.Option[string]
+	TrackNumber meta.Option[uint8]
+	Genre       meta.Option[uint8]
 }
 
 // Id3v1ParseError is returned when an ID3v1 tag fails to parse.
@@ -49,10 +51,10 @@ func (e *Id3v1EncodingError) Error() string {
 func (e *Id3v1EncodingError) Unwrap() error { return e.Source }
 
 // Id3v1TagParse parses an ID3v1 tag from a 128-byte slice.
-func Id3v1TagParse(reader [128]byte, parseMode ParsingMode) (*Id3v1Tag, error) {
+func Id3v1TagParse(reader [128]byte, parseMode meta.ParsingMode) (*Id3v1Tag, error) {
 	var tag Id3v1Tag
 	if !bytes.Equal(reader[:3], Id3v1TagMarker) {
-		return nil, &Id3v1ParseError{Source: &FakeTagError{}}
+		return nil, &Id3v1ParseError{Source: &meta.FakeTagError{}}
 	}
 	r := reader[3:]
 
@@ -68,7 +70,7 @@ func Id3v1TagParse(reader [128]byte, parseMode ParsingMode) (*Id3v1Tag, error) {
 
 	var commentRange []byte
 	if r[122] == 0 && r[123] != 0 {
-		tag.TrackNumber = Some(r[123])
+		tag.TrackNumber = meta.Some(r[123])
 		commentRange = r[94:123]
 	} else {
 		commentRange = r[94:124]
@@ -76,76 +78,76 @@ func Id3v1TagParse(reader [128]byte, parseMode ParsingMode) (*Id3v1Tag, error) {
 	tag.Comment = id3v1DecodeText(commentRange)
 
 	if r[124] < uint8(len(Id3v1Genres)) {
-		tag.Genre = Some(r[124])
+		tag.Genre = meta.Some(r[124])
 	}
 	return &tag, nil
 }
 
-func id3v1DecodeText(data []byte) Option[string] {
+func id3v1DecodeText(data []byte) meta.Option[string] {
 	firstNullPos := len(data)
 	if i := bytes.IndexByte(data, 0); i >= 0 {
 		if i == 0 {
-			return None[string]()
+			return meta.None[string]()
 		}
 		firstNullPos = i
 	}
-	return Some(latin1Decode(data[:firstNullPos]))
+	return meta.Some(util.Latin1Decode(data[:firstNullPos]))
 }
 
-func id3v1TryParseYear(input []byte, parseMode ParsingMode) (Option[uint16], error) {
-	numDigits, year := asciiNumber(input)
+func id3v1TryParseYear(input []byte, parseMode meta.ParsingMode) (meta.Option[uint16], error) {
+	numDigits, year := util.AsciiNumber(input)
 	if numDigits != 4 {
-		if parseMode == ParsingModeStrict {
-			return None[uint16](), &Id3v1ParseError{Message: "year contains non-digit characters"}
+		if parseMode == meta.ParsingModeStrict {
+			return meta.None[uint16](), &Id3v1ParseError{Message: "year contains non-digit characters"}
 		}
-		return None[uint16](), nil
+		return meta.None[uint16](), nil
 	}
-	return Some(uint16(year)), nil
+	return meta.Some(uint16(year)), nil
 }
 
 // Tag converts the [Id3v1Tag] to a generic [Tag].
-func (t *Id3v1Tag) Tag() *Tag {
-	tag := NewTag(TagTypeID3v1)
+func (t *Id3v1Tag) Tag() *meta.Tag {
+	tag := meta.NewTag(meta.TagTypeID3v1)
 	if s, ok := t.Title.Get(); ok {
-		tag.InsertText(ItemKeyTrackTitle, s)
+		tag.InsertText(meta.ItemKeyTrackTitle, s)
 	}
 	if s, ok := t.Artist.Get(); ok {
-		tag.InsertText(ItemKeyTrackArtist, s)
+		tag.InsertText(meta.ItemKeyTrackArtist, s)
 	}
 	if s, ok := t.Album.Get(); ok {
-		tag.InsertText(ItemKeyAlbumTitle, s)
+		tag.InsertText(meta.ItemKeyAlbumTitle, s)
 	}
 	if y, ok := t.Year.Get(); ok {
-		tag.InsertText(ItemKeyYear, itoa(int(y)))
+		tag.InsertText(meta.ItemKeyYear, util.Itoa(int(y)))
 	}
 	if s, ok := t.Comment.Get(); ok {
-		tag.InsertText(ItemKeyComment, s)
+		tag.InsertText(meta.ItemKeyComment, s)
 	}
 	if n, ok := t.TrackNumber.Get(); ok {
-		tag.PushUnchecked(NewTagItem(ItemKeyTrackNumber, ItemValueText(itoa(int(n)))))
+		tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyTrackNumber, meta.ItemValueText(util.Itoa(int(n)))))
 	}
 	if g, ok := t.Genre.Get(); ok && int(g) < len(Id3v1Genres) {
-		tag.InsertText(ItemKeyGenre, Id3v1Genres[g])
+		tag.InsertText(meta.ItemKeyGenre, Id3v1Genres[g])
 	}
 	return tag
 }
 
 // Date returns the year as a [Timestamp].
-func (t *Id3v1Tag) Date() Option[Timestamp] {
+func (t *Id3v1Tag) Date() meta.Option[meta.Timestamp] {
 	if y, ok := t.Year.Get(); ok {
-		return Some(Timestamp{Year: y})
+		return meta.Some(meta.Timestamp{Year: y})
 	}
-	return None[Timestamp]()
+	return meta.None[meta.Timestamp]()
 }
 
 // SetDate sets the year from a [Timestamp].
-func (t *Id3v1Tag) SetDate(value Timestamp) { t.Year = Some(value.Year) }
+func (t *Id3v1Tag) SetDate(value meta.Timestamp) { t.Year = meta.Some(value.Year) }
 
 // RemoveDate clears the year.
-func (t *Id3v1Tag) RemoveDate() { t.Year = None[uint16]() }
+func (t *Id3v1Tag) RemoveDate() { t.Year = meta.None[uint16]() }
 
 // DumpTo writes the tag to a writer.
-func (t *Id3v1Tag) DumpTo(writer io.Writer, writeOptions WriteOptions) error {
+func (t *Id3v1Tag) DumpTo(writer io.Writer, writeOptions meta.WriteOptions) error {
 	data, err := id3v1Encode(t, writeOptions)
 	if err != nil {
 		return err
@@ -155,45 +157,40 @@ func (t *Id3v1Tag) DumpTo(writer io.Writer, writeOptions WriteOptions) error {
 }
 
 // Id3v1TagFromTag converts a generic [Tag] to an [Id3v1Tag].
-func Id3v1TagFromTag(input *Tag) *Id3v1Tag {
+func Id3v1TagFromTag(input *meta.Tag) *Id3v1Tag {
 	input = input.Clone()
-	take := func(k ItemKey) Option[string] {
+	take := func(k meta.ItemKey) meta.Option[string] {
 		if s := input.TakeStrings(k); len(s) > 0 {
-			return Some(s[0])
+			return meta.Some(s[0])
 		}
-		return None[string]()
+		return meta.None[string]()
 	}
 	tag := &Id3v1Tag{
-		Title:   take(ItemKeyTrackTitle),
-		Artist:  take(ItemKeyTrackArtist),
-		Album:   take(ItemKeyAlbumTitle),
-		Comment: take(ItemKeyComment),
+		Title:   take(meta.ItemKeyTrackTitle),
+		Artist:  take(meta.ItemKeyTrackArtist),
+		Album:   take(meta.ItemKeyAlbumTitle),
+		Comment: take(meta.ItemKeyComment),
 	}
-	if s, ok := input.GetString(ItemKeyYear); ok {
-		if n, err := atoi(s); err == nil {
-			tag.Year = Some(uint16(n))
+	if s, ok := input.GetString(meta.ItemKeyYear); ok {
+		if n, err := util.Atoi(s); err == nil {
+			tag.Year = meta.Some(uint16(n))
 		}
 	}
 	if tag.Year.IsNone() {
 		if d, ok := input.Date().Get(); ok {
-			tag.Year = Some(d.Year)
+			tag.Year = meta.Some(d.Year)
 		}
 	}
-	if s, ok := input.GetString(ItemKeyTrackNumber); ok {
-		if n, err := atoi(s); err == nil && n <= 255 {
-			tag.TrackNumber = Some(uint8(n))
+	if s, ok := input.GetString(meta.ItemKeyTrackNumber); ok {
+		if n, err := util.Atoi(s); err == nil && n <= 255 {
+			tag.TrackNumber = meta.Some(uint8(n))
 		}
 	}
-	if s, ok := input.GetString(ItemKeyGenre); ok {
-		for i, g := range Id3v1Genres {
-			if g == s {
-				tag.Genre = Some(uint8(i))
+	if g, ok := input.GetString(meta.ItemKeyGenre); ok {
+		for i, genre := range Id3v1Genres {
+			if genre == g {
+				tag.Genre = meta.Some(uint8(i))
 				break
-			}
-		}
-		if tag.Genre.IsNone() {
-			if n, err := atoi(s); err == nil && n <= 255 && n < len(Id3v1Genres) {
-				tag.Genre = Some(uint8(n))
 			}
 		}
 	}
@@ -201,83 +198,87 @@ func Id3v1TagFromTag(input *Tag) *Id3v1Tag {
 }
 
 func (t *Id3v1Tag) isEmpty() bool {
-	return t.Title.IsNone() && t.Artist.IsNone() && t.Album.IsNone() &&
-		t.Year.IsNone() && t.Comment.IsNone() && t.TrackNumber.IsNone() && t.Genre.IsNone()
+	return t.Title.IsNone() &&
+		t.Artist.IsNone() &&
+		t.Album.IsNone() &&
+		t.Year.IsNone() &&
+		t.Comment.IsNone() &&
+		t.TrackNumber.IsNone() &&
+		t.Genre.IsNone()
 }
 
-// id3v1Encode encodes an ID3v1 tag to 128 bytes.
-func id3v1Encode(tag *Id3v1Tag, writeOptions WriteOptions) ([]byte, error) {
-	resizeString := func(value Option[string], size int) ([]byte, error) {
-		field := make([]byte, 0, size)
-		if val, ok := value.Get(); ok {
-			if len([]rune(val)) > size && !writeOptions.ImplicitTruncation {
-				return nil, &Id3v1EncodingError{Source: &TooMuchDataError{}}
+func id3v1Encode(tag *Id3v1Tag, writeOptions meta.WriteOptions) ([]byte, error) {
+	encodeField := func(field meta.Option[string], len_ int, fieldName string) ([]byte, error) {
+		if s, ok := field.Get(); ok {
+			if len([]rune(s)) > len_ && !writeOptions.ImplicitTruncation {
+				return nil, &Id3v1EncodingError{Message: fieldName + " is too long"}
 			}
-			encoded, err := latin1Encode(val, writeOptions.LossyTextEncoding)
+			enc, err := util.Latin1Encode(s, writeOptions.LossyTextEncoding)
 			if err != nil {
 				return nil, &Id3v1EncodingError{Source: err}
 			}
-			if len(encoded) > size {
-				encoded = encoded[:size]
+			if len(enc) > len_ {
+				enc = enc[:len_]
 			}
-			field = append(field, encoded...)
+			buf := make([]byte, len_)
+			copy(buf, enc)
+			return buf, nil
 		}
-		for len(field) < size {
-			field = append(field, 0)
-		}
-		return field, nil
+		return make([]byte, len_), nil
 	}
 
 	var writer bytes.Buffer
 	writer.Write(Id3v1TagMarker)
 
-	for _, f := range []struct {
-		v    Option[string]
-		size int
-	}{
-		{tag.Title, 30},
-		{tag.Artist, 30},
-		{tag.Album, 30},
-	} {
-		b, err := resizeString(f.v, f.size)
-		if err != nil {
-			return nil, err
-		}
-		writer.Write(b)
+	title, err := encodeField(tag.Title, 30, "Title")
+	if err != nil {
+		return nil, err
 	}
+	writer.Write(title)
 
-	var year [4]byte
+	artist, err := encodeField(tag.Artist, 30, "Artist")
+	if err != nil {
+		return nil, err
+	}
+	writer.Write(artist)
+
+	album, err := encodeField(tag.Album, 30, "Album")
+	if err != nil {
+		return nil, err
+	}
+	writer.Write(album)
+
 	if y, ok := tag.Year.Get(); ok {
-		n := y
-		if n > 9999 {
-			n = 9999
-		}
-		for i := 3; i >= 0; i-- {
-			year[i] = '0' + byte(n%10)
-			n /= 10
-		}
+		var buf [4]byte
+		copy(buf[:], util.Itoa(int(y)))
+		writer.Write(buf[:])
+	} else {
+		writer.Write(make([]byte, 4))
 	}
-	writer.Write(year[:])
 
-	comment, err := resizeString(tag.Comment, 28)
+	comment, err := encodeField(tag.Comment, 28, "Comment")
 	if err != nil {
 		return nil, err
 	}
 	writer.Write(comment)
-	writer.WriteByte(0)
-	writer.WriteByte(tag.TrackNumber.OrZero())
-	genre := byte(255)
-	if g, ok := tag.Genre.Get(); ok {
-		genre = g
+
+	var track [2]byte
+	if n, ok := tag.TrackNumber.Get(); ok {
+		track[1] = n
 	}
-	writer.WriteByte(genre)
+	writer.Write(track[:])
+
+	if g, ok := tag.Genre.Get(); ok {
+		writer.WriteByte(g)
+	} else {
+		writer.WriteByte(255)
+	}
+
 	return writer.Bytes(), nil
 }
 
-// FindId3v1 attempts to find an ID3v1 tag in the stream.
-// If found, the reader is positioned at the start of the tag.
-// Returns (tagOrNil, rangeStart, rangeEnd, found, err).
-func FindId3v1(reader io.ReadSeeker, read bool, parseMode ParsingMode) (*Id3v1Tag, int64, int64, bool, error) {
+// FindId3v1 searches for an ID3v1 tag at the end of the reader.
+func FindId3v1(reader io.ReadSeeker, read bool, parseMode meta.ParsingMode) (*Id3v1Tag, int64, int64, bool, error) {
 	if _, err := reader.Seek(-128, io.SeekEnd); err != nil {
 		if _, err2 := reader.Seek(0, io.SeekEnd); err2 != nil {
 			return nil, 0, 0, false, err2
@@ -317,7 +318,7 @@ func FindId3v1(reader io.ReadSeeker, read bool, parseMode ParsingMode) (*Id3v1Ta
 }
 
 func init() {
-	meta.RegisterTagDumper(meta.TagTypeID3v1, func(tag *Tag, writer io.Writer, writeOptions WriteOptions) error {
+	meta.RegisterTagDumper(meta.TagTypeID3v1, func(tag *meta.Tag, writer io.Writer, writeOptions meta.WriteOptions) error {
 		t := Id3v1TagFromTag(tag)
 		if t.isEmpty() {
 			return nil
@@ -332,11 +333,11 @@ func init() {
 }
 
 // WriteId3v1 writes an ID3v1 tag into a file.
-func WriteId3v1(file FileLike, tag *Id3v1Tag, writeOptions WriteOptions) error {
+func WriteId3v1(file meta.FileLike, tag *Id3v1Tag, writeOptions meta.WriteOptions) error {
 	var existingRange [2]int64
 	_, start, end, found, err := FindId3v1(file, false, writeOptions.ParseOptions.ParsingMode)
 	if err != nil {
-		return &FileEncodingError{Source: &TagParseError{TagType: TagTypeID3v1, HasTagType: true, Source: err}}
+		return &meta.FileEncodingError{Source: &meta.TagParseError{TagType: meta.TagTypeID3v1, HasTagType: true, Source: err}}
 	}
 	if found {
 		existingRange = [2]int64{start, end}
@@ -347,16 +348,16 @@ func WriteId3v1(file FileLike, tag *Id3v1Tag, writeOptions WriteOptions) error {
 			return nil
 		}
 		// Strip Lyrics3 too — Lyrics3 is an extension of ID3v1.
-		lyrStart, _, _, lyrFound, err := findLyrics3(file, false, writeOptions.ParseOptions)
+		lyrStart, _, _, lyrFound, err := lyrics3.FindLyrics3(file, false, writeOptions.ParseOptions)
 		if err == nil && lyrFound {
 			existingRange[0] = lyrStart
 		}
-		return Splice(file, uint64(existingRange[0]), uint64(existingRange[1]), nil)
+		return meta.Splice(file, uint64(existingRange[0]), uint64(existingRange[1]), nil)
 	}
 
 	encoded, err := id3v1Encode(tag, writeOptions)
 	if err != nil {
-		return &FileEncodingError{Source: &TagEncodingError{TagType: TagTypeID3v1, HasTagType: true, Source: err}}
+		return &meta.FileEncodingError{Source: &meta.TagEncodingError{TagType: meta.TagTypeID3v1, HasTagType: true, Source: err}}
 	}
 	_, err = file.Write(encoded)
 	return err
@@ -396,40 +397,40 @@ var Id3v1Genres = []string{
 }
 
 // SaveTo writes the tag to a [FileLike], mirroring Rust `TagExt::save_to`.
-func (t *Id3v1Tag) SaveTo(file FileLike, writeOptions WriteOptions) error {
-	vf, err := NewVerifiedFile(file, writeOptions.ParseOptions)
+func (t *Id3v1Tag) SaveTo(file meta.FileLike, writeOptions meta.WriteOptions) error {
+	vf, err := meta.NewVerifiedFile(file, writeOptions.ParseOptions)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	format := vf.Format()
-	support := format.TagSupport(TagTypeID3v1)
-	if support == TagSupportUnsupported || (!support.IsWritable() && !t.isEmpty()) {
-		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	support := format.TagSupport(meta.TagTypeID3v1)
+	if support == meta.TagSupportUnsupported || (!support.IsWritable() && !t.isEmpty()) {
+		return &meta.FileEncodingError{FileType: format, Source: &meta.UnsupportedTagError{}}
 	}
 	return WriteId3v1(file, t, writeOptions)
 }
 
 // SaveToPath writes the tag to a path.
-func (t *Id3v1Tag) SaveToPath(path string, writeOptions WriteOptions) error {
-	vf, f, err := VerifiedFileFromPath(path, writeOptions.ParseOptions)
+func (t *Id3v1Tag) SaveToPath(path string, writeOptions meta.WriteOptions) error {
+	vf, f, err := meta.VerifiedFileFromPath(path, writeOptions.ParseOptions)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	defer f.Close()
 	format := vf.Format()
-	support := format.TagSupport(TagTypeID3v1)
-	if support == TagSupportUnsupported || (!support.IsWritable() && !t.isEmpty()) {
-		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	support := format.TagSupport(meta.TagTypeID3v1)
+	if support == meta.TagSupportUnsupported || (!support.IsWritable() && !t.isEmpty()) {
+		return &meta.FileEncodingError{FileType: format, Source: &meta.UnsupportedTagError{}}
 	}
 	return WriteId3v1(vf.File(), t, writeOptions)
 }
 
 // RemoveFrom removes an ID3v1 tag from a [FileLike].
-func (t *Id3v1Tag) RemoveFrom(file FileLike, writeOptions WriteOptions) error {
-	return TagTypeID3v1.RemoveFrom(file, writeOptions)
+func (t *Id3v1Tag) RemoveFrom(file meta.FileLike, writeOptions meta.WriteOptions) error {
+	return meta.TagTypeID3v1.RemoveFrom(file, writeOptions)
 }
 
 // RemoveFromPath removes an ID3v1 tag from a path.
-func (t *Id3v1Tag) RemoveFromPath(path string, writeOptions WriteOptions) error {
-	return TagTypeID3v1.RemoveFromPath(path, writeOptions)
+func (t *Id3v1Tag) RemoveFromPath(path string, writeOptions meta.WriteOptions) error {
+	return meta.TagTypeID3v1.RemoveFromPath(path, writeOptions)
 }

@@ -10,10 +10,12 @@ import (
 	"path/filepath"
 	"testing"
 
+	meta "github.com/subframe7536/lofty-go/internal/meta"
+
 	"github.com/subframe7536/lofty-go/internal/testutil"
 )
 
-func readIlstAsset(t *testing.T, name string, po ParseOptions) *Ilst {
+func readIlstAsset(t *testing.T, name string, po meta.ParseOptions) *Ilst {
 	t.Helper()
 	data, err := os.ReadFile("../lofty-rs/lofty/tests/tags/assets/ilst/" + name)
 	if err != nil {
@@ -28,8 +30,8 @@ func readIlstAsset(t *testing.T, name string, po ParseOptions) *Ilst {
 
 func readIlstAssetStrict(t *testing.T, name string) *Ilst {
 	t.Helper()
-	po := NewParseOptions()
-	po.ParsingMode = ParsingModeStrict
+	po := meta.NewParseOptions()
+	po.ParsingMode = meta.ParsingModeStrict
 	return readIlstAsset(t, name, po)
 }
 
@@ -76,11 +78,11 @@ func TestIlstParse(t *testing.T) {
 func TestIlstReRead(t *testing.T) {
 	ilst := readIlstAssetStrict(t, "test.ilst")
 	var buf bytes.Buffer
-	if err := ilst.DumpTo(&buf, NewWriteOptions()); err != nil {
+	if err := ilst.DumpTo(&buf, meta.NewWriteOptions()); err != nil {
 		t.Fatal(err)
 	}
-	po := NewParseOptions()
-	po.ParsingMode = ParsingModeStrict
+	po := meta.NewParseOptions()
+	po.ParsingMode = meta.ParsingModeStrict
 	reParsed, err := ParseIlst(bytes.NewReader(buf.Bytes()[8:]), int64(buf.Len()-8), po)
 	if err != nil {
 		t.Fatal(err)
@@ -100,18 +102,18 @@ func TestIlstToTag(t *testing.T) {
 	ilst := readIlstAssetStrict(t, "test.ilst")
 	tag := ilst.Tag()
 	testutil.VerifyTagCommon(t, tag, true, true)
-	if v, _ := tag.GetString(ItemKeyDiscNumber); v != "1" {
+	if v, _ := tag.GetString(meta.ItemKeyDiscNumber); v != "1" {
 		t.Fatalf("disc = %q", v)
 	}
-	if v, _ := tag.GetString(ItemKeyDiscTotal); v != "2" {
+	if v, _ := tag.GetString(meta.ItemKeyDiscTotal); v != "2" {
 		t.Fatalf("disc total = %q", v)
 	}
 }
 
 func TestTagToIlst(t *testing.T) {
-	tag := testutil.CreateTagCommon(TagTypeMp4Ilst)
-	tag.InsertText(ItemKeyDiscNumber, "1")
-	tag.InsertText(ItemKeyDiscTotal, "2")
+	tag := testutil.CreateTagCommon(meta.TagTypeMp4Ilst)
+	tag.InsertText(meta.ItemKeyDiscNumber, "1")
+	tag.InsertText(meta.ItemKeyDiscTotal, "2")
 	ilst := IlstFromTag(tag)
 	ilstAtomText(t, ilst, "©nam", "Foo title")
 	ilstAtomText(t, ilst, "©ART", "Bar artist")
@@ -165,21 +167,21 @@ func TestIlstMultiValueAtom(t *testing.T) {
 }
 
 func TestIlstMultiValueRoundtrip(t *testing.T) {
-	tag := NewTag(TagTypeMp4Ilst)
-	push2 := func(k ItemKey, v1, v2 string) {
+	tag := meta.NewTag(meta.TagTypeMp4Ilst)
+	push2 := func(k meta.ItemKey, v1, v2 string) {
 		tag.InsertText(k, v1)
-		tag.PushUnchecked(NewTagItem(k, ItemValueText(v2)))
+		tag.PushUnchecked(meta.NewTagItem(k, meta.ItemValueText(v2)))
 	}
-	push2(ItemKeyTrackArtist, "TrackArtist 1", "TrackArtist 2")
-	push2(ItemKeyAlbumArtist, "AlbumArtist 1", "AlbumArtist 2")
-	push2(ItemKeyTrackTitle, "TrackTitle 1", "TrackTitle 2")
-	push2(ItemKeyAlbumTitle, "AlbumTitle 1", "AlbumTitle 2")
-	push2(ItemKeyComment, "Comment 1", "Comment 2")
-	push2(ItemKeyContentGroup, "ContentGroup 1", "ContentGroup 2")
-	push2(ItemKeyGenre, "Genre 1", "Genre 2")
-	push2(ItemKeyMood, "Mood 1", "Mood 2")
-	push2(ItemKeyComposer, "Composer 1", "Composer 2")
-	push2(ItemKeyConductor, "Conductor 1", "Conductor 2")
+	push2(meta.ItemKeyTrackArtist, "TrackArtist 1", "TrackArtist 2")
+	push2(meta.ItemKeyAlbumArtist, "AlbumArtist 1", "AlbumArtist 2")
+	push2(meta.ItemKeyTrackTitle, "TrackTitle 1", "TrackTitle 2")
+	push2(meta.ItemKeyAlbumTitle, "AlbumTitle 1", "AlbumTitle 2")
+	push2(meta.ItemKeyComment, "Comment 1", "Comment 2")
+	push2(meta.ItemKeyContentGroup, "ContentGroup 1", "ContentGroup 2")
+	push2(meta.ItemKeyGenre, "Genre 1", "Genre 2")
+	push2(meta.ItemKeyMood, "Mood 1", "Mood 2")
+	push2(meta.ItemKeyComposer, "Composer 1", "Composer 2")
+	push2(meta.ItemKeyConductor, "Conductor 1", "Conductor 2")
 	if tag.Len() != 20 {
 		t.Fatalf("len = %d", tag.Len())
 	}
@@ -228,8 +230,8 @@ func TestIlstInvalidAtomType(t *testing.T) {
 }
 
 func TestIlstInvalidStringEncoding(t *testing.T) {
-	po := NewParseOptions()
-	po.ParsingMode = ParsingModeBestAttempt
+	po := meta.NewParseOptions()
+	po.ParsingMode = meta.ParsingModeBestAttempt
 	ilst := readIlstAsset(t, "invalid_string_encoding.ilst", po)
 	if ilst.Len() != 3 {
 		t.Fatalf("len = %d", ilst.Len())
@@ -249,9 +251,9 @@ func TestIlstInvalidStringEncoding(t *testing.T) {
 }
 
 func TestIlstFlagItemConversion(t *testing.T) {
-	tag := NewTag(TagTypeMp4Ilst)
-	tag.InsertText(ItemKeyFlagCompilation, "1")
-	tag.InsertText(ItemKeyFlagPodcast, "0")
+	tag := meta.NewTag(meta.TagTypeMp4Ilst)
+	tag.InsertText(meta.ItemKeyFlagCompilation, "1")
+	tag.InsertText(meta.ItemKeyFlagPodcast, "0")
 	ilst := IlstFromTag(tag)
 	if b, ok := ilst.GetFlag(FourccIdent("cpil")); !ok || !b {
 		t.Fatalf("cpil = %v", b)
@@ -287,11 +289,11 @@ func TestIlstSpecialItemsRoundtrip(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := back.DumpTo(&buf, NewWriteOptions()); err != nil {
+	if err := back.DumpTo(&buf, meta.NewWriteOptions()); err != nil {
 		t.Fatal(err)
 	}
-	po := NewParseOptions()
-	po.ParsingMode = ParsingModeStrict
+	po := meta.NewParseOptions()
+	po.ParsingMode = meta.ParsingModeStrict
 	reRead, err := ParseIlst(bytes.NewReader(buf.Bytes()[8:]), int64(buf.Len()-8), po)
 	if err != nil {
 		t.Fatal(err)
@@ -302,14 +304,14 @@ func TestIlstSpecialItemsRoundtrip(t *testing.T) {
 }
 
 func TestIlstSkipReadingCoverArt(t *testing.T) {
-	tag := NewTag(TagTypeMp4Ilst)
-	tag.PushPicture(PictureUnchecked(make([]byte, 50)).MimeType(MimeTypeJpeg).Build())
+	tag := meta.NewTag(meta.TagTypeMp4Ilst)
+	tag.PushPicture(meta.PictureUnchecked(make([]byte, 50)).MimeType(meta.MimeTypeJpeg).Build())
 	tag.SetArtist("Foo artist")
 	data, err := EncodeMp4Ilst(tag)
 	if err != nil {
 		t.Fatal(err)
 	}
-	po := NewParseOptions()
+	po := meta.NewParseOptions()
 	po.ReadCoverArt = false
 	ilst, err := ParseIlst(bytes.NewReader(data[8:]), int64(len(data)-8), po)
 	if err != nil {
@@ -324,8 +326,8 @@ func TestIlstSkipReadingCoverArt(t *testing.T) {
 }
 
 func TestIlstGnreConversionCase1(t *testing.T) {
-	po := NewParseOptions()
-	po.ParsingMode = ParsingModeBestAttempt
+	po := meta.NewParseOptions()
+	po.ParsingMode = meta.ParsingModeBestAttempt
 	ilst := readIlstAsset(t, "gnre_conversion_case_1.ilst", po)
 	if ilst.Len() != 2 {
 		t.Fatalf("len = %d", ilst.Len())
@@ -339,8 +341,8 @@ func TestIlstGnreConversionCase1(t *testing.T) {
 }
 
 func TestIlstGnreConversionCase2(t *testing.T) {
-	po := NewParseOptions()
-	po.ParsingMode = ParsingModeBestAttempt
+	po := meta.NewParseOptions()
+	po.ParsingMode = meta.ParsingModeBestAttempt
 	ilst := readIlstAsset(t, "gnre_conversion_case_2.ilst", po)
 	if ilst.Len() != 2 {
 		t.Fatalf("len = %d", ilst.Len())
@@ -351,7 +353,7 @@ func TestIlstGnreConversionCase2(t *testing.T) {
 }
 
 func TestIlstGnreConversionCase3(t *testing.T) {
-	po := NewParseOptions()
+	po := meta.NewParseOptions()
 	po.ImplicitConversions = false
 	ilst := readIlstAsset(t, "gnre_conversion_case_2.ilst", po)
 	if ilst.Len() != 3 {
@@ -381,7 +383,7 @@ func TestIlstRetainUnknownTypes(t *testing.T) {
 		},
 	})
 	tag := ilst.Tag()
-	strings := tag.GetStrings(ItemKeyTrackArtists)
+	strings := tag.GetStrings(meta.ItemKeyTrackArtists)
 	if len(strings) != 2 || strings[0] != "Serial-ATA" || strings[1] != "Lofty" {
 		t.Fatalf("artists = %v", strings)
 	}
@@ -392,8 +394,8 @@ func TestIlstRetainUnknownTypes(t *testing.T) {
 
 func TestIlstPictureRoundtrip(t *testing.T) {
 	ilst := NewIlst()
-	ilst.InsertPicture(PictureUnchecked([]byte{1, 2, 3}).Build())
-	ilst.InsertPicture(PictureUnchecked([]byte{4, 5, 6}).Build())
+	ilst.InsertPicture(meta.PictureUnchecked([]byte{1, 2, 3}).Build())
+	ilst.InsertPicture(meta.PictureUnchecked([]byte{4, 5, 6}).Build())
 	if a := ilst.Get(FourccIdent("covr")); a == nil || len(a.Data) != 2 {
 		t.Fatalf("covr = %+v", a)
 	}
@@ -412,7 +414,7 @@ func TestIlstZeroSized(t *testing.T) {
 	if err != nil {
 		t.Skip("fixture missing")
 	}
-	po := NewParseOptions()
+	po := meta.NewParseOptions()
 	po.ReadProperties = false
 	f, err := Mp4FileReadFrom(bytes.NewReader(data), po)
 	if err != nil {
@@ -433,7 +435,7 @@ func TestIlstTrailingPadding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	po := NewParseOptions()
+	po := meta.NewParseOptions()
 	po.ReadProperties = false
 	if _, err := Mp4FileReadFrom(bytes.NewReader(fileBytes), po); err != nil {
 		t.Fatal(err)
@@ -458,7 +460,7 @@ func TestIlstTrailingPadding(t *testing.T) {
 	}
 	defer f.Close()
 	ilst.SetTitle("Exactly 21 Characters")
-	if err := mp4WriteIlstData(NewOSFile(f), ilst, NewWriteOptions()); err != nil {
+	if err := mp4WriteIlstData(meta.NewOSFile(f), ilst, meta.NewWriteOptions()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -486,7 +488,7 @@ func TestIlstReadNonFullMetaAtom(t *testing.T) {
 	if err != nil {
 		t.Skip("fixture missing")
 	}
-	po := NewParseOptions()
+	po := meta.NewParseOptions()
 	po.ReadProperties = false
 	f, err := Mp4FileReadFrom(bytes.NewReader(data), po)
 	if err != nil {
@@ -513,13 +515,13 @@ func TestIlstWriteNonFullMetaAtom(t *testing.T) {
 	defer f.Close()
 	ilst := NewIlst()
 	ilst.Insert(Atom{FourccIdent("©ART"), []AtomData{{Kind: AtomDataUTF8, Text: "Foo artist"}}})
-	if err := mp4WriteIlstData(NewOSFile(f), ilst, NewWriteOptions()); err != nil {
+	if err := mp4WriteIlstData(meta.NewOSFile(f), ilst, meta.NewWriteOptions()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}
-	mf, err := Mp4FileReadFrom(f, NewParseOptions())
+	mf, err := Mp4FileReadFrom(f, meta.NewParseOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -573,7 +575,7 @@ func TestIlstRetainKnownIdentsWithUnknownTypes(t *testing.T) {
 
 	tag := ilst.Tag()
 	var artists []string
-	for _, item := range tag.GetItems(ItemKeyTrackArtists) {
+	for _, item := range tag.GetItems(meta.ItemKeyTrackArtists) {
 		s, _ := item.Value().IntoString()
 		artists = append(artists, s)
 	}

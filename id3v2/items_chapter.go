@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"io"
 
+	meta "github.com/subframe7536/lofty-go/internal/meta"
+
 	"github.com/subframe7536/lofty-go/internal/util"
 )
 
@@ -62,7 +64,7 @@ func (f *ChapterFrame) frameBytes(ctx *frameEncodingContext) ([]byte, error) {
 	var content bytes.Buffer
 	idBytes, err := util.TextEncodingLatin1.Encode(f.Id, true, ctx.writeOptions.LossyTextEncoding)
 	if err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	content.Write(idBytes)
 	var tmp [4]byte
@@ -92,17 +94,17 @@ func (f *ChapterFrame) cloneFrame() Frame {
 	return &c
 }
 
-func parseChapterFrame(reader io.Reader, parseOptions ParseOptions, version Id3v2Version, frameFlags FrameFlags) (*ChapterFrame, error) {
+func parseChapterFrame(reader io.Reader, parseOptions meta.ParseOptions, version Id3v2Version, frameFlags FrameFlags) (*ChapterFrame, error) {
 	if version == id3v2Version2 {
 		return nil, frameParseUnsupportedVersion(version)
 	}
 	idRes, err := decodeText(reader, textDecodeOpts(util.TextEncodingLatin1, true))
 	if err != nil {
-		return nil, frameParseError(None[FrameId](), err)
+		return nil, frameParseError(meta.None[FrameId](), err)
 	}
 	var times [16]byte
 	if _, err := io.ReadFull(reader, times[:]); err != nil {
-		return nil, frameParseError(None[FrameId](), err)
+		return nil, frameParseError(meta.None[FrameId](), err)
 	}
 	children, err := readAllFramesIntoList(reader, version, Id3v2TagFlags{}, parseOptions)
 	if err != nil {
@@ -198,12 +200,12 @@ func (f *ChapterTableOfContentsFrame) frameBytes(ctx *frameEncodingContext) ([]b
 		return nil, frameEncodingUnsupportedVersion(ctx.version)
 	}
 	if len(f.Entries) > 0xFF {
-		return nil, frameEncodingError(None[FrameId](), &TooMuchDataError{})
+		return nil, frameEncodingError(meta.None[FrameId](), &meta.TooMuchDataError{})
 	}
 	var content bytes.Buffer
 	idBytes, err := util.TextEncodingLatin1.Encode(f.Id, true, ctx.writeOptions.LossyTextEncoding)
 	if err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	content.Write(idBytes)
 	content.WriteByte(f.TocFlags.AsU8())
@@ -211,7 +213,7 @@ func (f *ChapterTableOfContentsFrame) frameBytes(ctx *frameEncodingContext) ([]b
 	for _, entry := range f.Entries {
 		entryBytes, err := util.TextEncodingLatin1.Encode(entry, true, ctx.writeOptions.LossyTextEncoding)
 		if err != nil {
-			return nil, frameEncodingError(None[FrameId](), err)
+			return nil, frameEncodingError(meta.None[FrameId](), err)
 		}
 		content.Write(entryBytes)
 	}
@@ -234,17 +236,17 @@ func (f *ChapterTableOfContentsFrame) cloneFrame() Frame {
 	return &c
 }
 
-func parseChapterTableOfContentsFrame(reader io.Reader, parseOptions ParseOptions, version Id3v2Version, frameFlags FrameFlags) (*ChapterTableOfContentsFrame, error) {
+func parseChapterTableOfContentsFrame(reader io.Reader, parseOptions meta.ParseOptions, version Id3v2Version, frameFlags FrameFlags) (*ChapterTableOfContentsFrame, error) {
 	if version == id3v2Version2 {
 		return nil, frameParseUnsupportedVersion(version)
 	}
 	idRes, err := decodeText(reader, textDecodeOpts(util.TextEncodingLatin1, true))
 	if err != nil {
-		return nil, frameParseError(None[FrameId](), err)
+		return nil, frameParseError(meta.None[FrameId](), err)
 	}
 	var flagBytes [2]byte
 	if _, err := io.ReadFull(reader, flagBytes[:]); err != nil {
-		return nil, frameParseError(None[FrameId](), err)
+		return nil, frameParseError(meta.None[FrameId](), err)
 	}
 	flags := CtocFlagsFromU8(flagBytes[0])
 	entryCount := flagBytes[1]
@@ -252,7 +254,7 @@ func parseChapterTableOfContentsFrame(reader io.Reader, parseOptions ParseOption
 	for i := 0; i < int(entryCount); i++ {
 		entry, err := decodeText(reader, textDecodeOpts(util.TextEncodingLatin1, true))
 		if err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 		entries = append(entries, entry.Content)
 	}

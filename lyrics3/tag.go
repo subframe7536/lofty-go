@@ -8,6 +8,7 @@ import (
 
 	"github.com/subframe7536/lofty-go/internal/meta"
 	"github.com/subframe7536/lofty-go/internal/tagpos"
+	"github.com/subframe7536/lofty-go/internal/util"
 )
 
 var (
@@ -62,26 +63,26 @@ func ParseLyrics3Tag(content []byte) (*Lyrics3Tag, error) {
 	if len(content) < len(lyrics3v2Header)+len(lyrics3v1Footer) ||
 		!bytes.Equal(content[:len(lyrics3v2Header)], lyrics3v2Header) ||
 		!bytes.HasSuffix(content, lyrics3v1Footer) {
-		return nil, &Lyrics3ParseError{Source: &FakeTagError{}}
+		return nil, &Lyrics3ParseError{Source: &meta.FakeTagError{}}
 	}
 	return &Lyrics3Tag{
-		Lyrics: latin1Decode(content[len(lyrics3v2Header) : len(content)-len(lyrics3v1Footer)]),
+		Lyrics: util.Latin1Decode(content[len(lyrics3v2Header) : len(content)-len(lyrics3v1Footer)]),
 	}, nil
 }
 
 // Tag converts the tag to a generic [Tag].
-func (t *Lyrics3Tag) Tag() *Tag {
-	tag := NewTag(TagTypeLyrics3)
+func (t *Lyrics3Tag) Tag() *meta.Tag {
+	tag := meta.NewTag(meta.TagTypeLyrics3)
 	if t.Lyrics != "" {
-		tag.PushUnchecked(NewTagItem(ItemKeyLyrics, ItemValueText(t.Lyrics)))
+		tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyLyrics, meta.ItemValueText(t.Lyrics)))
 	}
 	return tag
 }
 
 // Lyrics3TagFromTag converts a generic [Tag] to a [Lyrics3Tag].
-func Lyrics3TagFromTag(tag *Tag) *Lyrics3Tag {
+func Lyrics3TagFromTag(tag *meta.Tag) *Lyrics3Tag {
 	out := &Lyrics3Tag{}
-	if s, ok := tag.GetString(ItemKeyLyrics); ok {
+	if s, ok := tag.GetString(meta.ItemKeyLyrics); ok {
 		out.Lyrics = s
 	}
 	return out
@@ -99,7 +100,7 @@ func (t *Lyrics3Tag) Len() int {
 func (t *Lyrics3Tag) IsEmpty() bool { return t.Lyrics == "" }
 
 // DumpTo writes the encoded tag to writer.
-func (t *Lyrics3Tag) DumpTo(writer io.Writer, writeOptions WriteOptions) error {
+func (t *Lyrics3Tag) DumpTo(writer io.Writer, writeOptions meta.WriteOptions) error {
 	data, err := t.encode(writeOptions)
 	if err != nil {
 		return err
@@ -108,21 +109,21 @@ func (t *Lyrics3Tag) DumpTo(writer io.Writer, writeOptions WriteOptions) error {
 	return err
 }
 
-func (t *Lyrics3Tag) encode(writeOptions WriteOptions) ([]byte, error) {
+func (t *Lyrics3Tag) encode(writeOptions meta.WriteOptions) ([]byte, error) {
 	lyrics := t.Lyrics
 	if lyrics == "" {
 		return nil, nil // Stripping
 	}
 	if strings.Contains(lyrics, "LYRICSBEGIN") || strings.Contains(lyrics, "LYRICSEND") {
-		return nil, &TagEncodingError{
-			TagType: TagTypeLyrics3, HasTagType: true,
+		return nil, &meta.TagEncodingError{
+			TagType: meta.TagTypeLyrics3, HasTagType: true,
 			Source: &Lyrics3ParseError{Message: "lyrics text contains tag markers"},
 		}
 	}
 	enc, err := writeLatin1Field(lyrics, lyrics3v1MaxLyricsLen, writeOptions,
 		&Lyrics3ParseError{Message: "lyrics text contains invalid characters"})
 	if err != nil {
-		return nil, &TagEncodingError{TagType: TagTypeLyrics3, HasTagType: true, Source: err}
+		return nil, &meta.TagEncodingError{TagType: meta.TagTypeLyrics3, HasTagType: true, Source: err}
 	}
 	out := make([]byte, 0, len(lyrics3v2Header)+len(enc)+len(lyrics3v1Footer))
 	out = append(out, lyrics3v2Header...)
@@ -132,13 +133,13 @@ func (t *Lyrics3Tag) encode(writeOptions WriteOptions) ([]byte, error) {
 }
 
 // writeLatin1Field encodes a string to Latin-1, truncating to maxChars. When
-// the content exceeds maxChars, TooMuchDataError is returned unless
-// WriteOptions.ImplicitTruncation is set.
-func writeLatin1Field(s string, maxChars int, writeOptions WriteOptions, encErr error) ([]byte, error) {
+// the content exceeds maxChars, meta.TooMuchDataError is returned unless
+// meta.WriteOptions.ImplicitTruncation is set.
+func writeLatin1Field(s string, maxChars int, writeOptions meta.WriteOptions, encErr error) ([]byte, error) {
 	if len([]rune(s)) > maxChars && !writeOptions.ImplicitTruncation {
-		return nil, &TooMuchDataError{}
+		return nil, &meta.TooMuchDataError{}
 	}
-	enc, err := latin1Encode(s, writeOptions.LossyTextEncoding)
+	enc, err := util.Latin1Encode(s, writeOptions.LossyTextEncoding)
 	if err != nil {
 		return nil, encErr
 	}
@@ -167,44 +168,44 @@ type Lyrics3v2TagFlags struct {
 // Lyrics3v2Image is an image file link in a [Lyrics3v2Tag].
 type Lyrics3v2Image struct {
 	Filename    string
-	Description Option[string]
-	Timestamp   *Timestamp
+	Description meta.Option[string]
+	Timestamp   *meta.Timestamp
 }
 
 // Lyrics3v2Tag is a Lyrics3 v2 tag.
 type Lyrics3v2Tag struct {
 	Flags              Lyrics3v2TagFlags
-	Lyrics             Option[string]
-	Info               Option[string]
-	Author             Option[string]
-	ExtendedAlbumName  Option[string]
-	ExtendedArtistName Option[string]
-	ExtendedTrackTitle Option[string]
+	Lyrics             meta.Option[string]
+	Info               meta.Option[string]
+	Author             meta.Option[string]
+	ExtendedAlbumName  meta.Option[string]
+	ExtendedArtistName meta.Option[string]
+	ExtendedTrackTitle meta.Option[string]
 	Images             []Lyrics3v2Image
 }
 
 // ParseLyrics3v2Tag parses a complete Lyrics3v2 tag
 // (`LYRICSBEGIN`..`<size>`..`LYRICS200`).
-func ParseLyrics3v2Tag(content []byte, parseOptions ParseOptions) (*Lyrics3v2Tag, error) {
+func ParseLyrics3v2Tag(content []byte, parseOptions meta.ParseOptions) (*Lyrics3v2Tag, error) {
 	if len(content) < len(lyrics3v2Header)+len(lyrics3v2Footer) ||
 		!bytes.Equal(content[:len(lyrics3v2Header)], lyrics3v2Header) ||
 		!bytes.HasSuffix(content, lyrics3v2Footer) {
-		return nil, &Lyrics3v2ParseError{Source: &FakeTagError{}}
+		return nil, &Lyrics3v2ParseError{Source: &meta.FakeTagError{}}
 	}
 
 	body := content[:len(content)-len(lyrics3v2Footer)]
 	if len(body) < 6 {
-		return nil, &Lyrics3v2ParseError{Source: &FakeTagError{}}
+		return nil, &Lyrics3v2ParseError{Source: &meta.FakeTagError{}}
 	}
 
-	sizeBytes, tagSize := asciiNumber(body[len(body)-6:])
+	sizeBytes, tagSize := util.AsciiNumber(body[len(body)-6:])
 	if sizeBytes != 6 {
 		return nil, &Lyrics3v2ParseError{Message: "non-numeric tag size"}
 	}
 	body = body[:len(body)-6]
 	if int(tagSize) != len(body) {
-		if parseOptions.ParsingMode == ParsingModeStrict {
-			return nil, &Lyrics3v2ParseError{Source: &SizeMismatchError{}}
+		if parseOptions.ParsingMode == meta.ParsingModeStrict {
+			return nil, &Lyrics3v2ParseError{Source: &meta.SizeMismatchError{}}
 		}
 	}
 
@@ -213,18 +214,18 @@ func ParseLyrics3v2Tag(content []byte, parseOptions ParseOptions) (*Lyrics3v2Tag
 	mode := parseOptions.ParsingMode
 
 	parseText := func(size, max int) (string, error) {
-		if size > max && mode == ParsingModeStrict {
-			return "", &Lyrics3v2ParseError{Source: &TooMuchDataError{}}
+		if size > max && mode == meta.ParsingModeStrict {
+			return "", &Lyrics3v2ParseError{Source: &meta.TooMuchDataError{}}
 		}
 		if len(fields) < size {
-			return "", &Lyrics3v2ParseError{Source: &SizeMismatchError{}}
+			return "", &Lyrics3v2ParseError{Source: &meta.SizeMismatchError{}}
 		}
 		raw := fields[:size]
 		fields = fields[size:]
 		if len(raw) > max {
 			raw = raw[:max]
 		}
-		return latin1Decode(raw), nil
+		return util.Latin1Decode(raw), nil
 	}
 
 	for len(fields) > 0 {
@@ -232,7 +233,7 @@ func ParseLyrics3v2Tag(content []byte, parseOptions ParseOptions) (*Lyrics3v2Tag
 			return nil, &Lyrics3v2ParseError{Source: io.ErrUnexpectedEOF}
 		}
 		id := string(fields[:3])
-		n, size64 := asciiNumber(fields[3:8])
+		n, size64 := util.AsciiNumber(fields[3:8])
 		if n != 5 {
 			return nil, &Lyrics3v2ParseError{Message: "non-numeric field size"}
 		}
@@ -246,7 +247,7 @@ func ParseLyrics3v2Tag(content []byte, parseOptions ParseOptions) (*Lyrics3v2Tag
 				return nil, err
 			}
 			if len(ind) != 3 {
-				if mode == ParsingModeStrict {
+				if mode == meta.ParsingModeStrict {
 					return nil, &Lyrics3v2ParseError{Message: "invalid indication value"}
 				}
 				continue
@@ -258,7 +259,7 @@ func ParseLyrics3v2Tag(content []byte, parseOptions ParseOptions) (*Lyrics3v2Tag
 				case '0':
 					return false, nil
 				}
-				if mode == ParsingModeStrict {
+				if mode == meta.ParsingModeStrict {
 					return false, &Lyrics3v2ParseError{Message: "invalid indication value"}
 				}
 				return true, nil
@@ -274,37 +275,37 @@ func ParseLyrics3v2Tag(content []byte, parseOptions ParseOptions) (*Lyrics3v2Tag
 			if err != nil {
 				return nil, err
 			}
-			tag.Lyrics = Some(v)
+			tag.Lyrics = meta.Some(v)
 		case "INF":
 			v, err := parseText(size, lyrics3v2FieldMaxSize)
 			if err != nil {
 				return nil, err
 			}
-			tag.Info = Some(v)
+			tag.Info = meta.Some(v)
 		case "AUT":
 			v, err := parseText(size, lyrics3v2BasicMaxSize)
 			if err != nil {
 				return nil, err
 			}
-			tag.Author = Some(v)
+			tag.Author = meta.Some(v)
 		case "EAL":
 			v, err := parseText(size, lyrics3v2BasicMaxSize)
 			if err != nil {
 				return nil, err
 			}
-			tag.ExtendedAlbumName = Some(v)
+			tag.ExtendedAlbumName = meta.Some(v)
 		case "EAR":
 			v, err := parseText(size, lyrics3v2BasicMaxSize)
 			if err != nil {
 				return nil, err
 			}
-			tag.ExtendedArtistName = Some(v)
+			tag.ExtendedArtistName = meta.Some(v)
 		case "ETT":
 			v, err := parseText(size, lyrics3v2BasicMaxSize)
 			if err != nil {
 				return nil, err
 			}
-			tag.ExtendedTrackTitle = Some(v)
+			tag.ExtendedTrackTitle = meta.Some(v)
 		case "IMG":
 			imgStr, err := parseText(size, lyrics3v2FieldMaxSize)
 			if err != nil {
@@ -318,20 +319,20 @@ func ParseLyrics3v2Tag(content []byte, parseOptions ParseOptions) (*Lyrics3v2Tag
 				var img Lyrics3v2Image
 				img.Filename = parts[0]
 				if len(parts) > 1 && parts[1] != "" {
-					img.Description = Some(parts[1])
-				} else if len(parts) <= 1 && mode == ParsingModeStrict {
+					img.Description = meta.Some(parts[1])
+				} else if len(parts) <= 1 && mode == meta.ParsingModeStrict {
 					return nil, &Lyrics3v2ParseError{Message: "image field missing a description"}
 				}
 				if len(parts) > 2 && parts[2] != "" {
 					ts, err := lyrics3v2ParseTimestamp(parts[2])
 					if err != nil {
-						if mode == ParsingModeStrict {
+						if mode == meta.ParsingModeStrict {
 							return nil, err
 						}
 					} else {
 						img.Timestamp = ts
 					}
-				} else if len(parts) <= 2 && mode == ParsingModeStrict {
+				} else if len(parts) <= 2 && mode == meta.ParsingModeStrict {
 					return nil, &Lyrics3v2ParseError{Message: "image field missing a timestamp"}
 				}
 				tag.Images = append(tag.Images, img)
@@ -339,7 +340,7 @@ func ParseLyrics3v2Tag(content []byte, parseOptions ParseOptions) (*Lyrics3v2Tag
 		default:
 			// Unknown field — skip
 			if len(fields) < size {
-				return nil, &Lyrics3v2ParseError{Source: &SizeMismatchError{}}
+				return nil, &Lyrics3v2ParseError{Source: &meta.SizeMismatchError{}}
 			}
 			fields = fields[size:]
 		}
@@ -348,7 +349,7 @@ func ParseLyrics3v2Tag(content []byte, parseOptions ParseOptions) (*Lyrics3v2Tag
 }
 
 // lyrics3v2ParseTimestamp parses a `[mm:ss]` timestamp.
-func lyrics3v2ParseTimestamp(s string) (*Timestamp, error) {
+func lyrics3v2ParseTimestamp(s string) (*meta.Timestamp, error) {
 	if !strings.HasPrefix(s, "[") || !strings.HasSuffix(s, "]") {
 		return nil, &Lyrics3v2ParseError{Message: "malformed timestamp"}
 	}
@@ -356,37 +357,37 @@ func lyrics3v2ParseTimestamp(s string) (*Timestamp, error) {
 	if !found {
 		return nil, &Lyrics3v2ParseError{Message: "malformed timestamp"}
 	}
-	mb, m := asciiNumber([]byte(mins))
+	mb, m := util.AsciiNumber([]byte(mins))
 	if mb != 2 || m > 59 {
 		return nil, &Lyrics3v2ParseError{Message: "malformed timestamp"}
 	}
-	sb, sec := asciiNumber([]byte(secs))
+	sb, sec := util.AsciiNumber([]byte(secs))
 	if sb != 2 || sec > 59 {
 		return nil, &Lyrics3v2ParseError{Message: "malformed timestamp"}
 	}
-	return &Timestamp{Minute: Some(uint8(m)), Second: Some(uint8(sec))}, nil
+	return &meta.Timestamp{Minute: meta.Some(uint8(m)), Second: meta.Some(uint8(sec))}, nil
 }
 
 // Tag converts the tag to a generic [Tag]. Flags and images ride the
 // companion tag when [GlobalOptions.PreserveFormatSpecificItems] is enabled.
-func (t *Lyrics3v2Tag) Tag() *Tag {
-	tag := NewTag(TagTypeLyrics3v2)
-	take := func(opt Option[string], key ItemKey) {
+func (t *Lyrics3v2Tag) Tag() *meta.Tag {
+	tag := meta.NewTag(meta.TagTypeLyrics3v2)
+	take := func(opt meta.Option[string], key meta.ItemKey) {
 		if v, ok := opt.Get(); ok && v != "" {
-			tag.PushUnchecked(NewTagItem(key, ItemValueText(v)))
+			tag.PushUnchecked(meta.NewTagItem(key, meta.ItemValueText(v)))
 		}
 	}
-	take(t.Lyrics, ItemKeyLyrics)
-	take(t.Info, ItemKeyComment)
-	take(t.Author, ItemKeyLyricist)
-	take(t.ExtendedAlbumName, ItemKeyAlbumTitle)
-	take(t.ExtendedArtistName, ItemKeyTrackArtist)
-	take(t.ExtendedTrackTitle, ItemKeyTrackTitle)
+	take(t.Lyrics, meta.ItemKeyLyrics)
+	take(t.Info, meta.ItemKeyComment)
+	take(t.Author, meta.ItemKeyLyricist)
+	take(t.ExtendedAlbumName, meta.ItemKeyAlbumTitle)
+	take(t.ExtendedArtistName, meta.ItemKeyTrackArtist)
+	take(t.ExtendedTrackTitle, meta.ItemKeyTrackTitle)
 
-	if getGlobalOptions().PreserveFormatSpecificItems {
+	if util.GetGlobalOptions().PreserveFormatSpecificItems {
 		remainder := *t
-		remainder.Lyrics, remainder.Info, remainder.Author = Option[string]{}, Option[string]{}, Option[string]{}
-		remainder.ExtendedAlbumName, remainder.ExtendedArtistName, remainder.ExtendedTrackTitle = Option[string]{}, Option[string]{}, Option[string]{}
+		remainder.Lyrics, remainder.Info, remainder.Author = meta.Option[string]{}, meta.Option[string]{}, meta.Option[string]{}
+		remainder.ExtendedAlbumName, remainder.ExtendedArtistName, remainder.ExtendedTrackTitle = meta.Option[string]{}, meta.Option[string]{}, meta.Option[string]{}
 		if !remainder.IsEmpty() {
 			tag.SetCompanionTag(&remainder)
 		}
@@ -396,24 +397,24 @@ func (t *Lyrics3v2Tag) Tag() *Tag {
 
 // Lyrics3v2TagFromTag merges a generic [Tag] into a [Lyrics3v2Tag], taking
 // format-specific data back out of the companion tag when present.
-func Lyrics3v2TagFromTag(input *Tag) *Lyrics3v2Tag {
+func Lyrics3v2TagFromTag(input *meta.Tag) *Lyrics3v2Tag {
 	var merged Lyrics3v2Tag
-	if getGlobalOptions().PreserveFormatSpecificItems {
+	if util.GetGlobalOptions().PreserveFormatSpecificItems {
 		if comp, ok := input.CompanionTag().(*Lyrics3v2Tag); ok && comp != nil {
 			merged = *comp
 		}
 	}
-	take := func(key ItemKey, dst *Option[string]) {
+	take := func(key meta.ItemKey, dst *meta.Option[string]) {
 		if strs := input.TakeStrings(key); len(strs) > 0 {
-			*dst = Some(strs[0])
+			*dst = meta.Some(strs[0])
 		}
 	}
-	take(ItemKeyLyrics, &merged.Lyrics)
-	take(ItemKeyComment, &merged.Info)
-	take(ItemKeyLyricist, &merged.Author)
-	take(ItemKeyAlbumTitle, &merged.ExtendedAlbumName)
-	take(ItemKeyTrackArtist, &merged.ExtendedArtistName)
-	take(ItemKeyTrackTitle, &merged.ExtendedTrackTitle)
+	take(meta.ItemKeyLyrics, &merged.Lyrics)
+	take(meta.ItemKeyComment, &merged.Info)
+	take(meta.ItemKeyLyricist, &merged.Author)
+	take(meta.ItemKeyAlbumTitle, &merged.ExtendedAlbumName)
+	take(meta.ItemKeyTrackArtist, &merged.ExtendedArtistName)
+	take(meta.ItemKeyTrackTitle, &merged.ExtendedTrackTitle)
 	return &merged
 }
 
@@ -435,7 +436,7 @@ func (t *Lyrics3v2Tag) IsEmpty() bool {
 // Len returns the number of fields and images present.
 func (t *Lyrics3v2Tag) Len() int {
 	n := len(t.Images)
-	for _, o := range []Option[string]{t.Lyrics, t.Info, t.Author, t.ExtendedAlbumName, t.ExtendedArtistName, t.ExtendedTrackTitle} {
+	for _, o := range []meta.Option[string]{t.Lyrics, t.Info, t.Author, t.ExtendedAlbumName, t.ExtendedArtistName, t.ExtendedTrackTitle} {
 		if o.IsSome() {
 			n++
 		}
@@ -444,40 +445,40 @@ func (t *Lyrics3v2Tag) Len() int {
 }
 
 // Contains reports whether the given key maps to a present field.
-func (t *Lyrics3v2Tag) Contains(key ItemKey) bool {
+func (t *Lyrics3v2Tag) Contains(key meta.ItemKey) bool {
 	switch key {
-	case ItemKeyLyrics:
+	case meta.ItemKeyLyrics:
 		return t.Lyrics.IsSome()
-	case ItemKeyComment:
+	case meta.ItemKeyComment:
 		return t.Info.IsSome()
-	case ItemKeyLyricist:
+	case meta.ItemKeyLyricist:
 		return t.Author.IsSome()
-	case ItemKeyAlbumTitle:
+	case meta.ItemKeyAlbumTitle:
 		return t.ExtendedAlbumName.IsSome()
-	case ItemKeyTrackArtist:
+	case meta.ItemKeyTrackArtist:
 		return t.ExtendedArtistName.IsSome()
-	case ItemKeyTrackTitle:
+	case meta.ItemKeyTrackTitle:
 		return t.ExtendedTrackTitle.IsSome()
 	}
 	return false
 }
 
 // Accessor methods mirroring Rust's `Accessor` impl.
-func (t *Lyrics3v2Tag) Comment() Option[string] { return t.Info }
-func (t *Lyrics3v2Tag) SetComment(v string)     { t.Info = Some(v) }
-func (t *Lyrics3v2Tag) RemoveComment()          { t.Info = Option[string]{} }
-func (t *Lyrics3v2Tag) Artist() Option[string]  { return t.ExtendedArtistName }
-func (t *Lyrics3v2Tag) SetArtist(v string)      { t.ExtendedArtistName = Some(v) }
-func (t *Lyrics3v2Tag) RemoveArtist()           { t.ExtendedArtistName = Option[string]{} }
-func (t *Lyrics3v2Tag) Album() Option[string]   { return t.ExtendedAlbumName }
-func (t *Lyrics3v2Tag) SetAlbum(v string)       { t.ExtendedAlbumName = Some(v) }
-func (t *Lyrics3v2Tag) RemoveAlbum()            { t.ExtendedAlbumName = Option[string]{} }
-func (t *Lyrics3v2Tag) Title() Option[string]   { return t.ExtendedTrackTitle }
-func (t *Lyrics3v2Tag) SetTitle(v string)       { t.ExtendedTrackTitle = Some(v) }
-func (t *Lyrics3v2Tag) RemoveTitle()            { t.ExtendedTrackTitle = Option[string]{} }
+func (t *Lyrics3v2Tag) Comment() meta.Option[string] { return t.Info }
+func (t *Lyrics3v2Tag) SetComment(v string)          { t.Info = meta.Some(v) }
+func (t *Lyrics3v2Tag) RemoveComment()               { t.Info = meta.Option[string]{} }
+func (t *Lyrics3v2Tag) Artist() meta.Option[string]  { return t.ExtendedArtistName }
+func (t *Lyrics3v2Tag) SetArtist(v string)           { t.ExtendedArtistName = meta.Some(v) }
+func (t *Lyrics3v2Tag) RemoveArtist()                { t.ExtendedArtistName = meta.Option[string]{} }
+func (t *Lyrics3v2Tag) Album() meta.Option[string]   { return t.ExtendedAlbumName }
+func (t *Lyrics3v2Tag) SetAlbum(v string)            { t.ExtendedAlbumName = meta.Some(v) }
+func (t *Lyrics3v2Tag) RemoveAlbum()                 { t.ExtendedAlbumName = meta.Option[string]{} }
+func (t *Lyrics3v2Tag) Title() meta.Option[string]   { return t.ExtendedTrackTitle }
+func (t *Lyrics3v2Tag) SetTitle(v string)            { t.ExtendedTrackTitle = meta.Some(v) }
+func (t *Lyrics3v2Tag) RemoveTitle()                 { t.ExtendedTrackTitle = meta.Option[string]{} }
 
 // DumpTo writes the encoded tag to writer.
-func (t *Lyrics3v2Tag) DumpTo(writer io.Writer, writeOptions WriteOptions) error {
+func (t *Lyrics3v2Tag) DumpTo(writer io.Writer, writeOptions meta.WriteOptions) error {
 	data, err := t.encode(writeOptions)
 	if err != nil {
 		return err
@@ -488,7 +489,7 @@ func (t *Lyrics3v2Tag) DumpTo(writer io.Writer, writeOptions WriteOptions) error
 
 // len returns the encoded size of the tag's fields (for the size footer).
 func (t *Lyrics3v2Tag) fieldsLen() int {
-	fieldLen := func(o Option[string], maxLen int) int {
+	fieldLen := func(o meta.Option[string], maxLen int) int {
 		v, ok := o.Get()
 		if !ok || v == "" {
 			return 0
@@ -522,8 +523,8 @@ func (t *Lyrics3v2Tag) fieldsLen() int {
 	return n
 }
 
-func (t *Lyrics3v2Tag) encode(writeOptions WriteOptions) ([]byte, error) {
-	filter := func(o Option[string]) (string, bool) {
+func (t *Lyrics3v2Tag) encode(writeOptions meta.WriteOptions) ([]byte, error) {
+	filter := func(o meta.Option[string]) (string, bool) {
 		v, ok := o.Get()
 		return v, ok && v != ""
 	}
@@ -533,7 +534,7 @@ func (t *Lyrics3v2Tag) encode(writeOptions WriteOptions) ([]byte, error) {
 
 	tagContentLen := len(lyrics3v2Header) + t.fieldsLen()
 	if tagContentLen > lyrics3v2TagMaxSize {
-		return nil, &TagEncodingError{TagType: TagTypeLyrics3v2, HasTagType: true, Source: &TooMuchDataError{}}
+		return nil, &meta.TagEncodingError{TagType: meta.TagTypeLyrics3v2, HasTagType: true, Source: &meta.TooMuchDataError{}}
 	}
 
 	var buf bytes.Buffer
@@ -553,7 +554,7 @@ func (t *Lyrics3v2Tag) encode(writeOptions WriteOptions) ([]byte, error) {
 	}
 	buf.Write(ind[:])
 
-	writeField := func(id string, maxSize int, content Option[string]) error {
+	writeField := func(id string, maxSize int, content meta.Option[string]) error {
 		v, ok := filter(content)
 		if !ok {
 			return nil
@@ -564,7 +565,7 @@ func (t *Lyrics3v2Tag) encode(writeOptions WriteOptions) ([]byte, error) {
 		enc, err := writeLatin1Field(v, maxSize, writeOptions,
 			&Lyrics3v2ParseError{Message: id + " contains invalid characters"})
 		if err != nil {
-			return &TagEncodingError{TagType: TagTypeLyrics3v2, HasTagType: true, Source: err}
+			return &meta.TagEncodingError{TagType: meta.TagTypeLyrics3v2, HasTagType: true, Source: err}
 		}
 		buf.Write(enc)
 		return nil
@@ -573,7 +574,7 @@ func (t *Lyrics3v2Tag) encode(writeOptions WriteOptions) ([]byte, error) {
 	for _, f := range []struct {
 		id  string
 		max int
-		opt Option[string]
+		opt meta.Option[string]
 	}{
 		{"LYR", lyrics3v2FieldMaxSize, t.Lyrics},
 		{"INF", lyrics3v2FieldMaxSize, t.Info},
@@ -593,7 +594,7 @@ func (t *Lyrics3v2Tag) encode(writeOptions WriteOptions) ([]byte, error) {
 			fn, err := writeLatin1Field(img.Filename, lyrics3v2PathMax, writeOptions,
 				&Lyrics3v2ParseError{Message: "image filename contains invalid characters"})
 			if err != nil {
-				return nil, &TagEncodingError{TagType: TagTypeLyrics3v2, HasTagType: true, Source: err}
+				return nil, &meta.TagEncodingError{TagType: meta.TagTypeLyrics3v2, HasTagType: true, Source: err}
 			}
 			imgBuf.Write(fn)
 			imgBuf.WriteString("||")
@@ -601,7 +602,7 @@ func (t *Lyrics3v2Tag) encode(writeOptions WriteOptions) ([]byte, error) {
 				de, err := writeLatin1Field(d, lyrics3v2BasicMaxSize, writeOptions,
 					&Lyrics3v2ParseError{Message: "image description contains invalid characters"})
 				if err != nil {
-					return nil, &TagEncodingError{TagType: TagTypeLyrics3v2, HasTagType: true, Source: err}
+					return nil, &meta.TagEncodingError{TagType: meta.TagTypeLyrics3v2, HasTagType: true, Source: err}
 				}
 				imgBuf.Write(de)
 			}
@@ -616,7 +617,7 @@ func (t *Lyrics3v2Tag) encode(writeOptions WriteOptions) ([]byte, error) {
 			}
 		}
 		if imgBuf.Len() > lyrics3v2FieldMaxSize {
-			return nil, &TagEncodingError{TagType: TagTypeLyrics3v2, HasTagType: true, Source: &TooMuchDataError{}}
+			return nil, &meta.TagEncodingError{TagType: meta.TagTypeLyrics3v2, HasTagType: true, Source: &meta.TooMuchDataError{}}
 		}
 		buf.WriteString("IMG")
 		fmt.Fprintf(&buf, "%05d", imgBuf.Len())
@@ -631,7 +632,7 @@ func (t *Lyrics3v2Tag) encode(writeOptions WriteOptions) ([]byte, error) {
 // FindLyrics3 searches for a Lyrics3 tag ending right before the current
 // position. On success the reader is positioned at the start of the tag.
 // Returns (start, end, version, tag, found, err) where version is 1 or 2.
-func FindLyrics3(reader io.ReadSeeker, read bool, parseOptions ParseOptions) (int64, int64, any, bool, error) {
+func FindLyrics3(reader io.ReadSeeker, read bool, parseOptions meta.ParseOptions) (int64, int64, any, bool, error) {
 	end, err := reader.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return 0, 0, nil, false, err
@@ -666,9 +667,9 @@ func FindLyrics3(reader io.ReadSeeker, read bool, parseOptions ParseOptions) (in
 	if lowerBound < 0 {
 		lowerBound = 0
 	}
-	found, err := newRevPatternSearcher(reader, lyrics3v2Header).
-		WithStart(revSearchFromCurrent).
-		WithEnd(revSearchEndAtPos(uint64(lowerBound))).Search()
+	found, err := util.NewRevPatternSearcher(reader, lyrics3v2Header).
+		WithStart(util.RevSearchFromCurrent).
+		WithEnd(util.RevSearchEndAtPos(uint64(lowerBound))).Search()
 	if err != nil || !found {
 		return 0, 0, nil, false, nil
 	}
@@ -711,55 +712,55 @@ func FindLyrics3(reader io.ReadSeeker, read bool, parseOptions ParseOptions) (in
 
 // Lyrics3v2WriteTo writes a Lyrics3v2 tag into a file. The file must contain
 // an ID3v1 tag; the Lyrics3v2 tag is written immediately before it.
-func Lyrics3v2WriteTo(file FileLike, tag *Lyrics3v2Tag, writeOptions WriteOptions) error {
+func Lyrics3v2WriteTo(file meta.FileLike, tag *Lyrics3v2Tag, writeOptions meta.WriteOptions) error {
 	// Find ID3v1 — Lyrics3v2 requires it
 	id3v1Start, _, found, err := tagpos.LocateId3v1(file)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	if !found {
-		return &FileEncodingError{Source: &TagEncodingError{TagType: TagTypeLyrics3v2, HasTagType: true, Source: &Lyrics3v2ParseError{Message: "the destination file must contain an ID3v1 tag"}}}
+		return &meta.FileEncodingError{Source: &meta.TagEncodingError{TagType: meta.TagTypeLyrics3v2, HasTagType: true, Source: &Lyrics3v2ParseError{Message: "the destination file must contain an ID3v1 tag"}}}
 	}
 	// Find an existing Lyrics3 tag before it
 	existingStart, existingEnd := id3v1Start, id3v1Start
 	if _, err := file.Seek(id3v1Start, io.SeekStart); err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	if l3start, l3end, _, l3found, err := FindLyrics3(file, false, writeOptions.ParseOptions); err == nil && l3found {
 		existingStart, existingEnd = l3start, l3end
 	}
 	encoded, err := tag.encode(writeOptions)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
-	return Splice(file, uint64(existingStart), uint64(existingEnd), encoded)
+	return meta.Splice(file, uint64(existingStart), uint64(existingEnd), encoded)
 }
 
 // Lyrics3v1WriteTo writes a Lyrics3v1 tag into a file immediately before ID3v1.
-func Lyrics3v1WriteTo(file FileLike, tag *Lyrics3Tag, writeOptions WriteOptions) error {
+func Lyrics3v1WriteTo(file meta.FileLike, tag *Lyrics3Tag, writeOptions meta.WriteOptions) error {
 	id3v1Start, _, found, err := tagpos.LocateId3v1(file)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	if !found {
-		return &FileEncodingError{Source: &TagEncodingError{TagType: TagTypeLyrics3, HasTagType: true, Source: &Lyrics3ParseError{Message: "the destination file must contain an ID3v1 tag"}}}
+		return &meta.FileEncodingError{Source: &meta.TagEncodingError{TagType: meta.TagTypeLyrics3, HasTagType: true, Source: &Lyrics3ParseError{Message: "the destination file must contain an ID3v1 tag"}}}
 	}
 	existingStart, existingEnd := id3v1Start, id3v1Start
 	if _, err := file.Seek(id3v1Start, io.SeekStart); err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	if l3start, l3end, _, l3found, err := FindLyrics3(file, false, writeOptions.ParseOptions); err == nil && l3found {
 		existingStart, existingEnd = l3start, l3end
 	}
 	encoded, err := tag.encode(writeOptions)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
-	return Splice(file, uint64(existingStart), uint64(existingEnd), encoded)
+	return meta.Splice(file, uint64(existingStart), uint64(existingEnd), encoded)
 }
 
 func init() {
-	meta.RegisterTagDumper(meta.TagTypeLyrics3v2, func(tag *Tag, writer io.Writer, writeOptions WriteOptions) error {
+	meta.RegisterTagDumper(meta.TagTypeLyrics3v2, func(tag *meta.Tag, writer io.Writer, writeOptions meta.WriteOptions) error {
 		data, err := Lyrics3v2TagFromTag(tag).encode(writeOptions)
 		if err != nil {
 			return err
@@ -767,7 +768,7 @@ func init() {
 		_, err = writer.Write(data)
 		return err
 	})
-	meta.RegisterTagDumper(meta.TagTypeLyrics3, func(tag *Tag, writer io.Writer, writeOptions WriteOptions) error {
+	meta.RegisterTagDumper(meta.TagTypeLyrics3, func(tag *meta.Tag, writer io.Writer, writeOptions meta.WriteOptions) error {
 		data, err := Lyrics3TagFromTag(tag).encode(writeOptions)
 		if err != nil {
 			return err
@@ -778,79 +779,79 @@ func init() {
 }
 
 // SaveTo writes the tag into an MPEG file, mirroring Rust `TagExt::save_to`.
-func (t *Lyrics3Tag) SaveTo(file FileLike, writeOptions WriteOptions) error {
-	vf, err := NewVerifiedFile(file, writeOptions.ParseOptions)
+func (t *Lyrics3Tag) SaveTo(file meta.FileLike, writeOptions meta.WriteOptions) error {
+	vf, err := meta.NewVerifiedFile(file, writeOptions.ParseOptions)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	format := vf.Format()
-	support := format.TagSupport(TagTypeLyrics3)
-	if support == TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
-		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	support := format.TagSupport(meta.TagTypeLyrics3)
+	if support == meta.TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
+		return &meta.FileEncodingError{FileType: format, Source: &meta.UnsupportedTagError{}}
 	}
 	return Lyrics3v1WriteTo(file, t, writeOptions)
 }
 
 // SaveToPath writes the tag to a path.
-func (t *Lyrics3Tag) SaveToPath(path string, writeOptions WriteOptions) error {
-	vf, f, err := VerifiedFileFromPath(path, writeOptions.ParseOptions)
+func (t *Lyrics3Tag) SaveToPath(path string, writeOptions meta.WriteOptions) error {
+	vf, f, err := meta.VerifiedFileFromPath(path, writeOptions.ParseOptions)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	defer f.Close()
 	format := vf.Format()
-	support := format.TagSupport(TagTypeLyrics3)
-	if support == TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
-		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	support := format.TagSupport(meta.TagTypeLyrics3)
+	if support == meta.TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
+		return &meta.FileEncodingError{FileType: format, Source: &meta.UnsupportedTagError{}}
 	}
 	return Lyrics3v1WriteTo(vf.File(), t, writeOptions)
 }
 
-// RemoveFrom removes a Lyrics3v1 tag from a [FileLike].
-func (t *Lyrics3Tag) RemoveFrom(file FileLike, writeOptions WriteOptions) error {
-	return TagTypeLyrics3.RemoveFrom(file, writeOptions)
+// RemoveFrom removes a Lyrics3v1 tag from a [meta.FileLike].
+func (t *Lyrics3Tag) RemoveFrom(file meta.FileLike, writeOptions meta.WriteOptions) error {
+	return meta.TagTypeLyrics3.RemoveFrom(file, writeOptions)
 }
 
 // RemoveFromPath removes a Lyrics3v1 tag from a path.
-func (t *Lyrics3Tag) RemoveFromPath(path string, writeOptions WriteOptions) error {
-	return TagTypeLyrics3.RemoveFromPath(path, writeOptions)
+func (t *Lyrics3Tag) RemoveFromPath(path string, writeOptions meta.WriteOptions) error {
+	return meta.TagTypeLyrics3.RemoveFromPath(path, writeOptions)
 }
 
 // SaveTo writes the tag into an MPEG file, mirroring Rust `TagExt::save_to`.
-func (t *Lyrics3v2Tag) SaveTo(file FileLike, writeOptions WriteOptions) error {
-	vf, err := NewVerifiedFile(file, writeOptions.ParseOptions)
+func (t *Lyrics3v2Tag) SaveTo(file meta.FileLike, writeOptions meta.WriteOptions) error {
+	vf, err := meta.NewVerifiedFile(file, writeOptions.ParseOptions)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	format := vf.Format()
-	support := format.TagSupport(TagTypeLyrics3v2)
-	if support == TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
-		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	support := format.TagSupport(meta.TagTypeLyrics3v2)
+	if support == meta.TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
+		return &meta.FileEncodingError{FileType: format, Source: &meta.UnsupportedTagError{}}
 	}
 	return Lyrics3v2WriteTo(file, t, writeOptions)
 }
 
 // SaveToPath writes the tag to a path.
-func (t *Lyrics3v2Tag) SaveToPath(path string, writeOptions WriteOptions) error {
-	vf, f, err := VerifiedFileFromPath(path, writeOptions.ParseOptions)
+func (t *Lyrics3v2Tag) SaveToPath(path string, writeOptions meta.WriteOptions) error {
+	vf, f, err := meta.VerifiedFileFromPath(path, writeOptions.ParseOptions)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	defer f.Close()
 	format := vf.Format()
-	support := format.TagSupport(TagTypeLyrics3v2)
-	if support == TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
-		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	support := format.TagSupport(meta.TagTypeLyrics3v2)
+	if support == meta.TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
+		return &meta.FileEncodingError{FileType: format, Source: &meta.UnsupportedTagError{}}
 	}
 	return Lyrics3v2WriteTo(vf.File(), t, writeOptions)
 }
 
-// RemoveFrom removes a Lyrics3v2 tag from a [FileLike].
-func (t *Lyrics3v2Tag) RemoveFrom(file FileLike, writeOptions WriteOptions) error {
-	return TagTypeLyrics3v2.RemoveFrom(file, writeOptions)
+// RemoveFrom removes a Lyrics3v2 tag from a [meta.FileLike].
+func (t *Lyrics3v2Tag) RemoveFrom(file meta.FileLike, writeOptions meta.WriteOptions) error {
+	return meta.TagTypeLyrics3v2.RemoveFrom(file, writeOptions)
 }
 
 // RemoveFromPath removes a Lyrics3v2 tag from a path.
-func (t *Lyrics3v2Tag) RemoveFromPath(path string, writeOptions WriteOptions) error {
-	return TagTypeLyrics3v2.RemoveFromPath(path, writeOptions)
+func (t *Lyrics3v2Tag) RemoveFromPath(path string, writeOptions meta.WriteOptions) error {
+	return meta.TagTypeLyrics3v2.RemoveFromPath(path, writeOptions)
 }

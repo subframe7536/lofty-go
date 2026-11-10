@@ -6,6 +6,8 @@ package id3v2
 import (
 	"bytes"
 	"testing"
+
+	meta "github.com/subframe7536/lofty-go/internal/meta"
 )
 
 // test_parse_apic
@@ -24,7 +26,7 @@ func TestTaglibParseApic(t *testing.T) {
 	if mt, ok := f.Picture.MimeType().Get(); !ok || mt.String() != "m" {
 		t.Fatalf("mime = %v (ok=%v)", mt, ok)
 	}
-	if f.Picture.PicType() != PictureTypeIcon {
+	if f.Picture.PicType() != meta.PictureTypeIcon {
 		t.Fatalf("pic_type = %v", f.Picture.PicType())
 	}
 	if d, ok := f.Picture.Description(); !ok || d != "d" {
@@ -34,14 +36,14 @@ func TestTaglibParseApic(t *testing.T) {
 
 // test_render_apic
 func TestTaglibRenderApic(t *testing.T) {
-	pic := PictureUnchecked([]byte("PNG data")).
-		PicType(PictureTypeCoverBack).
-		MimeType(MimeTypePng).
+	pic := meta.PictureUnchecked([]byte("PNG data")).
+		PicType(meta.PictureTypeCoverBack).
+		MimeType(meta.MimeTypePng).
 		Description("Description").
 		Build()
 	f := NewAttachedPictureFrame(TextEncodingUTF8, pic)
 
-	got, err := f.AsBytes(NewWriteOptions())
+	got, err := f.AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,12 +87,12 @@ func TestTaglibParseGeob(t *testing.T) {
 func TestTaglibRenderGeob(t *testing.T) {
 	f := NewGeneralEncapsulatedObject(
 		TextEncodingLatin1,
-		Some("application/octet-stream"),
-		Some("test.bin"),
-		Some("Description"),
+		meta.Some("application/octet-stream"),
+		meta.Some("test.bin"),
+		meta.Some("Description"),
 		[]byte{0x01, 0x01, 0x01},
 	)
-	got, err := f.AsBytes(NewWriteOptions())
+	got, err := f.AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +149,7 @@ func TestTaglibParsePopm(t *testing.T) {
 // test_render_popm
 func TestTaglibRenderPopm(t *testing.T) {
 	f := NewPopularimeterFrame("email@example.com", 2, 3)
-	got, err := f.AsBytes(NewWriteOptions())
+	got, err := f.AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +172,7 @@ func TestTaglibParseRelativeVolumeFrame(t *testing.T) {
 		0x08,
 		0x45,
 	}
-	f, err := parseRelativeVolumeAdjustmentFrame(bytes.NewReader(data), FrameFlags{}, ParsingModeStrict)
+	f, err := parseRelativeVolumeAdjustmentFrame(bytes.NewReader(data), FrameFlags{}, meta.ParsingModeStrict)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,10 +207,10 @@ func TestTaglibRenderRelativeVolumeFrame(t *testing.T) {
 			ChannelType:          ChannelTypeFrontRight,
 			VolumeAdjustment:     15,
 			BitsRepresentingPeak: 8,
-			PeakVolume:           Some([]byte{0x45}),
+			PeakVolume:           meta.Some([]byte{0x45}),
 		},
 	})
-	got, err := f.AsBytes(NewWriteOptions())
+	got, err := f.AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +231,7 @@ func TestTaglibUniqueFileIdentifierFrame(t *testing.T) {
 	f, err := parseUniqueFileIdentifierFrame(bytes.NewReader([]byte{
 		'o', 'w', 'n', 'e', 'r', 0x00,
 		0x00, 0x01, 0x02,
-	}), FrameFlags{}, ParsingModeStrict)
+	}), FrameFlags{}, meta.ParsingModeStrict)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,11 +246,11 @@ func TestTaglibUniqueFileIdentifierFrame(t *testing.T) {
 	}
 
 	// Empty UFID — TagLib treats a missing owner as valid; Lofty does not.
-	if _, err := parseUniqueFileIdentifierFrame(bytes.NewReader([]byte{0x00}), FrameFlags{}, ParsingModeStrict); err == nil {
+	if _, err := parseUniqueFileIdentifierFrame(bytes.NewReader([]byte{0x00}), FrameFlags{}, meta.ParsingModeStrict); err == nil {
 		t.Fatal("expected error for empty UFID")
 	}
 
-	got, err := NewUniqueFileIdentifierFrame("owner", []byte{0x01, 0x02, 0x03}).AsBytes(NewWriteOptions())
+	got, err := NewUniqueFileIdentifierFrame("owner", []byte{0x01, 0x02, 0x03}).AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +273,7 @@ func TestTaglibUrlLinkFrame(t *testing.T) {
 	if f.Url() != "http://example.com" {
 		t.Fatalf("url = %q", f.Url())
 	}
-	got, err := f.AsBytes(NewWriteOptions())
+	got, err := f.AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +302,7 @@ func TestTaglibUserUrlLinkFrame(t *testing.T) {
 		t.Fatalf("content = %q", f.Content)
 	}
 
-	got, err := NewExtendedUrlFrame(TextEncodingLatin1, "foo", "http://example.com").AsBytes(NewWriteOptions())
+	got, err := NewExtendedUrlFrame(TextEncodingLatin1, "foo", "http://example.com").AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +341,7 @@ func TestTaglibOwnershipFrame(t *testing.T) {
 		t.Fatalf("seller = %q", f.Seller)
 	}
 
-	got, err := NewOwnershipFrame(TextEncodingLatin1, "GBP1.99", "20120905", "Beatport").AsBytes(NewWriteOptions())
+	got, err := NewOwnershipFrame(TextEncodingLatin1, "GBP1.99", "20120905", "Beatport").AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,10 +413,10 @@ func TestTaglibSynchronizedLyricsFrame(t *testing.T) {
 		[3]byte{'e', 'n', 'g'},
 		TimestampFormatMS,
 		SyncTextLyrics,
-		Some("foo"),
+		meta.Some("foo"),
 		[]SyncTextItem{{1234, "Example"}, {4567, "Lyrics"}},
 	)
-	got, err := f.AsBytes(NewWriteOptions())
+	got, err := f.AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,7 +494,7 @@ func TestTaglibCommentsFrame(t *testing.T) {
 		t.Fatalf("content = %q", f.Content)
 	}
 
-	got, err := NewCommentFrame(TextEncodingUTF16, [3]byte{'e', 'n', 'g'}, "Description", "Text").AsBytes(NewWriteOptions())
+	got, err := NewCommentFrame(TextEncodingUTF16, [3]byte{'e', 'n', 'g'}, "Description", "Text").AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -527,7 +529,7 @@ func TestTaglibPrivateFrame(t *testing.T) {
 		t.Fatalf("private_data = %v", f.PrivateData)
 	}
 
-	got, err := NewPrivateFrame("WM/Provider", []byte{'T', 'L'}).AsBytes(NewWriteOptions())
+	got, err := NewPrivateFrame("WM/Provider", []byte{'T', 'L'}).AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -567,7 +569,7 @@ func TestTaglibUserTextIdentificationFrame(t *testing.T) {
 	}
 
 	f2 := NewExtendedTextFrame(TextEncodingLatin1, "", "Text")
-	got, err := f2.AsBytes(NewWriteOptions())
+	got, err := f2.AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -575,7 +577,7 @@ func TestTaglibUserTextIdentificationFrame(t *testing.T) {
 		t.Fatalf("bytes = %q", got)
 	}
 	f2.Description = "Description"
-	got, err = f2.AsBytes(NewWriteOptions())
+	got, err = f2.AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -606,7 +608,7 @@ func TestTaglibChapterFrame(t *testing.T) {
 		'C', 'H', '1',
 	}
 
-	f1, err := parseChapterFrame(bytes.NewReader(chapterData), NewParseOptions(), id3v2Version4, FrameFlags{})
+	f1, err := parseChapterFrame(bytes.NewReader(chapterData), meta.NewParseOptions(), id3v2Version4, FrameFlags{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -621,7 +623,7 @@ func TestTaglibChapterFrame(t *testing.T) {
 	}
 
 	withTIT2 := append(append([]byte{}, chapterData...), embeddedFrameData...)
-	f2, err := parseChapterFrame(bytes.NewReader(withTIT2), NewParseOptions(), id3v2Version4, FrameFlags{})
+	f2, err := parseChapterFrame(bytes.NewReader(withTIT2), meta.NewParseOptions(), id3v2Version4, FrameFlags{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -636,7 +638,7 @@ func TestTaglibChapterFrame(t *testing.T) {
 	children := NewFrameList()
 	children.Insert(NewTextInformationFrame(FrameIdValid("TIT2"), TextEncodingLatin1, "CH1"))
 	fr := NewChapterFrame("\x43", 3, 5, 2, 3, children)
-	got, err := fr.AsBytes(NewWriteOptions())
+	got, err := fr.AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -661,7 +663,7 @@ func TestTaglibTableOfContentsFrame(t *testing.T) {
 		'T', 'C', '1',
 	}
 
-	f, err := parseChapterTableOfContentsFrame(bytes.NewReader(data), NewParseOptions(), id3v2Version4, FrameFlags{})
+	f, err := parseChapterTableOfContentsFrame(bytes.NewReader(data), meta.NewParseOptions(), id3v2Version4, FrameFlags{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -687,7 +689,7 @@ func TestTaglibTableOfContentsFrame(t *testing.T) {
 	children := NewFrameList()
 	children.Insert(NewTextInformationFrame(FrameIdValid("TIT2"), TextEncodingLatin1, "TC1"))
 	fr := NewChapterTableOfContentsFrame("T", CtocFlags{TopLevel: false, Ordered: true}, []string{"C", "D"}, children)
-	got, err := fr.AsBytes(NewWriteOptions())
+	got, err := fr.AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}

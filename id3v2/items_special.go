@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"io"
 
+	meta "github.com/subframe7536/lofty-go/internal/meta"
+
 	"github.com/subframe7536/lofty-go/internal/util"
 )
 
@@ -64,7 +66,7 @@ type SynchronizedTextFrame struct {
 	Language        [3]byte
 	TimestampFormat TimestampFormat
 	ContentType     SyncTextContentType
-	Description     Option[string]
+	Description     meta.Option[string]
 	content         []SyncTextItem
 }
 
@@ -75,7 +77,7 @@ type SyncTextItem struct {
 }
 
 // NewSynchronizedTextFrame creates a new [SynchronizedTextFrame].
-func NewSynchronizedTextFrame(encoding TextEncoding, language [3]byte, format TimestampFormat, contentType SyncTextContentType, description Option[string], content []SyncTextItem) *SynchronizedTextFrame {
+func NewSynchronizedTextFrame(encoding TextEncoding, language [3]byte, format TimestampFormat, contentType SyncTextContentType, description meta.Option[string], content []SyncTextItem) *SynchronizedTextFrame {
 	return &SynchronizedTextFrame{
 		header:          NewFrameHeader(FrameIdValid("SYLT"), FrameFlags{}),
 		Encoding:        encoding,
@@ -126,7 +128,7 @@ func (f *SynchronizedTextFrame) frameBytes(ctx *frameEncodingContext) ([]byte, e
 
 // AsBytes converts a [SynchronizedTextFrame] to an ID3v2 SYLT frame byte slice
 // (no frame header).
-func (f *SynchronizedTextFrame) AsBytes(writeOptions WriteOptions) ([]byte, error) {
+func (f *SynchronizedTextFrame) AsBytes(writeOptions meta.WriteOptions) ([]byte, error) {
 	for _, c := range f.Language {
 		if !isASCIIAlphabetic(c) {
 			return nil, frameEncodingInvalidLanguage(f.Language)
@@ -142,13 +144,13 @@ func (f *SynchronizedTextFrame) AsBytes(writeOptions WriteOptions) ([]byte, erro
 	desc, _ := f.Description.Get()
 	descBytes, err := encoding.Encode(desc, true, writeOptions.LossyTextEncoding)
 	if err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	data = append(data, descBytes...)
 	for _, item := range f.content {
 		tb, err := encoding.Encode(item.Text, true, writeOptions.LossyTextEncoding)
 		if err != nil {
-			return nil, frameEncodingError(None[FrameId](), err)
+			return nil, frameEncodingError(meta.None[FrameId](), err)
 		}
 		data = append(data, tb...)
 		var tb32 [4]byte
@@ -156,7 +158,7 @@ func (f *SynchronizedTextFrame) AsBytes(writeOptions WriteOptions) ([]byte, erro
 		data = append(data, tb32[:]...)
 	}
 	if uint64(len(data)) > uint64(^uint32(0)) {
-		return nil, frameEncodingError(None[FrameId](), &TooMuchDataError{})
+		return nil, frameEncodingError(meta.None[FrameId](), &meta.TooMuchDataError{})
 	}
 	return data, nil
 }
@@ -175,7 +177,7 @@ func ParseSynchronizedTextFrame(data []byte, frameFlags FrameFlags) (*Synchroniz
 			return nil, frameParseUndersized(FrameIdValid("SYLT"))
 		}
 		if data[0] > 3 {
-			return nil, frameParseError(None[FrameId](), &BadTextEncodingError{})
+			return nil, frameParseError(meta.None[FrameId](), &meta.BadTextEncodingError{})
 		}
 		encoding := TextEncoding(data[0])
 		var language [3]byte
@@ -187,17 +189,17 @@ func ParseSynchronizedTextFrame(data []byte, frameFlags FrameFlags) (*Synchroniz
 		}
 		tf, err := TimestampFormatFromU8(data[4])
 		if err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 		ct, err := SyncTextContentTypeFromU8(data[5])
 		if err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 
 		cursor := bytes.NewReader(data[6:])
 		descRes, err := decodeText(cursor, textDecodeOpts(encoding, true))
 		if err != nil {
-			return nil, frameParseError(None[FrameId](), err)
+			return nil, frameParseError(meta.None[FrameId](), err)
 		}
 
 		var endianness util.ByteOrder
@@ -221,13 +223,13 @@ func ParseSynchronizedTextFrame(data []byte, frameFlags FrameFlags) (*Synchroniz
 			if hasEndianness {
 				text, read, err = util.Utf16DecodeTerminatedMaybeBom(cursor, endianness)
 				if err != nil {
-					return nil, frameParseError(None[FrameId](), err)
+					return nil, frameParseError(meta.None[FrameId](), err)
 				}
 			} else {
 				var res util.DecodeTextResult
 				res, err = decodeText(cursor, textDecodeOpts(encoding, true))
 				if err != nil {
-					return nil, frameParseError(None[FrameId](), err)
+					return nil, frameParseError(meta.None[FrameId](), err)
 				}
 				read = res.BytesRead
 				text = res.Content
@@ -235,15 +237,15 @@ func ParseSynchronizedTextFrame(data []byte, frameFlags FrameFlags) (*Synchroniz
 			pos += read
 			var tb [4]byte
 			if _, err := io.ReadFull(cursor, tb[:]); err != nil {
-				return nil, frameParseError(None[FrameId](), err)
+				return nil, frameParseError(meta.None[FrameId](), err)
 			}
 			pos += 4
 			content = append(content, SyncTextItem{Timestamp: binary.BigEndian.Uint32(tb[:]), Text: text})
 		}
 
-		var desc Option[string]
+		var desc meta.Option[string]
 		if descRes.Content != "" {
-			desc = Some(descRes.Content)
+			desc = meta.Some(descRes.Content)
 		}
 		return &SynchronizedTextFrame{
 			header:          NewFrameHeader(FrameIdValid("SYLT"), frameFlags),
@@ -268,14 +270,14 @@ func ParseSynchronizedTextFrame(data []byte, frameFlags FrameFlags) (*Synchroniz
 type GeneralEncapsulatedObject struct {
 	header     FrameHeader
 	Encoding   TextEncoding
-	MimeType   Option[string]
-	FileName   Option[string]
-	Descriptor Option[string]
+	MimeType   meta.Option[string]
+	FileName   meta.Option[string]
+	Descriptor meta.Option[string]
 	Data       []byte
 }
 
 // NewGeneralEncapsulatedObject creates a new [GeneralEncapsulatedObject].
-func NewGeneralEncapsulatedObject(encoding TextEncoding, mimeType, fileName, descriptor Option[string], data []byte) *GeneralEncapsulatedObject {
+func NewGeneralEncapsulatedObject(encoding TextEncoding, mimeType, fileName, descriptor meta.Option[string], data []byte) *GeneralEncapsulatedObject {
 	return &GeneralEncapsulatedObject{
 		header:     NewFrameHeader(FrameIdValid("GEOB"), FrameFlags{}),
 		Encoding:   encoding,
@@ -306,7 +308,7 @@ func (f *GeneralEncapsulatedObject) frameBytes(ctx *frameEncodingContext) ([]byt
 
 // AsBytes converts a [GeneralEncapsulatedObject] to an ID3v2 GEOB frame byte
 // slice (no frame header).
-func (f *GeneralEncapsulatedObject) AsBytes(writeOptions WriteOptions) ([]byte, error) {
+func (f *GeneralEncapsulatedObject) AsBytes(writeOptions meta.WriteOptions) ([]byte, error) {
 	encoding := f.Encoding
 	if writeOptions.UseID3v23 {
 		encoding = encoding.ToID3v23()
@@ -319,13 +321,13 @@ func (f *GeneralEncapsulatedObject) AsBytes(writeOptions WriteOptions) ([]byte, 
 	fn, _ := f.FileName.Get()
 	fnBytes, err := encoding.Encode(fn, true, writeOptions.LossyTextEncoding)
 	if err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	bytes_ = append(bytes_, fnBytes...)
 	desc, _ := f.Descriptor.Get()
 	descBytes, err := encoding.Encode(desc, true, writeOptions.LossyTextEncoding)
 	if err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	bytes_ = append(bytes_, descBytes...)
 	return append(bytes_, f.Data...), nil
@@ -344,25 +346,25 @@ func ParseGeneralEncapsulatedObject(data []byte, frameFlags FrameFlags) (*Genera
 		return nil, frameParseUndersized(FrameIdValid("GEOB"))
 	}
 	if data[0] > 3 {
-		return nil, frameParseError(None[FrameId](), &BadTextEncodingError{})
+		return nil, frameParseError(meta.None[FrameId](), &meta.BadTextEncodingError{})
 	}
 	encoding := TextEncoding(data[0])
 	cursor := bytes.NewReader(data[1:])
 	mimeRes, err := decodeText(cursor, textDecodeOpts(util.TextEncodingLatin1, true))
 	if err != nil {
-		return nil, frameParseError(None[FrameId](), err)
+		return nil, frameParseError(meta.None[FrameId](), err)
 	}
 	fnRes, err := decodeText(cursor, textDecodeOpts(encoding, true))
 	if err != nil {
-		return nil, frameParseError(None[FrameId](), err)
+		return nil, frameParseError(meta.None[FrameId](), err)
 	}
 	descRes, err := decodeText(cursor, textDecodeOpts(encoding, true))
 	if err != nil {
-		return nil, frameParseError(None[FrameId](), err)
+		return nil, frameParseError(meta.None[FrameId](), err)
 	}
 	rest, err := io.ReadAll(cursor)
 	if err != nil {
-		return nil, frameParseError(None[FrameId](), err)
+		return nil, frameParseError(meta.None[FrameId](), err)
 	}
 	return &GeneralEncapsulatedObject{
 		header:     NewFrameHeader(FrameIdValid("GEOB"), frameFlags),
@@ -435,7 +437,7 @@ func (f *AudioTextFrame) frameBytes(ctx *frameEncodingContext) ([]byte, error) {
 
 // AsBytes converts an [AudioTextFrame] to an ID3v2 ATXT frame byte slice
 // (no frame header).
-func (f *AudioTextFrame) AsBytes(writeOptions WriteOptions) ([]byte, error) {
+func (f *AudioTextFrame) AsBytes(writeOptions meta.WriteOptions) ([]byte, error) {
 	encoding := f.Encoding
 	if writeOptions.UseID3v23 {
 		encoding = encoding.ToID3v23()
@@ -443,13 +445,13 @@ func (f *AudioTextFrame) AsBytes(writeOptions WriteOptions) ([]byte, error) {
 	content := []byte{uint8(encoding)}
 	mime, err := util.TextEncodingLatin1.Encode(f.MimeType, true, writeOptions.LossyTextEncoding)
 	if err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	content = append(content, mime...)
 	content = append(content, f.AudioFlags.AsU8())
 	et, err := encoding.Encode(f.EquivalentText, true, writeOptions.LossyTextEncoding)
 	if err != nil {
-		return nil, frameEncodingError(None[FrameId](), err)
+		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	content = append(content, et...)
 	return append(content, f.AudioData...), nil
@@ -469,28 +471,28 @@ func ParseAudioTextFrame(bytes_ []byte, frameFlags FrameFlags) (*AudioTextFrame,
 	content := bytes.NewReader(bytes_)
 	var encByte [1]byte
 	if _, err := io.ReadFull(content, encByte[:]); err != nil {
-		return nil, frameParseError(None[FrameId](), err)
+		return nil, frameParseError(meta.None[FrameId](), err)
 	}
 	if encByte[0] > 3 {
-		return nil, frameParseError(None[FrameId](), &BadTextEncodingError{})
+		return nil, frameParseError(meta.None[FrameId](), &meta.BadTextEncodingError{})
 	}
 	encoding := TextEncoding(encByte[0])
 	mimeRes, err := decodeText(content, textDecodeOpts(util.TextEncodingLatin1, true))
 	if err != nil {
-		return nil, frameParseError(None[FrameId](), err)
+		return nil, frameParseError(meta.None[FrameId](), err)
 	}
 	var flagByte [1]byte
 	if _, err := io.ReadFull(content, flagByte[:]); err != nil {
-		return nil, frameParseError(None[FrameId](), err)
+		return nil, frameParseError(meta.None[FrameId](), err)
 	}
 	flags := AudioTextFrameFlagsFromU8(flagByte[0])
 	etRes, err := decodeText(content, textDecodeOpts(encoding, true))
 	if err != nil {
-		return nil, frameParseError(None[FrameId](), err)
+		return nil, frameParseError(meta.None[FrameId](), err)
 	}
 	rest, err := io.ReadAll(content)
 	if err != nil {
-		return nil, frameParseError(None[FrameId](), err)
+		return nil, frameParseError(meta.None[FrameId](), err)
 	}
 	return &AudioTextFrame{
 		header:         NewFrameHeader(FrameIdValid("ATXT"), frameFlags),

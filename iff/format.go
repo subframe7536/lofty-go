@@ -4,8 +4,13 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
+	"math"
 	"strings"
 	"time"
+
+	"github.com/subframe7536/lofty-go/id3v2"
+	meta "github.com/subframe7536/lofty-go/internal/meta"
+	"github.com/subframe7536/lofty-go/internal/util"
 )
 
 var (
@@ -178,11 +183,11 @@ func (t *RiffInfoTag) Track() (uint32, bool) {
 	if !ok {
 		return 0, false
 	}
-	return u32FromString(s)
+	return util.U32FromString(s)
 }
 
 // SetTrack sets the track number.
-func (t *RiffInfoTag) SetTrack(value uint32) { t.InsertKV("IPRT", itoa(int(value))) }
+func (t *RiffInfoTag) SetTrack(value uint32) { t.InsertKV("IPRT", util.Itoa(int(value))) }
 
 // RemoveTrack removes the track number.
 func (t *RiffInfoTag) RemoveTrack() { t.RemoveKey("IPRT") }
@@ -193,38 +198,38 @@ func (t *RiffInfoTag) TrackTotal() (uint32, bool) {
 	if !ok {
 		return 0, false
 	}
-	return u32FromString(s)
+	return util.U32FromString(s)
 }
 
 // SetTrackTotal sets the total tracks.
-func (t *RiffInfoTag) SetTrackTotal(value uint32) { t.InsertKV("IFRM", itoa(int(value))) }
+func (t *RiffInfoTag) SetTrackTotal(value uint32) { t.InsertKV("IFRM", util.Itoa(int(value))) }
 
 // RemoveTrackTotal removes the total tracks.
 func (t *RiffInfoTag) RemoveTrackTotal() { t.RemoveKey("IFRM") }
 
 // Date returns the recording date ("ICRD").
-func (t *RiffInfoTag) Date() Option[Timestamp] {
+func (t *RiffInfoTag) Date() meta.Option[meta.Timestamp] {
 	if s, ok := t.Get("ICRD"); ok {
-		return tryParseTimestamp(s)
+		return util.TryParseTimestamp(s)
 	}
-	return None[Timestamp]()
+	return meta.None[meta.Timestamp]()
 }
 
 // SetDate sets the recording date.
-func (t *RiffInfoTag) SetDate(value Timestamp) { t.InsertKV("ICRD", value.String()) }
+func (t *RiffInfoTag) SetDate(value meta.Timestamp) { t.InsertKV("ICRD", value.String()) }
 
 // RemoveDate removes the recording date.
 func (t *RiffInfoTag) RemoveDate() { t.RemoveKey("ICRD") }
 
 // Tag converts to a generic [Tag].
-func (t *RiffInfoTag) Tag() *Tag {
-	tag := NewTag(TagTypeRiffInfo)
+func (t *RiffInfoTag) Tag() *meta.Tag {
+	tag := meta.NewTag(meta.TagTypeRiffInfo)
 	var remainder *RiffInfoTag
 	for _, i := range t.items {
-		ik := ItemKeyOrUnknown(TagTypeRiffInfo, i.key)
-		if ik == ItemKeyUnknown {
+		ik := meta.ItemKeyOrUnknown(meta.TagTypeRiffInfo, i.key)
+		if ik == meta.ItemKeyUnknown {
 			// Unmappable keys stay in the companion (Rust's split_tag)
-			if getGlobalOptions().PreserveFormatSpecificItems {
+			if util.GetGlobalOptions().PreserveFormatSpecificItems {
 				if remainder == nil {
 					remainder = &RiffInfoTag{}
 				}
@@ -232,7 +237,7 @@ func (t *RiffInfoTag) Tag() *Tag {
 			}
 			continue
 		}
-		tag.PushUnchecked(NewTagItem(ik, ItemValueText(i.value)))
+		tag.PushUnchecked(meta.NewTagItem(ik, meta.ItemValueText(i.value)))
 	}
 	if remainder != nil {
 		tag.SetCompanionTag(remainder)
@@ -241,20 +246,20 @@ func (t *RiffInfoTag) Tag() *Tag {
 }
 
 // RiffInfoTagFromTag converts a generic [Tag] to a [RiffInfoTag].
-func RiffInfoTagFromTag(input *Tag) *RiffInfoTag {
+func RiffInfoTagFromTag(input *meta.Tag) *RiffInfoTag {
 	t := &RiffInfoTag{}
 	// Format-specific items preserved in the companion merge back first
 	// (Rust's MergeTag for the RiffInfoList remainder).
-	if getGlobalOptions().PreserveFormatSpecificItems {
+	if util.GetGlobalOptions().PreserveFormatSpecificItems {
 		if comp, ok := input.CompanionTag().(*RiffInfoTag); ok && comp != nil {
 			t.items = append(t.items, comp.items...)
 		}
 	}
 	for _, item := range input.Items() {
 		var key string
-		if item.Key() == ItemKeyUnknown {
+		if item.Key() == meta.ItemKeyUnknown {
 			key = item.Description
-		} else if k, ok := item.Key().MapKey(TagTypeRiffInfo); ok {
+		} else if k, ok := item.Key().MapKey(meta.TagTypeRiffInfo); ok {
 			key = k
 		} else {
 			continue
@@ -278,57 +283,57 @@ type AiffComment struct {
 
 // AiffTextTag is a collection of AIFF text chunks.
 type AiffTextTag struct {
-	Name        Option[string]
-	Author      Option[string]
-	Copyright   Option[string]
+	Name        meta.Option[string]
+	Author      meta.Option[string]
+	Copyright   meta.Option[string]
 	Annotations []string
 	Comments    []AiffComment
 }
 
 // Tag converts to a generic [Tag].
-func (t *AiffTextTag) Tag() *Tag {
-	tag := NewTag(TagTypeAiffText)
+func (t *AiffTextTag) Tag() *meta.Tag {
+	tag := meta.NewTag(meta.TagTypeAiffText)
 	if v, ok := t.Name.Get(); ok {
-		tag.InsertText(ItemKeyTrackTitle, v)
+		tag.InsertText(meta.ItemKeyTrackTitle, v)
 	}
 	if v, ok := t.Author.Get(); ok {
-		tag.InsertText(ItemKeyTrackArtist, v)
+		tag.InsertText(meta.ItemKeyTrackArtist, v)
 	}
 	if v, ok := t.Copyright.Get(); ok {
-		tag.InsertText(ItemKeyCopyrightMessage, v)
+		tag.InsertText(meta.ItemKeyCopyrightMessage, v)
 	}
 	for _, v := range t.Annotations {
-		tag.PushUnchecked(NewTagItem(ItemKeyComment, ItemValueText(v)))
+		tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyComment, meta.ItemValueText(v)))
 	}
 	// Comments are not representable as items; they ride the companion tag
 	// (Rust's split_tag remainder).
-	if len(t.Comments) > 0 && getGlobalOptions().PreserveFormatSpecificItems {
+	if len(t.Comments) > 0 && util.GetGlobalOptions().PreserveFormatSpecificItems {
 		tag.SetCompanionTag(&AiffTextTag{Comments: t.Comments})
 	}
 	return tag
 }
 
 // AiffTextTagFromTag converts a generic [Tag] to an [AiffTextTag].
-func AiffTextTagFromTag(input *Tag) *AiffTextTag {
+func AiffTextTagFromTag(input *meta.Tag) *AiffTextTag {
 	t := &AiffTextTag{}
 	// Format-specific fields preserved in the companion merge back first
 	// (Rust's MergeTag for the AiffTextChunks remainder).
-	if getGlobalOptions().PreserveFormatSpecificItems {
+	if util.GetGlobalOptions().PreserveFormatSpecificItems {
 		if comp, ok := input.CompanionTag().(*AiffTextTag); ok && comp != nil {
 			*t = *comp
 		}
 	}
-	if s, ok := input.GetString(ItemKeyTrackTitle); t.Name.IsNone() && ok {
-		t.Name = Some(s)
+	if s, ok := input.GetString(meta.ItemKeyTrackTitle); t.Name.IsNone() && ok {
+		t.Name = meta.Some(s)
 	}
-	if s, ok := input.GetString(ItemKeyTrackArtist); t.Author.IsNone() && ok {
-		t.Author = Some(s)
+	if s, ok := input.GetString(meta.ItemKeyTrackArtist); t.Author.IsNone() && ok {
+		t.Author = meta.Some(s)
 	}
-	if s, ok := input.GetString(ItemKeyCopyrightMessage); t.Copyright.IsNone() && ok {
-		t.Copyright = Some(s)
+	if s, ok := input.GetString(meta.ItemKeyCopyrightMessage); t.Copyright.IsNone() && ok {
+		t.Copyright = meta.Some(s)
 	}
 	if len(t.Annotations) == 0 {
-		t.Annotations = input.GetStrings(ItemKeyComment)
+		t.Annotations = input.GetStrings(meta.ItemKeyComment)
 	}
 	return t
 }
@@ -336,7 +341,7 @@ func AiffTextTagFromTag(input *Tag) *AiffTextTag {
 // aiffParseComt parses a COMT chunk body of `size` bytes, appending comments
 // to the tag. Odd-sized comment texts carry a pad byte not included in the
 // size; the final comment's pad is left to the chunk skipper.
-func aiffParseComt(reader io.ReadSeeker, size int64, text *AiffTextTag, parseOptions ParseOptions) error {
+func aiffParseComt(reader io.ReadSeeker, size int64, text *AiffTextTag, parseOptions meta.ParseOptions) error {
 	chunkEnd, _ := reader.Seek(0, io.SeekCurrent)
 	chunkEnd += size
 	var numComments uint16
@@ -355,7 +360,7 @@ func aiffParseComt(reader io.ReadSeeker, size int64, text *AiffTextTag, parseOpt
 		if _, err := io.ReadFull(reader, data); err != nil {
 			return &AiffTextChunksParseError{Source: err}
 		}
-		s, err := utf8Decode(data)
+		s, err := util.Utf8Decode(data)
 		if err != nil {
 			return &AiffTextChunksParseError{Source: err}
 		}
@@ -365,7 +370,7 @@ func aiffParseComt(reader io.ReadSeeker, size int64, text *AiffTextTag, parseOpt
 				return &AiffTextChunksParseError{Source: err}
 			}
 			if pad[0] != 0 {
-				if parseOptions.ParsingMode == ParsingModeStrict {
+				if parseOptions.ParsingMode == meta.ParsingModeStrict {
 					return &AiffTextChunksParseError{Message: "`COMT` chunk has invalid padding"}
 				}
 				// Give up on the rest of the comments (Rust behavior)
@@ -409,18 +414,18 @@ type WavProperties struct {
 	SampleRate     uint32
 	BitDepth       uint8
 	Channels       uint8
-	ChannelMask    Option[ChannelMask]
+	ChannelMask    meta.Option[meta.ChannelMask]
 }
 
-// FileProperties converts to generic [FileProperties].
-func (p WavProperties) FileProperties() FileProperties {
-	return NewFileProperties(
+// FileProperties converts to generic [meta.FileProperties].
+func (p WavProperties) FileProperties() meta.FileProperties {
+	return meta.NewFileProperties(
 		p.Duration,
-		Some(p.OverallBitrate),
-		Some(p.AudioBitrate),
-		Some(p.SampleRate),
-		Some(p.BitDepth),
-		Some(p.Channels),
+		meta.Some(p.OverallBitrate),
+		meta.Some(p.AudioBitrate),
+		meta.Some(p.SampleRate),
+		meta.Some(p.BitDepth),
+		meta.Some(p.Channels),
 		p.ChannelMask,
 	)
 }
@@ -428,97 +433,135 @@ func (p WavProperties) FileProperties() FileProperties {
 // WavFile is a RIFF/WAVE file.
 type WavFile struct {
 	Properties WavProperties
-	RiffInfo   Option[*RiffInfoTag]
-	ID3v2      Option[*Id3v2Tag]
+	RiffInfo   meta.Option[*RiffInfoTag]
+	ID3v2      meta.Option[*id3v2.Id3v2Tag]
 }
 
 // WavFileReadFrom reads a [WavFile] from a reader.
-func WavFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*WavFile, error) {
+func WavFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*WavFile, error) {
 	var file WavFile
 	start, err := reader.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 	streamEnd, err := reader.Seek(0, io.SeekEnd)
 	if err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 	fileLength := uint64(streamEnd - start)
 	if _, err := reader.Seek(start, io.SeekStart); err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 
 	var hdr [12]byte
 	if _, err := io.ReadFull(reader, hdr[:]); err != nil {
-		return nil, &FileParseError{Source: &IffParseError{Source: err}}
+		return nil, &meta.FileParseError{Source: &IffParseError{Source: err}}
 	}
 	if !bytes.Equal(hdr[:4], riffPreamble) || !bytes.Equal(hdr[8:12], wavePreamble) {
-		return nil, &FileParseError{Source: &IffParseError{Source: &FakeTagError{}}}
+		return nil, &meta.FileParseError{Source: &IffParseError{Source: &meta.FakeTagError{}}}
 	}
 
 	var info *RiffInfoTag
-	var id3v2Tag *Id3v2Tag
+	var id3v2Tag *id3v2.Id3v2Tag
 	var fmtData []byte
 	var totalSamples, streamLen uint32
 
-	for {
+	// Mirrors Rust's `Chunks` walker: bounded by the file size after the
+	// 12-byte RIFF header, with FourCC and size validation honored per
+	// meta.ParsingMode.
+	remaining := int64(fileLength) - 12
+	for remaining >= 8 {
 		var ch [8]byte
 		if _, err := io.ReadFull(reader, ch[:]); err != nil {
+			return nil, &meta.FileParseError{Source: &IffParseError{Source: err}}
+		}
+		var fcc [4]byte
+		copy(fcc[:], ch[:4])
+		if !validFourCC(fcc) {
+			if parseOptions.ParsingMode == meta.ParsingModeStrict {
+				return nil, &meta.FileParseError{Source: &meta.SizeMismatchError{}}
+			}
 			break
 		}
 		size := binary.LittleEndian.Uint32(ch[4:])
-		pos, _ := reader.Seek(0, io.SeekCurrent)
-		switch {
-		case bytes.Equal(ch[:4], fmtPreamble):
-			fmtData = make([]byte, size)
-			if _, err := io.ReadFull(reader, fmtData); err != nil {
-				return nil, &FileParseError{Source: err}
+		if int64(size) > remaining {
+			if parseOptions.ParsingMode == meta.ParsingModeStrict {
+				return nil, &meta.FileParseError{Source: &meta.SizeMismatchError{}}
 			}
-		case bytes.Equal(ch[:4], []byte("fact")):
-			var fb [4]byte
-			if _, err := io.ReadFull(reader, fb[:]); err == nil {
-				totalSamples = binary.LittleEndian.Uint32(fb[:])
-			}
-		case bytes.Equal(ch[:4], listPreamble):
-			if size >= 4 {
-				var sub [4]byte
-				if _, err := io.ReadFull(reader, sub[:]); err != nil {
-					return nil, &FileParseError{Source: err}
-				}
-				if bytes.Equal(sub[:], infoPreamble) {
-					if t := parseRiffInfoList(reader, int64(size)-4, parseOptions); t != nil {
-						info = t
-					}
-				}
-			}
-		case bytes.Equal(ch[:4], id3ChunkName) || bytes.Equal(ch[:4], id3ChunkName2):
-			if parseOptions.ReadTags {
-				header, err := ParseId3v2HeaderRaw(reader)
-				if err == nil {
-					t, err := parseId3v2Tag(reader, header, parseOptions)
-					if err == nil {
-						id3v2Tag = t
-					}
-				}
-			}
-		case bytes.Equal(ch[:4], dataPreamble):
-			streamLen = size
-		}
-		if _, err := reader.Seek(pos+int64(size), io.SeekStart); err != nil {
 			break
 		}
-		iffCorrectPosition(reader, size, streamEnd)
+		remaining -= 8
+		pos, _ := reader.Seek(0, io.SeekCurrent)
+		switch {
+		case bytes.Equal(ch[:4], fmtPreamble) && parseOptions.ReadProperties && fmtData == nil:
+			var aerr error
+			if fmtData, aerr = util.TryByteSlice(int(size)); aerr != nil {
+				return nil, &meta.FileParseError{Source: aerr}
+			}
+			if _, err := io.ReadFull(reader, fmtData); err != nil {
+				return nil, &meta.FileParseError{Source: &IffParseError{Source: err}}
+			}
+		case bytes.Equal(ch[:4], []byte("fact")) && parseOptions.ReadProperties && totalSamples == 0:
+			var fb [4]byte
+			if _, err := io.ReadFull(reader, fb[:]); err != nil {
+				return nil, &meta.FileParseError{Source: &IffParseError{Source: err}}
+			}
+			totalSamples = binary.LittleEndian.Uint32(fb[:])
+		case bytes.Equal(ch[:4], dataPreamble) && parseOptions.ReadProperties && streamLen == 0:
+			streamLen += size
+		case bytes.Equal(ch[:4], listPreamble):
+			if size < 4 {
+				return nil, &meta.FileParseError{Source: &meta.SizeMismatchError{}}
+			}
+			var sub [4]byte
+			if _, err := io.ReadFull(reader, sub[:]); err != nil {
+				return nil, &meta.FileParseError{Source: &IffParseError{Source: err}}
+			}
+			if bytes.Equal(sub[:], infoPreamble) && parseOptions.ReadTags {
+				// `end` check from Rust: the INFO list must not extend past
+				// the file.
+				if pos-start+int64(size) > int64(fileLength) {
+					return nil, &meta.FileParseError{Source: &meta.SizeMismatchError{}}
+				}
+				t, err := parseRiffInfoList(reader, int64(size)-4, parseOptions)
+				if err != nil {
+					return nil, err
+				}
+				info = t
+			}
+		case (bytes.Equal(ch[:4], id3ChunkName) || bytes.Equal(ch[:4], id3ChunkName2)) && parseOptions.ReadTags:
+			tag, err := iffReadId3Chunk(reader, size, parseOptions)
+			if err != nil {
+				return nil, err
+			}
+			if tag != nil {
+				if id3v2Tag != nil {
+					// https://github.com/Serial-ATA/lofty-rs/issues/87 —
+					// duplicate tags have their frames appended
+					for _, fr := range tag.Frames.Frames() {
+						id3v2Tag.Frames.Insert(fr)
+					}
+				} else {
+					id3v2Tag = tag
+				}
+			}
+		}
+		if _, err := reader.Seek(pos+int64(size), io.SeekStart); err != nil {
+			return nil, &meta.FileParseError{Source: &IffParseError{Source: err}}
+		}
+		remaining -= int64(size)
+		remaining -= int64(iffCorrectPosition(reader, size, streamEnd))
 	}
 
 	if parseOptions.ReadProperties {
 		if err := wavReadProperties(fmtData, totalSamples, streamLen, fileLength, &file.Properties); err != nil {
-			return nil, &FileParseError{Source: err}
+			return nil, &meta.FileParseError{Source: err}
 		}
 	}
 
 	if parseOptions.ReadTags {
-		file.RiffInfo = optionFromPtr(info)
-		file.ID3v2 = optionFromPtr(id3v2Tag)
+		file.RiffInfo = util.OptionFromPtr(info)
+		file.ID3v2 = util.OptionFromPtr(id3v2Tag)
 	}
 	return &file, nil
 }
@@ -541,34 +584,36 @@ func validFourCC(fourcc [4]byte) bool {
 // iffCorrectPosition consumes the padding byte after an odd-sized chunk,
 // peeking at the next FourCC to avoid eating into the next chunk — mirrors
 // Rust's Chunks::correct_position. The reader must be at the chunk end.
-func iffCorrectPosition(reader io.ReadSeeker, chunkSize uint32, streamEnd int64) {
+// Returns the number of padding bytes consumed (0 or 1).
+func iffCorrectPosition(reader io.ReadSeeker, chunkSize uint32, streamEnd int64) int {
 	if chunkSize%2 == 0 {
-		return
+		return 0
 	}
 	pos, err := reader.Seek(0, io.SeekCurrent)
 	if err != nil || streamEnd-pos < 1 {
-		return
+		return 0
 	}
 	var pad [1]byte
 	if _, err := reader.Read(pad[:]); err != nil {
-		return
+		return 0
 	}
 	if pad[0] == 0 {
-		return
+		return 1
 	}
 	if streamEnd-pos-1 > 4 {
 		var nb [3]byte
 		if _, err := io.ReadFull(reader, nb[:]); err != nil {
-			return
+			return 1
 		}
 		fc := [4]byte{pad[0], nb[0], nb[1], nb[2]}
 		if validFourCC(fc) {
 			// Eating into the next chunk; the "padding" was already consumed
 			_, _ = reader.Seek(-4, io.SeekCurrent)
-		} else {
-			_, _ = reader.Seek(-3, io.SeekCurrent)
+			return 0
 		}
+		_, _ = reader.Seek(-3, io.SeekCurrent)
 	}
+	return 1
 }
 
 // wavReadProperties computes WAV properties from the fmt chunk, total samples
@@ -589,14 +634,14 @@ func wavReadProperties(fmt []byte, totalSamples, streamLen uint32, fileLength ui
 	bitsPerSample := binary.LittleEndian.Uint16(fmt[14:])
 
 	var validBits uint16
-	var channelMask Option[ChannelMask]
+	var channelMask meta.Option[meta.ChannelMask]
 	if formatTag == uint16(waveFormatExt) {
 		if len(fmt) < 40 {
 			return &IffParseError{Message: "extensible format identified, invalid \"fmt \" chunk size found (< 40)"}
 		}
 		// cbSize (2)
 		validBits = binary.LittleEndian.Uint16(fmt[18:])
-		channelMask = Some(ChannelMask(binary.LittleEndian.Uint32(fmt[20:])))
+		channelMask = meta.Some(meta.ChannelMask(binary.LittleEndian.Uint32(fmt[20:])))
 		formatTag = binary.LittleEndian.Uint16(fmt[24:])
 	}
 
@@ -630,50 +675,101 @@ func wavReadProperties(fmt []byte, totalSamples, streamLen uint32, fileLength ui
 	p.BitDepth = bitDepth
 	p.ChannelMask = channelMask
 	if bytesPerSecond > 0 {
-		p.AudioBitrate = uint32(divRound(uint64(bytesPerSecond)*8, 1000))
+		p.AudioBitrate = uint32(util.DivRound(uint64(bytesPerSecond)*8, 1000))
 	}
 	if sampleRate > 0 && totalSamples > 0 {
-		length := divRound(uint64(totalSamples)*1000, uint64(sampleRate))
+		length := util.DivRound(uint64(totalSamples)*1000, uint64(sampleRate))
 		p.Duration = time.Duration(length) * time.Millisecond
 		if length > 0 {
-			p.OverallBitrate = uint32(divRound(fileLength*8, length))
+			p.OverallBitrate = uint32(util.DivRound(fileLength*8, length))
 			if p.AudioBitrate == 0 {
-				p.AudioBitrate = uint32(divRound(uint64(streamLen)*8, length))
+				p.AudioBitrate = uint32(util.DivRound(uint64(streamLen)*8, length))
 			}
 		}
 	} else if streamLen > 0 && bytesPerSecond > 0 {
-		length := divRound(uint64(streamLen)*1000, uint64(bytesPerSecond))
+		length := util.DivRound(uint64(streamLen)*1000, uint64(bytesPerSecond))
 		p.Duration = time.Duration(length) * time.Millisecond
 		if length > 0 {
-			p.OverallBitrate = uint32(divRound(fileLength*8, length))
+			p.OverallBitrate = uint32(util.DivRound(fileLength*8, length))
 		}
 	}
 	return nil
 }
 
-// parseRiffInfoList parses the contents of a LIST/INFO chunk.
-// Chunks with sizes exceeding the list bounds stop parsing, like Rust.
-func parseRiffInfoList(reader io.Reader, size int64, _ ParseOptions) *RiffInfoTag {
+// iffReadId3Chunk reads an ID3 chunk's content and parses it as an ID3v2 tag.
+// Mirrors Rust's `Chunk::id3_chunk`: a chunk under 10 bytes is skipped
+// (erroring in strict mode); parse errors propagate.
+func iffReadId3Chunk(reader io.Reader, size uint32, parseOptions meta.ParseOptions) (*id3v2.Id3v2Tag, error) {
+	content, err := util.TryByteSlice(int(size))
+	if err != nil {
+		return nil, &meta.FileParseError{Source: err}
+	}
+	if _, err := io.ReadFull(reader, content); err != nil {
+		return nil, &meta.FileParseError{Source: &IffParseError{Source: err}}
+	}
+	if len(content) < 10 {
+		if parseOptions.ParsingMode == meta.ParsingModeStrict {
+			return nil, &meta.FileParseError{Source: &meta.FakeTagError{}}
+		}
+		return nil, nil
+	}
+	r := bytes.NewReader(content)
+	header, err := id3v2.ParseId3v2HeaderRaw(r)
+	if err != nil {
+		return nil, &meta.FileParseError{Source: &meta.TagParseError{TagType: meta.TagTypeID3v2, HasTagType: true, Source: err}}
+	}
+	tag, err := id3v2.ParseId3v2Tag(r, header, parseOptions)
+	if err != nil {
+		return nil, &meta.FileParseError{Source: &meta.TagParseError{TagType: meta.TagTypeID3v2, HasTagType: true, Source: err}}
+	}
+	return tag, nil
+}
+
+// parseRiffInfoList parses the contents of a LIST/INFO chunk, mirroring Rust's
+// `parse_riff_info`: values are UTF-8 (undecodable items are skipped unless
+// strict), and chunks exceeding the list bounds stop or error per meta.ParsingMode.
+func parseRiffInfoList(reader io.Reader, size int64, parseOptions meta.ParseOptions) (*RiffInfoTag, error) {
 	tag := &RiffInfoTag{}
 	remaining := size
 	for remaining >= 8 {
 		var ch [8]byte
 		if _, err := io.ReadFull(reader, ch[:]); err != nil {
+			return nil, &meta.FileParseError{Source: &IffParseError{Source: err}}
+		}
+		var fcc [4]byte
+		copy(fcc[:], ch[:4])
+		if !validFourCC(fcc) {
+			if parseOptions.ParsingMode == meta.ParsingModeStrict {
+				return nil, &meta.FileParseError{Source: &meta.SizeMismatchError{}}
+			}
 			break
 		}
-		remaining -= 8
-		key := string(ch[:4])
 		sz := int64(binary.LittleEndian.Uint32(ch[4:]))
+		remaining -= 8
 		if sz > remaining {
-			// Invalid chunk size, stop reading items
+			if parseOptions.ParsingMode == meta.ParsingModeStrict {
+				return nil, &meta.FileParseError{Source: &meta.SizeMismatchError{}}
+			}
 			break
 		}
-		data := make([]byte, sz)
+		data, err := util.TryByteSlice(int(sz))
+		if err != nil {
+			return nil, &meta.FileParseError{Source: err}
+		}
 		if _, err := io.ReadFull(reader, data); err != nil {
-			break
+			return nil, &meta.FileParseError{Source: &IffParseError{Source: err}}
 		}
 		remaining -= sz
-		tag.items = append(tag.items, riffInfoItem{key, trimEndNulls(latin1Decode(data))})
+		value, err := util.Utf8Decode(data)
+		if err != nil {
+			if parseOptions.ParsingMode == meta.ParsingModeStrict {
+				return nil, &meta.FileParseError{Source: &meta.TagParseError{TagType: meta.TagTypeRiffInfo, HasTagType: true, Source: err}}
+			}
+			// RIFF INFO tags have no standard text encoding, so they will
+			// occasionally default to the system encoding — keep trying.
+			continue
+		}
+		tag.items = append(tag.items, riffInfoItem{string(fcc[:]), value})
 		if sz&1 == 1 && remaining > 0 {
 			var pad [1]byte
 			if _, err := reader.Read(pad[:]); err == nil {
@@ -681,89 +777,89 @@ func parseRiffInfoList(reader io.Reader, size int64, _ ParseOptions) *RiffInfoTa
 			}
 		}
 	}
-	return tag
+	return tag, nil
 }
 
-// FileType implements AudioFile.
-func (f *WavFile) FileType() FileType { return FileTypeWav }
+// FileType implements meta.AudioFile.
+func (f *WavFile) FileType() meta.FileType { return meta.FileTypeWav }
 
-// GetProperties implements AudioFile.
-func (f *WavFile) GetProperties() *FileProperties {
+// GetProperties implements meta.AudioFile.
+func (f *WavFile) GetProperties() *meta.FileProperties {
 	fp := f.Properties.FileProperties()
 	return &fp
 }
 
-// ContainsTag implements AudioFile.
+// ContainsTag implements meta.AudioFile.
 func (f *WavFile) ContainsTag() bool { return f.RiffInfo.IsSome() || f.ID3v2.IsSome() }
 
-// ContainsTagType implements AudioFile.
-func (f *WavFile) ContainsTagType(t TagType) bool {
+// ContainsTagType implements meta.AudioFile.
+func (f *WavFile) ContainsTagType(t meta.TagType) bool {
 	switch t {
-	case TagTypeRiffInfo:
+	case meta.TagTypeRiffInfo:
 		return f.RiffInfo.IsSome()
-	case TagTypeID3v2:
+	case meta.TagTypeID3v2:
 		return f.ID3v2.IsSome()
 	}
 	return false
 }
 
-// TaggedFile converts to a [TaggedFile].
-func (f *WavFile) TaggedFile() *TaggedFile {
-	var tags []*Tag
+// TaggedFile converts to a [meta.TaggedFile].
+func (f *WavFile) TaggedFile() *meta.TaggedFile {
+	var tags []*meta.Tag
 	if t, ok := f.RiffInfo.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
 	if t, ok := f.ID3v2.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
-	return NewTaggedFile(FileTypeWav, tags, *f.GetProperties())
+	return meta.NewTaggedFile(meta.FileTypeWav, tags, *f.GetProperties())
 }
 
-// SavePath implements AudioFile.
-func (f *WavFile) SavePath(path string, wo WriteOptions) error {
-	return SaveToPath(path, f, FileTypeWav.PrimaryTagType(), wo)
+// SavePath implements meta.AudioFile.
+func (f *WavFile) SavePath(path string, wo meta.WriteOptions) error {
+	return meta.SaveToPath(path, f, meta.FileTypeWav.PrimaryTagType(), wo)
 }
 
-// SaveFile implements AudioFile.
-func (f *WavFile) SaveFile(file FileLike, wo WriteOptions) error {
-	var tags []*Tag
+// SaveFile implements meta.AudioFile.
+func (f *WavFile) SaveFile(file meta.FileLike, wo meta.WriteOptions) error {
+	var tags []*meta.Tag
 	if t, ok := f.RiffInfo.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
 	if t, ok := f.ID3v2.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
-	return SaveTagFields(file, FileTypeWav, tags, wo)
+	return meta.SaveTagFields(file, meta.FileTypeWav, tags, wo)
 }
 
-// RemoveFromPath implements AudioFile.
-func (f *WavFile) RemoveFromPath(path string, t TagType) error {
-	return RemoveTagFromPath(path, t)
+// RemoveFromPath implements meta.AudioFile.
+func (f *WavFile) RemoveFromPath(path string, t meta.TagType) error {
+	return meta.RemoveTagFromPath(path, t)
 }
 
 // wavWriteRiffInfo replaces or adds a LIST/INFO chunk in a WAV file.
-func wavWriteTag(file FileLike, tag *Tag, writeOptions WriteOptions) error {
-	if tag.TagType() == TagTypeID3v2 {
+func wavWriteTag(file meta.FileLike, tag *meta.Tag, writeOptions meta.WriteOptions) error {
+	if tag.TagType() == meta.TagTypeID3v2 {
 		return wavWriteId3v2(file, tag, writeOptions)
 	}
 	return wavWriteRiffInfo(file, tag, writeOptions)
 }
 
-func wavWriteRiffInfo(file FileLike, tag *Tag, writeOptions WriteOptions) error {
+func wavWriteRiffInfo(file meta.FileLike, tag *meta.Tag, writeOptions meta.WriteOptions) error {
 	return wavWriteRiffInfoTag(file, RiffInfoTagFromTag(tag), writeOptions)
 }
 
 // wavWriteRiffInfoTag replaces or adds a LIST/INFO chunk from a concrete tag.
-func wavWriteRiffInfoTag(file FileLike, tag *RiffInfoTag, _ WriteOptions) error {
+func wavWriteRiffInfoTag(file meta.FileLike, tag *RiffInfoTag, _ meta.WriteOptions) error {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	var hdr [12]byte
 	if _, err := io.ReadFull(file, hdr[:]); err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	if !bytes.Equal(hdr[:4], riffPreamble) || !bytes.Equal(hdr[8:12], wavePreamble) {
-		return &FileEncodingError{Source: &FakeTagError{}}
+		return &meta.FileEncodingError{Source: &meta.FakeTagError{}}
 	}
 
 	// Find an existing LIST/INFO chunk
@@ -772,7 +868,7 @@ func wavWriteRiffInfoTag(file FileLike, tag *RiffInfoTag, _ WriteOptions) error 
 		var ch [8]byte
 		pos, err := file.Seek(0, io.SeekCurrent)
 		if err != nil {
-			return &FileEncodingError{Source: err}
+			return &meta.FileEncodingError{Source: err}
 		}
 		if _, err := io.ReadFull(file, ch[:]); err != nil {
 			break
@@ -781,7 +877,7 @@ func wavWriteRiffInfoTag(file FileLike, tag *RiffInfoTag, _ WriteOptions) error 
 		if bytes.Equal(ch[:4], listPreamble) && size >= 4 {
 			var sub [4]byte
 			if _, err := io.ReadFull(file, sub[:]); err != nil {
-				return &FileEncodingError{Source: err}
+				return &meta.FileEncodingError{Source: err}
 			}
 			if bytes.Equal(sub[:], infoPreamble) {
 				listStart = pos
@@ -801,18 +897,25 @@ func wavWriteRiffInfoTag(file FileLike, tag *RiffInfoTag, _ WriteOptions) error 
 	}
 
 	if err := wavInsertChunk(file, listStart, listEnd, encoded); err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	return nil
 }
 
 // riffInfoListBytes encodes the tag as a `LIST<size>INFO` chunk (empty if the
-// tag has no items), matching Rust's `RiffInfoList::dump_to`.
+// tag has no items), matching Rust's `RiffInfoList::dump_to`. Empty values
+// are skipped like Rust.
 func riffInfoListBytes(info *RiffInfoTag) []byte {
+	if len(info.items) == 0 {
+		return nil
+	}
 	var payload bytes.Buffer
 	payload.WriteString("INFO")
 	for _, item := range info.items {
 		val := item.value
+		if val == "" {
+			continue
+		}
 		size := len(val) + 1
 		var ch [8]byte
 		copy(ch[:4], item.key)
@@ -823,9 +926,6 @@ func riffInfoListBytes(info *RiffInfoTag) []byte {
 		if size&1 == 1 {
 			payload.WriteByte(0)
 		}
-	}
-	if payload.Len() <= 4 {
-		return nil
 	}
 	var encoded bytes.Buffer
 	size := uint32(payload.Len())
@@ -841,7 +941,7 @@ func riffInfoListBytes(info *RiffInfoTag) []byte {
 }
 
 // DumpTo writes the tag as a `LIST<size>INFO` chunk to a writer.
-func (t *RiffInfoTag) DumpTo(writer io.Writer, writeOptions WriteOptions) error {
+func (t *RiffInfoTag) DumpTo(writer io.Writer, writeOptions meta.WriteOptions) error {
 	data := riffInfoListBytes(t)
 	_, err := writer.Write(data)
 	return err
@@ -851,7 +951,7 @@ func (t *RiffInfoTag) DumpTo(writer io.Writer, writeOptions WriteOptions) error 
 // bounds and adjusts the RIFF size by the byte delta. When
 // `chunkStart <= 0` the chunk is inserted at the end of the RIFF (before any
 // trailing non-RIFF data).
-func wavInsertChunk(file FileLike, chunkStart, chunkEnd int64, encoded []byte) error {
+func wavInsertChunk(file meta.FileLike, chunkStart, chunkEnd int64, encoded []byte) error {
 	sizePos, err := file.Seek(4, io.SeekStart)
 	if err != nil {
 		return err
@@ -866,13 +966,13 @@ func wavInsertChunk(file FileLike, chunkStart, chunkEnd int64, encoded []byte) e
 	var delta int64
 	if chunkStart > 0 {
 		delta = int64(len(encoded)) - (chunkEnd - chunkStart)
-		if err := Splice(file, uint64(chunkStart), uint64(chunkEnd), encoded); err != nil {
+		if err := meta.Splice(file, uint64(chunkStart), uint64(chunkEnd), encoded); err != nil {
 			return err
 		}
 	} else if len(encoded) > 0 {
 		delta = int64(len(encoded))
 		insertAt := 8 + riffSize
-		if err := Splice(file, uint64(insertAt), uint64(insertAt), encoded); err != nil {
+		if err := meta.Splice(file, uint64(insertAt), uint64(insertAt), encoded); err != nil {
 			return err
 		}
 	}
@@ -888,13 +988,13 @@ func wavInsertChunk(file FileLike, chunkStart, chunkEnd int64, encoded []byte) e
 }
 
 // wavWriteId3v2 replaces or adds an "ID3 "/id3 chunk.
-func wavWriteId3v2(file FileLike, tag *Tag, writeOptions WriteOptions) error {
+func wavWriteId3v2(file meta.FileLike, tag *meta.Tag, writeOptions meta.WriteOptions) error {
 	var body []byte
 	if !tag.IsEmpty() {
 		var err error
-		body, err = Id3v2Serialize(tag, writeOptions)
+		body, err = id3v2.Id3v2Serialize(tag, writeOptions)
 		if err != nil {
-			return &FileEncodingError{Source: &TagEncodingError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
+			return &meta.FileEncodingError{Source: &meta.TagEncodingError{TagType: meta.TagTypeID3v2, HasTagType: true, Source: err}}
 		}
 	}
 	return wavWriteId3v2Chunk(file, body, writeOptions)
@@ -902,20 +1002,20 @@ func wavWriteId3v2(file FileLike, tag *Tag, writeOptions WriteOptions) error {
 
 // wavWriteId3v2Chunk replaces or adds an "ID3 "/id3 chunk from serialized
 // ID3v2 bytes (empty removes the chunk).
-func wavWriteId3v2Chunk(file FileLike, body []byte, writeOptions WriteOptions) error {
+func wavWriteId3v2Chunk(file meta.FileLike, body []byte, writeOptions meta.WriteOptions) error {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	var hdr [12]byte
 	if _, err := io.ReadFull(file, hdr[:]); err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	var chunkStart, chunkEnd int64
 	for {
 		var ch [8]byte
 		pos, err := file.Seek(0, io.SeekCurrent)
 		if err != nil {
-			return &FileEncodingError{Source: err}
+			return &meta.FileEncodingError{Source: err}
 		}
 		if _, err := io.ReadFull(file, ch[:]); err != nil {
 			break
@@ -947,7 +1047,7 @@ func wavWriteId3v2Chunk(file FileLike, body []byte, writeOptions WriteOptions) e
 		}
 	}
 	if err := wavInsertChunk(file, chunkStart, chunkEnd, encoded.Bytes()); err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	return nil
 }
@@ -962,7 +1062,11 @@ type AiffCompressionType struct {
 }
 
 var (
-	AiffCompressionNone = AiffCompressionType{name: "not compressed"}
+	AiffCompressionNone = AiffCompressionType{id: [4]byte{'N', 'O', 'N', 'E'}, name: "not compressed"}
+	AiffCompressionACE2 = aiffCompressionTypeFromId("ACE2")
+	AiffCompressionACE8 = aiffCompressionTypeFromId("ACE8")
+	AiffCompressionMAC3 = aiffCompressionTypeFromId("MAC3")
+	AiffCompressionMAC6 = aiffCompressionTypeFromId("MAC6")
 	AiffCompressionSowt = aiffCompressionTypeFromId("sowt")
 	AiffCompressionFl32 = aiffCompressionTypeFromId("fl32")
 	AiffCompressionFl64 = aiffCompressionTypeFromId("fl64")
@@ -973,10 +1077,36 @@ var (
 	AiffCompressionFL32 = aiffCompressionTypeFromId("FL32")
 )
 
+// aiffCompressionNames is the set of compression IDs Rust recognizes; other
+// IDs map to `Other { compression_name }` read from the chunk.
+var aiffCompressionNames = map[[4]byte]string{
+	{'N', 'O', 'N', 'E'}: "not compressed",
+	{'A', 'C', 'E', '2'}: "ACE 2-to-1",
+	{'A', 'C', 'E', '8'}: "ACE 8-to-3",
+	{'M', 'A', 'C', '3'}: "MACE 3-to-1",
+	{'M', 'A', 'C', '6'}: "MACE 6-to-1",
+	{'s', 'o', 'w', 't'}: "",
+	{'f', 'l', '3', '2'}: "32-bit floating point",
+	{'f', 'l', '6', '4'}: "64-bit floating point",
+	{'a', 'l', 'a', 'w'}: "ALaw 2:1",
+	{'u', 'l', 'a', 'w'}: "µLaw 2:1",
+	{'U', 'L', 'A', 'W'}: "CCITT G.711 u-law",
+	{'A', 'L', 'A', 'W'}: "CCITT G.711 A-law",
+	{'F', 'L', '3', '2'}: "Float 32",
+}
+
 func aiffCompressionTypeFromId(id string) AiffCompressionType {
 	var t AiffCompressionType
 	copy(t.id[:], id)
 	switch id {
+	case "ACE2":
+		t.name = "ACE 2-to-1"
+	case "ACE8":
+		t.name = "ACE 8-to-3"
+	case "MAC3":
+		t.name = "MACE 3-to-1"
+	case "MAC6":
+		t.name = "MACE 6-to-1"
 	case "sowt":
 		t.name = "" // Has no compression name
 	case "fl32":
@@ -986,13 +1116,13 @@ func aiffCompressionTypeFromId(id string) AiffCompressionType {
 	case "alaw":
 		t.name = "ALaw 2:1"
 	case "ulaw":
-		t.name = "ULaw 2:1"
-	case "ALAW":
-		t.name = "CCITT G.711 A-law"
+		t.name = "µLaw 2:1"
 	case "ULAW":
 		t.name = "CCITT G.711 u-law"
+	case "ALAW":
+		t.name = "CCITT G.711 A-law"
 	case "FL32":
-		t.name = "32-bit floating point (SoundHack & Csound)"
+		t.name = "Float 32"
 	default:
 		t.name = ""
 	}
@@ -1017,48 +1147,48 @@ type AiffProperties struct {
 	SampleRate      uint32
 	BitDepth        uint8
 	Channels        uint8
-	CompressionType Option[AiffCompressionType]
+	CompressionType meta.Option[AiffCompressionType]
 }
 
-// FileProperties converts to generic [FileProperties].
-func (p AiffProperties) FileProperties() FileProperties {
-	return NewFileProperties(
+// FileProperties converts to generic [meta.FileProperties].
+func (p AiffProperties) FileProperties() meta.FileProperties {
+	return meta.NewFileProperties(
 		p.Duration,
-		Some(p.OverallBitrate),
-		Some(p.AudioBitrate),
-		Some(p.SampleRate),
-		Some(p.BitDepth),
-		Some(p.Channels),
-		None[ChannelMask](),
+		meta.Some(p.OverallBitrate),
+		meta.Some(p.AudioBitrate),
+		meta.Some(p.SampleRate),
+		meta.Some(p.BitDepth),
+		meta.Some(p.Channels),
+		meta.None[meta.ChannelMask](),
 	)
 }
 
 // AiffFile is an AIFF file.
 type AiffFile struct {
 	Properties AiffProperties
-	TextChunks Option[*AiffTextTag]
-	ID3v2      Option[*Id3v2Tag]
+	TextChunks meta.Option[*AiffTextTag]
+	ID3v2      meta.Option[*id3v2.Id3v2Tag]
 }
 
 // AiffFileReadFrom reads an [AiffFile] from a reader.
-func AiffFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*AiffFile, error) {
+func AiffFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*AiffFile, error) {
 	var file AiffFile
 	start, err := reader.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 	streamEnd, err := reader.Seek(0, io.SeekEnd)
 	if err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 	fileLength := uint64(streamEnd - start)
 	if _, err := reader.Seek(start, io.SeekStart); err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 
 	var hdr [12]byte
 	if _, err := io.ReadFull(reader, hdr[:]); err != nil {
-		return nil, &FileParseError{Source: &IffParseError{Source: err}}
+		return nil, &meta.FileParseError{Source: &IffParseError{Source: err}}
 	}
 	isAifc := false
 	if bytes.Equal(hdr[:4], formPreamble) && bytes.Equal(hdr[8:12], aiffPreamble) {
@@ -1066,51 +1196,49 @@ func AiffFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*AiffFil
 	} else if bytes.Equal(hdr[:4], formPreamble) && bytes.Equal(hdr[8:12], aifcPreamble) {
 		isAifc = true
 	} else {
-		return nil, &FileParseError{Source: &IffParseError{Source: &FakeTagError{}}}
+		return nil, &meta.FileParseError{Source: &IffParseError{Source: &meta.FakeTagError{}}}
 	}
-	_ = isAifc
 
 	var text *AiffTextTag
-	var id3v2Tag *Id3v2Tag
-	var sawComm bool
-	var comm struct {
-		frames      uint32
-		sampleRate  uint32
-		totalFrames uint32
-	}
+	var id3v2Tag *id3v2.Id3v2Tag
+	var comm []byte
 	var ssndSize uint32
 
-	for {
+	// Same `Chunks` walker semantics as the WAV reader (big-endian sizes).
+	remaining := int64(fileLength) - 12
+	for remaining >= 8 {
 		var ch [8]byte
 		if _, err := io.ReadFull(reader, ch[:]); err != nil {
+			return nil, &meta.FileParseError{Source: &IffParseError{Source: err}}
+		}
+		var fcc [4]byte
+		copy(fcc[:], ch[:4])
+		if !validFourCC(fcc) {
+			if parseOptions.ParsingMode == meta.ParsingModeStrict {
+				return nil, &meta.FileParseError{Source: &meta.SizeMismatchError{}}
+			}
 			break
 		}
 		size := binary.BigEndian.Uint32(ch[4:])
+		if int64(size) > remaining {
+			if parseOptions.ParsingMode == meta.ParsingModeStrict {
+				return nil, &meta.FileParseError{Source: &meta.SizeMismatchError{}}
+			}
+			break
+		}
+		remaining -= 8
 		pos, _ := reader.Seek(0, io.SeekCurrent)
 		switch {
-		case bytes.Equal(ch[:4], commPreamble):
-			sawComm = true
-			var cb [18]byte
-			if _, err := io.ReadFull(reader, cb[:]); err != nil {
-				return nil, &FileParseError{Source: err}
+		case bytes.Equal(ch[:4], commPreamble) && parseOptions.ReadProperties && comm == nil:
+			if size < 18 {
+				return nil, &meta.FileParseError{Source: &IffParseError{Source: &meta.NotEnoughDataError{Expected: 18, HasExpected: true}}}
 			}
-			file.Properties.Channels = uint8(binary.BigEndian.Uint16(cb[0:]))
-			comm.totalFrames = binary.BigEndian.Uint32(cb[2:])
-			comm.frames = comm.totalFrames
-			file.Properties.BitDepth = uint8(binary.BigEndian.Uint16(cb[6:]))
-			var rate10 [10]byte
-			copy(rate10[:], cb[8:])
-			rate := f80FromBEBytes(rate10).AsF64()
-			comm.sampleRate = uint32(rate)
-			file.Properties.SampleRate = comm.sampleRate
-			// AIFC: compression type (4) + Pascal string name
-			if size > 18 {
-				var comp [4]byte
-				if _, err := io.ReadFull(reader, comp[:]); err != nil {
-					return nil, &FileParseError{Source: err}
-				}
-				ct := AiffCompressionTypeFromId(comp)
-				file.Properties.CompressionType = Some(ct)
+			var aerr error
+			if comm, aerr = util.TryByteSlice(int(size)); aerr != nil {
+				return nil, &meta.FileParseError{Source: aerr}
+			}
+			if _, err := io.ReadFull(reader, comm); err != nil {
+				return nil, &meta.FileParseError{Source: &IffParseError{Source: err}}
 			}
 		case bytes.Equal(ch[:4], aiffComtChunk) && parseOptions.ReadTags && (text == nil || len(text.Comments) == 0):
 			if size >= 2 {
@@ -1118,134 +1246,219 @@ func AiffFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*AiffFil
 					text = &AiffTextTag{}
 				}
 				if err := aiffParseComt(reader, int64(size), text, parseOptions); err != nil {
-					return nil, &FileParseError{Source: err}
+					return nil, &meta.FileParseError{Source: err}
 				}
 			}
-		case bytes.Equal(ch[:4], aiffNameChunk) || bytes.Equal(ch[:4], aiffAuthChunk) ||
-			bytes.Equal(ch[:4], aiffCpyChunk) || bytes.Equal(ch[:4], aiffAnnoChunk):
-			if parseOptions.ReadTags {
-				data, err := tryByteSlice(int(size))
-				if err != nil {
-					return nil, &FileParseError{Source: err}
-				}
-				if _, err := io.ReadFull(reader, data); err != nil {
-					return nil, &FileParseError{Source: err}
-				}
-				if text == nil {
-					text = &AiffTextTag{}
-				}
-				v := latin1Decode(data)
-				switch {
-				case bytes.Equal(ch[:4], aiffNameChunk):
-					text.Name = Some(v)
-				case bytes.Equal(ch[:4], aiffAuthChunk):
-					text.Author = Some(v)
-				case bytes.Equal(ch[:4], aiffCpyChunk):
-					text.Copyright = Some(v)
-				case bytes.Equal(ch[:4], aiffAnnoChunk):
-					text.Annotations = append(text.Annotations, v)
-				}
+		case bytes.Equal(ch[:4], aiffNameChunk) && parseOptions.ReadTags && (text == nil || text.Name.IsNone()):
+			v, err := iffReadChunkString(reader, size)
+			if err != nil {
+				return nil, err
 			}
-		case bytes.Equal(ch[:4], []byte("ID3 ")) || bytes.Equal(ch[:4], []byte("ID3\x00")):
-			if parseOptions.ReadTags {
-				header, err := ParseId3v2HeaderRaw(reader)
-				if err == nil {
-					t, err := parseId3v2Tag(reader, header, parseOptions)
-					if err == nil {
-						id3v2Tag = t
+			if text == nil {
+				text = &AiffTextTag{}
+			}
+			text.Name = meta.Some(v)
+		case bytes.Equal(ch[:4], aiffAuthChunk) && parseOptions.ReadTags && (text == nil || text.Author.IsNone()):
+			v, err := iffReadChunkString(reader, size)
+			if err != nil {
+				return nil, err
+			}
+			if text == nil {
+				text = &AiffTextTag{}
+			}
+			text.Author = meta.Some(v)
+		case bytes.Equal(ch[:4], aiffCpyChunk) && parseOptions.ReadTags && (text == nil || text.Copyright.IsNone()):
+			v, err := iffReadChunkString(reader, size)
+			if err != nil {
+				return nil, err
+			}
+			if text == nil {
+				text = &AiffTextTag{}
+			}
+			text.Copyright = meta.Some(v)
+		case bytes.Equal(ch[:4], aiffAnnoChunk) && parseOptions.ReadTags:
+			v, err := iffReadChunkString(reader, size)
+			if err != nil {
+				return nil, err
+			}
+			if text == nil {
+				text = &AiffTextTag{}
+			}
+			text.Annotations = append(text.Annotations, v)
+		case (bytes.Equal(ch[:4], id3ChunkName) || bytes.Equal(ch[:4], id3ChunkName2)) && parseOptions.ReadTags:
+			tag, err := iffReadId3Chunk(reader, size, parseOptions)
+			if err != nil {
+				return nil, err
+			}
+			if tag != nil {
+				if id3v2Tag != nil {
+					for _, fr := range tag.Frames.Frames() {
+						id3v2Tag.Frames.Insert(fr)
 					}
+				} else {
+					id3v2Tag = tag
 				}
 			}
-		case bytes.Equal(ch[:4], ssndPreamble):
+		case bytes.Equal(ch[:4], ssndPreamble) && parseOptions.ReadProperties:
 			ssndSize = size
 		}
 		if _, err := reader.Seek(pos+int64(size), io.SeekStart); err != nil {
-			break
+			return nil, &meta.FileParseError{Source: &IffParseError{Source: err}}
 		}
-		iffCorrectPosition(reader, size, streamEnd)
+		remaining -= int64(size)
+		remaining -= int64(iffCorrectPosition(reader, size, streamEnd))
 	}
 
-	if parseOptions.ReadProperties && (!sawComm || ssndSize == 0) {
-		return nil, &FileParseError{Source: &IffParseError{Message: "AIFF file is missing a COMM or SSND chunk"}}
-	}
 	if parseOptions.ReadProperties {
-		p := &file.Properties
-		if comm.sampleRate > 0 && comm.totalFrames > 0 {
-			// Rust: duration = trunc(frames*1000/rate); bitrates = len*8/ms + 0.5
-			length := float64(comm.totalFrames) * 1000 / float64(comm.sampleRate)
-			p.Duration = time.Duration(uint64(length)) * time.Millisecond
-			p.OverallBitrate = uint32(float64(fileLength)*8/length + 0.5)
-			p.AudioBitrate = uint32(float64(ssndSize)*8/length + 0.5)
+		if comm == nil {
+			return nil, &meta.FileParseError{Source: &IffParseError{Message: "AIFF file is missing a COMM chunk"}}
+		}
+		if ssndSize == 0 {
+			return nil, &meta.FileParseError{Source: &IffParseError{Message: "file does not contain an \"SSND\" chunk"}}
+		}
+		// Rust passes `data.stream_position()` — the position where the chunk
+		// walk ended, not necessarily EOF.
+		walkEnd, err := reader.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return nil, &meta.FileParseError{Source: err}
+		}
+		if err := aiffReadProperties(comm, isAifc, ssndSize, uint64(walkEnd), &file.Properties); err != nil {
+			return nil, &meta.FileParseError{Source: err}
 		}
 	}
 
 	if parseOptions.ReadTags {
-		file.TextChunks = optionFromPtr(text)
-		file.ID3v2 = optionFromPtr(id3v2Tag)
+		file.TextChunks = util.OptionFromPtr(text)
+		file.ID3v2 = util.OptionFromPtr(id3v2Tag)
 	}
 	return &file, nil
 }
 
-// FileType implements AudioFile.
-func (f *AiffFile) FileType() FileType { return FileTypeAiff }
+// iffReadChunkString reads a chunk's content as a UTF-8 string, mirroring
+// Rust's `Chunk::read_string` (decode errors propagate).
+func iffReadChunkString(reader io.Reader, size uint32) (string, error) {
+	data, err := util.TryByteSlice(int(size))
+	if err != nil {
+		return "", &meta.FileParseError{Source: err}
+	}
+	if _, err := io.ReadFull(reader, data); err != nil {
+		return "", &meta.FileParseError{Source: &IffParseError{Source: err}}
+	}
+	v, err := util.Utf8Decode(data)
+	if err != nil {
+		return "", &meta.FileParseError{Source: &meta.TagParseError{TagType: meta.TagTypeAiffText, HasTagType: true, Source: err}}
+	}
+	return v, nil
+}
 
-// GetProperties implements AudioFile.
-func (f *AiffFile) GetProperties() *FileProperties {
+// aiffReadProperties computes AIFF properties from the COMM chunk content,
+// mirroring Rust's aiff::properties::read_properties.
+func aiffReadProperties(comm []byte, isAifc bool, streamLen uint32, fileLength uint64, p *AiffProperties) error {
+	channels := binary.BigEndian.Uint16(comm[0:])
+	if channels == 0 {
+		return &IffParseError{Message: "file specifies 0 audio channels"}
+	}
+	sampleFrames := binary.BigEndian.Uint32(comm[2:])
+	sampleSize := binary.BigEndian.Uint16(comm[6:])
+	var rate10 [10]byte
+	copy(rate10[:], comm[8:18])
+	rateF := util.F80FromBEBytes(rate10).AsF64()
+	if math.IsNaN(rateF) || math.IsInf(rateF, 0) || math.Signbit(rateF) {
+		return &IffParseError{Message: "invalid sample rate"}
+	}
+	sampleRate := uint32(math.Round(rateF))
+
+	if sampleRate > 0 && sampleFrames > 0 {
+		length := float64(sampleFrames) * 1000 / float64(sampleRate)
+		p.Duration = time.Duration(uint64(length)) * time.Millisecond
+		p.OverallBitrate = uint32(float64(fileLength)*8/length + 0.5)
+		p.AudioBitrate = uint32(float64(streamLen)*8/length + 0.5)
+	}
+	p.SampleRate = sampleRate
+	p.BitDepth = uint8(sampleSize)
+	p.Channels = uint8(channels)
+
+	// Only AIFC files can carry a compression type.
+	if len(comm) >= 5+18 && isAifc {
+		var id [4]byte
+		copy(id[:], comm[18:22])
+		ct := AiffCompressionTypeFromId(id)
+		if _, known := aiffCompressionNames[ct.id]; !known {
+			// Unknown compression: read the Pascal-string name
+			var name string
+			if len(comm) > 22 {
+				nameLen := int(comm[22])
+				if nameLen > 0 && len(comm) >= 23+nameLen {
+					name, _ = util.Utf8Decode(comm[23 : 23+nameLen])
+				}
+			}
+			ct.name = name
+		}
+		p.CompressionType = meta.Some(ct)
+	}
+	return nil
+}
+
+// FileType implements meta.AudioFile.
+func (f *AiffFile) FileType() meta.FileType { return meta.FileTypeAiff }
+
+// GetProperties implements meta.AudioFile.
+func (f *AiffFile) GetProperties() *meta.FileProperties {
 	fp := f.Properties.FileProperties()
 	return &fp
 }
 
-// ContainsTag implements AudioFile.
+// ContainsTag implements meta.AudioFile.
 func (f *AiffFile) ContainsTag() bool { return f.TextChunks.IsSome() || f.ID3v2.IsSome() }
 
-// ContainsTagType implements AudioFile.
-func (f *AiffFile) ContainsTagType(t TagType) bool {
+// ContainsTagType implements meta.AudioFile.
+func (f *AiffFile) ContainsTagType(t meta.TagType) bool {
 	switch t {
-	case TagTypeAiffText:
+	case meta.TagTypeAiffText:
 		return f.TextChunks.IsSome()
-	case TagTypeID3v2:
+	case meta.TagTypeID3v2:
 		return f.ID3v2.IsSome()
 	}
 	return false
 }
 
-// TaggedFile converts to a [TaggedFile].
-func (f *AiffFile) TaggedFile() *TaggedFile {
-	var tags []*Tag
+// TaggedFile converts to a [meta.TaggedFile].
+func (f *AiffFile) TaggedFile() *meta.TaggedFile {
+	var tags []*meta.Tag
 	if t, ok := f.TextChunks.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
 	if t, ok := f.ID3v2.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
-	return NewTaggedFile(FileTypeAiff, tags, *f.GetProperties())
+	return meta.NewTaggedFile(meta.FileTypeAiff, tags, *f.GetProperties())
 }
 
-// SavePath implements AudioFile.
-func (f *AiffFile) SavePath(path string, wo WriteOptions) error {
-	return SaveToPath(path, f, FileTypeAiff.PrimaryTagType(), wo)
+// SavePath implements meta.AudioFile.
+func (f *AiffFile) SavePath(path string, wo meta.WriteOptions) error {
+	return meta.SaveToPath(path, f, meta.FileTypeAiff.PrimaryTagType(), wo)
 }
 
-// SaveFile implements AudioFile.
-func (f *AiffFile) SaveFile(file FileLike, wo WriteOptions) error {
-	var tags []*Tag
+// SaveFile implements meta.AudioFile.
+func (f *AiffFile) SaveFile(file meta.FileLike, wo meta.WriteOptions) error {
+	var tags []*meta.Tag
 	if t, ok := f.TextChunks.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
 	if t, ok := f.ID3v2.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
-	return SaveTagFields(file, FileTypeAiff, tags, wo)
+	return meta.SaveTagFields(file, meta.FileTypeAiff, tags, wo)
 }
 
-// RemoveFromPath implements AudioFile.
-func (f *AiffFile) RemoveFromPath(path string, t TagType) error {
-	return RemoveTagFromPath(path, t)
+// RemoveFromPath implements meta.AudioFile.
+func (f *AiffFile) RemoveFromPath(path string, t meta.TagType) error {
+	return meta.RemoveTagFromPath(path, t)
 }
 
 // aiffWriteTag writes NAME/AUTH/(c) /ANNO chunks in an AIFF file.
-func aiffWriteTag(file FileLike, tag *Tag, writeOptions WriteOptions) error {
-	if tag.TagType() == TagTypeID3v2 {
+func aiffWriteTag(file meta.FileLike, tag *meta.Tag, writeOptions meta.WriteOptions) error {
+	if tag.TagType() == meta.TagTypeID3v2 {
 		return aiffWriteId3v2(file, tag, writeOptions)
 	}
 	return aiffWriteText(file, tag, writeOptions)
@@ -1269,7 +1482,7 @@ func aiffTextChunkBytes(text *AiffTextTag) ([]byte, error) {
 	// Rust writes COMT before the other text chunks.
 	if len(text.Comments) > 0 {
 		if len(text.Comments) > 0xFFFF {
-			return nil, &TooMuchDataError{}
+			return nil, &meta.TooMuchDataError{}
 		}
 		encoded.Write(aiffComtChunk)
 		comtSizePos := encoded.Len()
@@ -1279,7 +1492,7 @@ func aiffTextChunkBytes(text *AiffTextTag) ([]byte, error) {
 		encoded.Write(nb[:2])
 		for _, c := range text.Comments {
 			if len(c.Text) > 0xFFFF {
-				return nil, &TooMuchDataError{}
+				return nil, &meta.TooMuchDataError{}
 			}
 			binary.BigEndian.PutUint32(nb[0:], c.Timestamp)
 			binary.BigEndian.PutUint16(nb[4:], c.MarkerID)
@@ -1330,30 +1543,30 @@ func (t *AiffTextTag) Len() int {
 func (t *AiffTextTag) IsEmpty() bool { return t.Len() == 0 }
 
 // DumpTo writes the tag's chunks to a writer.
-func (t *AiffTextTag) DumpTo(writer io.Writer, writeOptions WriteOptions) error {
+func (t *AiffTextTag) DumpTo(writer io.Writer, writeOptions meta.WriteOptions) error {
 	data, err := aiffTextChunkBytes(t)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	_, err = writer.Write(data)
 	return err
 }
 
-func aiffWriteText(file FileLike, tag *Tag, wo WriteOptions) error {
+func aiffWriteText(file meta.FileLike, tag *meta.Tag, wo meta.WriteOptions) error {
 	return aiffWriteTextChunks(file, AiffTextTagFromTag(tag), wo)
 }
 
 // aiffWriteTextChunks replaces the AIFF text chunks from a concrete tag.
-func aiffWriteTextChunks(file FileLike, tag *AiffTextTag, _ WriteOptions) error {
+func aiffWriteTextChunks(file meta.FileLike, tag *AiffTextTag, _ meta.WriteOptions) error {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	var hdr [12]byte
 	if _, err := io.ReadFull(file, hdr[:]); err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	if !bytes.Equal(hdr[:4], formPreamble) {
-		return &FileEncodingError{Source: &FakeTagError{}}
+		return &meta.FileEncodingError{Source: &meta.FakeTagError{}}
 	}
 
 	// Collect ranges of existing text chunks to remove
@@ -1363,7 +1576,7 @@ func aiffWriteTextChunks(file FileLike, tag *AiffTextTag, _ WriteOptions) error 
 		var ch [8]byte
 		pos, err := file.Seek(0, io.SeekCurrent)
 		if err != nil {
-			return &FileEncodingError{Source: err}
+			return &meta.FileEncodingError{Source: err}
 		}
 		if _, err := io.ReadFull(file, ch[:]); err != nil {
 			break
@@ -1382,33 +1595,33 @@ func aiffWriteTextChunks(file FileLike, tag *AiffTextTag, _ WriteOptions) error 
 	}
 	// Remove old text chunks (back to front)
 	for i := len(ranges) - 1; i >= 0; i-- {
-		if err := Splice(file, uint64(ranges[i].start), uint64(ranges[i].end), nil); err != nil {
-			return &FileEncodingError{Source: err}
+		if err := meta.Splice(file, uint64(ranges[i].start), uint64(ranges[i].end), nil); err != nil {
+			return &meta.FileEncodingError{Source: err}
 		}
 	}
 	// Append new chunks
 	encoded, err := aiffTextChunkBytes(tag)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	if len(encoded) > 0 {
 		if _, err := file.Seek(0, io.SeekEnd); err != nil {
-			return &FileEncodingError{Source: err}
+			return &meta.FileEncodingError{Source: err}
 		}
 		if _, err := file.Write(encoded); err != nil {
-			return &FileEncodingError{Source: err}
+			return &meta.FileEncodingError{Source: err}
 		}
 	}
 	return iffFixSize(file)
 }
 
-func aiffWriteId3v2(file FileLike, tag *Tag, writeOptions WriteOptions) error {
+func aiffWriteId3v2(file meta.FileLike, tag *meta.Tag, writeOptions meta.WriteOptions) error {
 	var body []byte
 	if !tag.IsEmpty() {
 		var err error
-		body, err = Id3v2Serialize(tag, writeOptions)
+		body, err = id3v2.Id3v2Serialize(tag, writeOptions)
 		if err != nil {
-			return &FileEncodingError{Source: &TagEncodingError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
+			return &meta.FileEncodingError{Source: &meta.TagEncodingError{TagType: meta.TagTypeID3v2, HasTagType: true, Source: err}}
 		}
 	}
 	return aiffWriteId3v2Chunk(file, body, writeOptions)
@@ -1416,20 +1629,20 @@ func aiffWriteId3v2(file FileLike, tag *Tag, writeOptions WriteOptions) error {
 
 // aiffWriteId3v2Chunk replaces or adds an "ID3 " chunk from serialized ID3v2
 // bytes (empty removes the chunk).
-func aiffWriteId3v2Chunk(file FileLike, body []byte, writeOptions WriteOptions) error {
+func aiffWriteId3v2Chunk(file meta.FileLike, body []byte, writeOptions meta.WriteOptions) error {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	var hdr [12]byte
 	if _, err := io.ReadFull(file, hdr[:]); err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	var chunkStart, chunkEnd int64
 	for {
 		var ch [8]byte
 		pos, err := file.Seek(0, io.SeekCurrent)
 		if err != nil {
-			return &FileEncodingError{Source: err}
+			return &meta.FileEncodingError{Source: err}
 		}
 		if _, err := io.ReadFull(file, ch[:]); err != nil {
 			break
@@ -1461,22 +1674,22 @@ func aiffWriteId3v2Chunk(file FileLike, body []byte, writeOptions WriteOptions) 
 		}
 	}
 	if chunkStart > 0 {
-		if err := Splice(file, uint64(chunkStart), uint64(chunkEnd), encoded.Bytes()); err != nil {
-			return &FileEncodingError{Source: err}
+		if err := meta.Splice(file, uint64(chunkStart), uint64(chunkEnd), encoded.Bytes()); err != nil {
+			return &meta.FileEncodingError{Source: err}
 		}
 	} else if encoded.Len() > 0 {
 		if _, err := file.Seek(0, io.SeekEnd); err != nil {
-			return &FileEncodingError{Source: err}
+			return &meta.FileEncodingError{Source: err}
 		}
 		if _, err := file.Write(encoded.Bytes()); err != nil {
-			return &FileEncodingError{Source: err}
+			return &meta.FileEncodingError{Source: err}
 		}
 	}
 	return iffFixSize(file)
 }
 
 // iffFixSize updates the FORM chunk size to fileLen - 8 (big-endian).
-func iffFixSize(file FileLike) error {
+func iffFixSize(file meta.FileLike) error {
 	end, err := file.Seek(0, io.SeekEnd)
 	if err != nil {
 		return err
@@ -1491,41 +1704,41 @@ func iffFixSize(file FileLike) error {
 }
 
 func init() {
-	RegisterFormatReader(FileTypeWav, func(rs io.ReadSeeker, opts ParseOptions) (*TaggedFile, error) {
+	meta.RegisterFormatReader(meta.FileTypeWav, func(rs io.ReadSeeker, opts meta.ParseOptions) (*meta.TaggedFile, error) {
 		f, err := WavFileReadFrom(rs, opts)
 		if err != nil {
 			return nil, err
 		}
 		return f.TaggedFile(), nil
 	})
-	RegisterFormatReader(FileTypeAiff, func(rs io.ReadSeeker, opts ParseOptions) (*TaggedFile, error) {
+	meta.RegisterFormatReader(meta.FileTypeAiff, func(rs io.ReadSeeker, opts meta.ParseOptions) (*meta.TaggedFile, error) {
 		f, err := AiffFileReadFrom(rs, opts)
 		if err != nil {
 			return nil, err
 		}
 		return f.TaggedFile(), nil
 	})
-	RegisterConcreteTagWriter(FileTypeWav, TagTypeID3v2, func(file *VerifiedFile, tag any, writeOptions WriteOptions) error {
+	meta.RegisterConcreteTagWriter(meta.FileTypeWav, meta.TagTypeID3v2, func(file *meta.VerifiedFile, tag any, writeOptions meta.WriteOptions) error {
 		return wavWriteId3v2Chunk(file.File(), tag.([]byte), writeOptions)
 	})
-	RegisterConcreteTagWriter(FileTypeAiff, TagTypeID3v2, func(file *VerifiedFile, tag any, writeOptions WriteOptions) error {
+	meta.RegisterConcreteTagWriter(meta.FileTypeAiff, meta.TagTypeID3v2, func(file *meta.VerifiedFile, tag any, writeOptions meta.WriteOptions) error {
 		return aiffWriteId3v2Chunk(file.File(), tag.([]byte), writeOptions)
 	})
-	RegisterFormatWriter(FileTypeWav, func(file *VerifiedFile, tag *Tag, writeOptions WriteOptions) error {
+	meta.RegisterFormatWriter(meta.FileTypeWav, func(file *meta.VerifiedFile, tag *meta.Tag, writeOptions meta.WriteOptions) error {
 		switch tag.TagType() {
-		case TagTypeRiffInfo, TagTypeID3v2:
+		case meta.TagTypeRiffInfo, meta.TagTypeID3v2:
 			return wavWriteTag(file.File(), tag, writeOptions)
 		}
-		return &FileEncodingError{Source: &UnsupportedTagError{}}
+		return &meta.FileEncodingError{Source: &meta.UnsupportedTagError{}}
 	})
-	RegisterFormatWriter(FileTypeAiff, func(file *VerifiedFile, tag *Tag, writeOptions WriteOptions) error {
+	meta.RegisterFormatWriter(meta.FileTypeAiff, func(file *meta.VerifiedFile, tag *meta.Tag, writeOptions meta.WriteOptions) error {
 		switch tag.TagType() {
-		case TagTypeAiffText, TagTypeID3v2:
+		case meta.TagTypeAiffText, meta.TagTypeID3v2:
 			return aiffWriteTag(file.File(), tag, writeOptions)
 		}
-		return &FileEncodingError{Source: &UnsupportedTagError{}}
+		return &meta.FileEncodingError{Source: &meta.UnsupportedTagError{}}
 	})
-	RegisterTagDumper(TagTypeRiffInfo, func(tag *Tag, writer io.Writer, writeOptions WriteOptions) error {
+	meta.RegisterTagDumper(meta.TagTypeRiffInfo, func(tag *meta.Tag, writer io.Writer, writeOptions meta.WriteOptions) error {
 		info := RiffInfoTagFromTag(tag)
 		if len(info.items) == 0 {
 			return nil
@@ -1534,6 +1747,9 @@ func init() {
 		payload.WriteString("INFO")
 		for _, item := range info.items {
 			val := item.value
+			if val == "" {
+				continue
+			}
 			size := len(val) + 1
 			var ch [8]byte
 			copy(ch[:4], item.key)
@@ -1556,7 +1772,7 @@ func init() {
 		_, err := writer.Write(payload.Bytes())
 		return err
 	})
-	RegisterTagDumper(TagTypeAiffText, func(tag *Tag, writer io.Writer, writeOptions WriteOptions) error {
+	meta.RegisterTagDumper(meta.TagTypeAiffText, func(tag *meta.Tag, writer io.Writer, writeOptions meta.WriteOptions) error {
 		text := AiffTextTagFromTag(tag)
 		writeChunk := func(name [4]byte, value string) error {
 			var sz [4]byte
@@ -1601,79 +1817,79 @@ func init() {
 }
 
 // SaveTo writes the tag into a WAV file, mirroring Rust `TagExt::save_to`.
-func (t *RiffInfoTag) SaveTo(file FileLike, writeOptions WriteOptions) error {
-	vf, err := NewVerifiedFile(file, writeOptions.ParseOptions)
+func (t *RiffInfoTag) SaveTo(file meta.FileLike, writeOptions meta.WriteOptions) error {
+	vf, err := meta.NewVerifiedFile(file, writeOptions.ParseOptions)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	format := vf.Format()
-	support := format.TagSupport(TagTypeRiffInfo)
-	if support == TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
-		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	support := format.TagSupport(meta.TagTypeRiffInfo)
+	if support == meta.TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
+		return &meta.FileEncodingError{FileType: format, Source: &meta.UnsupportedTagError{}}
 	}
 	return wavWriteRiffInfoTag(vf.File(), t, writeOptions)
 }
 
 // SaveToPath writes the tag to a path.
-func (t *RiffInfoTag) SaveToPath(path string, writeOptions WriteOptions) error {
-	vf, f, err := VerifiedFileFromPath(path, writeOptions.ParseOptions)
+func (t *RiffInfoTag) SaveToPath(path string, writeOptions meta.WriteOptions) error {
+	vf, f, err := meta.VerifiedFileFromPath(path, writeOptions.ParseOptions)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	defer f.Close()
 	format := vf.Format()
-	support := format.TagSupport(TagTypeRiffInfo)
-	if support == TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
-		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	support := format.TagSupport(meta.TagTypeRiffInfo)
+	if support == meta.TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
+		return &meta.FileEncodingError{FileType: format, Source: &meta.UnsupportedTagError{}}
 	}
 	return wavWriteRiffInfoTag(vf.File(), t, writeOptions)
 }
 
-// RemoveFrom removes a RIFF INFO list from a [FileLike].
-func (t *RiffInfoTag) RemoveFrom(file FileLike, writeOptions WriteOptions) error {
-	return TagTypeRiffInfo.RemoveFrom(file, writeOptions)
+// RemoveFrom removes a RIFF INFO list from a [meta.FileLike].
+func (t *RiffInfoTag) RemoveFrom(file meta.FileLike, writeOptions meta.WriteOptions) error {
+	return meta.TagTypeRiffInfo.RemoveFrom(file, writeOptions)
 }
 
 // RemoveFromPath removes a RIFF INFO list from a path.
-func (t *RiffInfoTag) RemoveFromPath(path string, writeOptions WriteOptions) error {
-	return TagTypeRiffInfo.RemoveFromPath(path, writeOptions)
+func (t *RiffInfoTag) RemoveFromPath(path string, writeOptions meta.WriteOptions) error {
+	return meta.TagTypeRiffInfo.RemoveFromPath(path, writeOptions)
 }
 
 // SaveTo writes the tag into an AIFF file, mirroring Rust `TagExt::save_to`.
-func (t *AiffTextTag) SaveTo(file FileLike, writeOptions WriteOptions) error {
-	vf, err := NewVerifiedFile(file, writeOptions.ParseOptions)
+func (t *AiffTextTag) SaveTo(file meta.FileLike, writeOptions meta.WriteOptions) error {
+	vf, err := meta.NewVerifiedFile(file, writeOptions.ParseOptions)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	format := vf.Format()
-	support := format.TagSupport(TagTypeAiffText)
-	if support == TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
-		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	support := format.TagSupport(meta.TagTypeAiffText)
+	if support == meta.TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
+		return &meta.FileEncodingError{FileType: format, Source: &meta.UnsupportedTagError{}}
 	}
 	return aiffWriteTextChunks(vf.File(), t, writeOptions)
 }
 
 // SaveToPath writes the tag to a path.
-func (t *AiffTextTag) SaveToPath(path string, writeOptions WriteOptions) error {
-	vf, f, err := VerifiedFileFromPath(path, writeOptions.ParseOptions)
+func (t *AiffTextTag) SaveToPath(path string, writeOptions meta.WriteOptions) error {
+	vf, f, err := meta.VerifiedFileFromPath(path, writeOptions.ParseOptions)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	defer f.Close()
 	format := vf.Format()
-	support := format.TagSupport(TagTypeAiffText)
-	if support == TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
-		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	support := format.TagSupport(meta.TagTypeAiffText)
+	if support == meta.TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
+		return &meta.FileEncodingError{FileType: format, Source: &meta.UnsupportedTagError{}}
 	}
 	return aiffWriteTextChunks(vf.File(), t, writeOptions)
 }
 
-// RemoveFrom removes the AIFF text chunks from a [FileLike].
-func (t *AiffTextTag) RemoveFrom(file FileLike, writeOptions WriteOptions) error {
-	return TagTypeAiffText.RemoveFrom(file, writeOptions)
+// RemoveFrom removes the AIFF text chunks from a [meta.FileLike].
+func (t *AiffTextTag) RemoveFrom(file meta.FileLike, writeOptions meta.WriteOptions) error {
+	return meta.TagTypeAiffText.RemoveFrom(file, writeOptions)
 }
 
 // RemoveFromPath removes the AIFF text chunks from a path.
-func (t *AiffTextTag) RemoveFromPath(path string, writeOptions WriteOptions) error {
-	return TagTypeAiffText.RemoveFromPath(path, writeOptions)
+func (t *AiffTextTag) RemoveFromPath(path string, writeOptions meta.WriteOptions) error {
+	return meta.TagTypeAiffText.RemoveFromPath(path, writeOptions)
 }

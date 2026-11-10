@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 
+	meta "github.com/subframe7536/lofty-go/internal/meta"
+
 	"github.com/subframe7536/lofty-go/internal/util"
 )
 
@@ -12,25 +14,25 @@ const v4MultiValueSeparator = "\x00"
 
 // tiplMappings mirrors Rust's `TIPL_MAPPINGS`.
 var tiplMappings = [][2]any{
-	{ItemKeyProducer, "producer"},
-	{ItemKeyArranger, "arranger"},
-	{ItemKeyEngineer, "engineer"},
-	{ItemKeyMixDj, "DJ-mix"},
-	{ItemKeyMixEngineer, "mix"},
+	{meta.ItemKeyProducer, "producer"},
+	{meta.ItemKeyArranger, "arranger"},
+	{meta.ItemKeyEngineer, "engineer"},
+	{meta.ItemKeyMixDj, "DJ-mix"},
+	{meta.ItemKeyMixEngineer, "mix"},
 }
 
-func tiplItemKeyForRole(role string) (ItemKey, bool) {
+func tiplItemKeyForRole(role string) (meta.ItemKey, bool) {
 	for _, m := range tiplMappings {
 		if m[1].(string) == role {
-			return m[0].(ItemKey), true
+			return m[0].(meta.ItemKey), true
 		}
 	}
 	return 0, false
 }
 
-func tiplRoleForItemKey(key ItemKey) (string, bool) {
+func tiplRoleForItemKey(key meta.ItemKey) (string, bool) {
 	for _, m := range tiplMappings {
-		if m[0].(ItemKey) == key {
+		if m[0].(meta.ItemKey) == key {
 			return m[1].(string), true
 		}
 	}
@@ -40,7 +42,7 @@ func tiplRoleForItemKey(key ItemKey) (string, bool) {
 // Id3v2TagToTag converts an [Id3v2Tag] to a generic [Tag] (Rust `From<Id3v2Tag>
 // for Tag`). Unconvertible frames remain in the tag's companion when
 // [GlobalOptions.PreserveFormatSpecificItems] is enabled.
-func Id3v2TagToTag(input *Id3v2Tag) *Tag {
+func Id3v2TagToTag(input *Id3v2Tag) *meta.Tag {
 	// SplitTag consumes convertible frames from the list it runs on; clone so
 	// that Tag() is non-destructive for callers holding the Id3v2Tag.
 	clone := &Id3v2Tag{
@@ -57,7 +59,7 @@ func Id3v2TagToTag(input *Id3v2Tag) *Tag {
 
 // Id3v2TagFromTag converts a generic [Tag] to an [Id3v2Tag] (Rust `From<Tag>
 // for Id3v2Tag`), merging any preserved companion frames.
-func Id3v2TagFromTag(input *Tag) *Id3v2Tag {
+func Id3v2TagFromTag(input *meta.Tag) *Id3v2Tag {
 	if util.GetGlobalOptions().PreserveFormatSpecificItems {
 		if companion, ok := input.CompanionTag().(*Id3v2Tag); ok {
 			input.SetCompanionTag(nil)
@@ -68,8 +70,8 @@ func Id3v2TagFromTag(input *Tag) *Id3v2Tag {
 }
 
 // SplitTag mirrors Rust `SplitTag::split_tag` — returns (remainder, generic tag).
-func (t *Id3v2Tag) SplitTag() (*Id3v2Tag, *Tag) {
-	tag := NewTag(TagTypeID3v2)
+func (t *Id3v2Tag) SplitTag() (*Id3v2Tag, *meta.Tag) {
+	tag := meta.NewTag(meta.TagTypeID3v2)
 	tag.OriginalVersion = t.OriginalVersion()
 	t.Frames.RetainMut(func(f Frame) bool {
 		return handleTagSplit(tag, f)
@@ -79,10 +81,10 @@ func (t *Id3v2Tag) SplitTag() (*Id3v2Tag, *Tag) {
 
 // handleTagSplit returns true when the frame must be RETAINED (kept in the
 // remainder), false when it was consumed into the generic tag.
-func handleTagSplit(tag *Tag, frame Frame) bool {
+func handleTagSplit(tag *meta.Tag, frame Frame) bool {
 	const consumed, retained = false, true
 
-	splitPair := func(content string, numKey, totKey ItemKey) bool {
+	splitPair := func(content string, numKey, totKey meta.ItemKey) bool {
 		parts := strings.SplitN(content, "/", 2)
 		var numPart, totPart string
 		hasTot := false
@@ -107,13 +109,16 @@ func handleTagSplit(tag *Tag, frame Frame) bool {
 		if !ok {
 			return false
 		}
-		tag.PushUnchecked(NewTagItem(numKey, ItemValueText(num)))
+		var tot string
 		if hasTot {
-			tot, ok := parse(totPart)
+			tot, ok = parse(totPart)
 			if !ok {
 				return false
 			}
-			tag.PushUnchecked(NewTagItem(totKey, ItemValueText(tot)))
+		}
+		tag.PushUnchecked(meta.NewTagItem(numKey, meta.ItemValueText(num)))
+		if hasTot {
+			tag.PushUnchecked(meta.NewTagItem(totKey, meta.ItemValueText(tot)))
 		}
 		return true
 	}
@@ -123,29 +128,29 @@ func handleTagSplit(tag *Tag, frame Frame) bool {
 		id := f.ID().String()
 		switch id {
 		case "TRCK":
-			if splitPair(f.Value, ItemKeyTrackNumber, ItemKeyTrackTotal) {
+			if splitPair(f.Value, meta.ItemKeyTrackNumber, meta.ItemKeyTrackTotal) {
 				return consumed
 			}
 		case "TPOS":
-			if splitPair(f.Value, ItemKeyDiscNumber, ItemKeyDiscTotal) {
+			if splitPair(f.Value, meta.ItemKeyDiscNumber, meta.ItemKeyDiscTotal) {
 				return consumed
 			}
 		case "MVIN":
-			if splitPair(f.Value, ItemKeyMovementNumber, ItemKeyMovementTotal) {
+			if splitPair(f.Value, meta.ItemKeyMovementNumber, meta.ItemKeyMovementTotal) {
 				return consumed
 			}
 		case "TCON":
 			for _, g := range id3v2GenresIter(f.Value, false) {
-				tag.PushUnchecked(NewTagItem(ItemKeyGenre, ItemValueText(g)))
+				tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyGenre, meta.ItemValueText(g)))
 			}
 			return consumed
 		}
-		itemKey, ok := ItemKeyFromKey(TagTypeID3v2, id)
+		itemKey, ok := meta.ItemKeyFromKey(meta.TagTypeID3v2, id)
 		if !ok {
 			return retained
 		}
 		for _, c := range strings.Split(f.Value, v4MultiValueSeparator) {
-			tag.PushUnchecked(NewTagItem(itemKey, ItemValueText(c)))
+			tag.PushUnchecked(meta.NewTagItem(itemKey, meta.ItemValueText(c)))
 		}
 		return consumed
 
@@ -156,7 +161,7 @@ func handleTagSplit(tag *Tag, frame Frame) bool {
 		var kept [][2]string
 		for _, kv := range f.KeyValuePairs {
 			if ik, ok := tiplItemKeyForRole(kv[0]); ok {
-				tag.PushUnchecked(NewTagItem(ik, ItemValueText(kv[1])))
+				tag.PushUnchecked(meta.NewTagItem(ik, meta.ItemValueText(kv[1])))
 			} else {
 				kept = append(kept, kv)
 			}
@@ -168,12 +173,12 @@ func handleTagSplit(tag *Tag, frame Frame) bool {
 		if f.Description == "" {
 			return retained
 		}
-		itemKey, ok := ItemKeyFromKey(TagTypeID3v2, f.Description)
+		itemKey, ok := meta.ItemKeyFromKey(meta.TagTypeID3v2, f.Description)
 		if !ok {
 			return retained
 		}
 		for _, c := range strings.Split(f.Content, v4MultiValueSeparator) {
-			tag.PushUnchecked(NewTagItem(itemKey, ItemValueText(c)))
+			tag.PushUnchecked(meta.NewTagItem(itemKey, meta.ItemValueText(c)))
 		}
 		return consumed
 
@@ -181,12 +186,12 @@ func handleTagSplit(tag *Tag, frame Frame) bool {
 		if f.Description == "" || len(f.Description) == 4 {
 			return retained
 		}
-		itemKey, ok := ItemKeyFromKey(TagTypeID3v2, f.Description)
+		itemKey, ok := meta.ItemKeyFromKey(meta.TagTypeID3v2, f.Description)
 		if !ok {
 			return retained
 		}
 		for _, c := range strings.Split(f.Content, v4MultiValueSeparator) {
-			tag.PushUnchecked(NewTagItem(itemKey, ItemValueLocator(c)))
+			tag.PushUnchecked(meta.NewTagItem(itemKey, meta.ItemValueLocator(c)))
 		}
 		return consumed
 
@@ -198,15 +203,15 @@ func handleTagSplit(tag *Tag, frame Frame) bool {
 		if err != nil {
 			return retained
 		}
-		tag.PushUnchecked(NewTagItem(ItemKeyMusicBrainzRecordingId, ItemValueText(res.Content)))
+		tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyMusicBrainzRecordingId, meta.ItemValueText(res.Content)))
 		return consumed
 
 	case *CommentFrame:
-		pushLangItems(tag, ItemKeyComment, f.Language, f.Description, f.Content)
+		pushLangItems(tag, meta.ItemKeyComment, f.Language, f.Description, f.Content)
 		return consumed
 
 	case *UnsynchronizedTextFrame:
-		pushLangItems(tag, ItemKeyUnsyncLyrics, f.Language, f.Description, f.Content)
+		pushLangItems(tag, meta.ItemKeyUnsyncLyrics, f.Language, f.Description, f.Content)
 		return consumed
 
 	case *AttachedPictureFrame:
@@ -214,35 +219,35 @@ func handleTagSplit(tag *Tag, frame Frame) bool {
 		return consumed
 
 	case *TimestampFrame:
-		itemKey, ok := ItemKeyFromKey(TagTypeID3v2, f.ID().String())
+		itemKey, ok := meta.ItemKeyFromKey(meta.TagTypeID3v2, f.ID().String())
 		if !ok || f.Timestamp.Verify() != nil {
 			return retained
 		}
-		tag.PushUnchecked(NewTagItem(itemKey, ItemValueText(f.Timestamp.String())))
+		tag.PushUnchecked(meta.NewTagItem(itemKey, meta.ItemValueText(f.Timestamp.String())))
 		return consumed
 
 	case *PopularimeterFrame:
-		generic, ok := popularimeterMapped(f.Email, TagTypeID3v2, f.Rating, f.Counter)
+		generic, ok := meta.PopularimeterMapped(f.Email, meta.TagTypeID3v2, f.Rating, f.Counter)
 		if !ok {
 			return retained
 		}
-		tag.PushUnchecked(NewTagItem(ItemKeyPopularimeter, ItemValueText(generic.String())))
+		tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyPopularimeter, meta.ItemValueText(generic.String())))
 		return consumed
 
 	case *UrlLinkFrame:
-		itemKey, ok := ItemKeyFromKey(TagTypeID3v2, f.ID().String())
+		itemKey, ok := meta.ItemKeyFromKey(meta.TagTypeID3v2, f.ID().String())
 		if !ok {
 			return retained
 		}
-		tag.PushUnchecked(NewTagItem(itemKey, ItemValueLocator(f.Content)))
+		tag.PushUnchecked(meta.NewTagItem(itemKey, meta.ItemValueLocator(f.Content)))
 		return consumed
 	}
 	return retained
 }
 
-func pushLangItems(tag *Tag, itemKey ItemKey, lang Lang, desc, content string) {
+func pushLangItems(tag *meta.Tag, itemKey meta.ItemKey, lang meta.Lang, desc, content string) {
 	for _, c := range strings.Split(content, v4MultiValueSeparator) {
-		item := NewTagItem(itemKey, ItemValueText(c))
+		item := meta.NewTagItem(itemKey, meta.ItemValueText(c))
 		item.Lang = lang
 		if desc != EmptyContentDescriptor {
 			item.Description = desc
@@ -253,7 +258,7 @@ func pushLangItems(tag *Tag, itemKey ItemKey, lang Lang, desc, content string) {
 
 // MergeTag mirrors Rust `MergeTag for SplitTagRemainder` — merges generic tag
 // items into this Id3v2Tag.
-func (t *Id3v2Tag) MergeTag(tag *Tag) *Id3v2Tag {
+func (t *Id3v2Tag) MergeTag(tag *meta.Tag) *Id3v2Tag {
 	for _, frame := range fromTagItems(tag.Items()) {
 		if frame.ID().String() == "TIPL" {
 			// Extend an existing TIPL frame to retain its encoding/flags
@@ -275,7 +280,7 @@ func (t *Id3v2Tag) MergeTag(tag *Tag) *Id3v2Tag {
 }
 
 // tagFrames mirrors Rust `tag_frames` — item frames + companion frames + pictures.
-func tagFrames(tag *Tag) []Frame {
+func tagFrames(tag *meta.Tag) []Frame {
 	frames := fromTagItems(tag.Items())
 	if companion, ok := tag.CompanionTag().(*Id3v2Tag); ok {
 		frames = append(frames, companion.Frames.CloneFrames()...)
@@ -287,7 +292,7 @@ func tagFrames(tag *Tag) []Frame {
 }
 
 // fromTagItems mirrors Rust `conversion::from_tag` — converts TagItems to Frames.
-func fromTagItems(items []TagItem) []Frame {
+func fromTagItems(items []meta.TagItem) []Frame {
 	type langDescKey struct {
 		lyrics     bool
 		lang, desc string
@@ -302,7 +307,7 @@ func fromTagItems(items []TagItem) []Frame {
 	var commentOrder []langDescKey
 	unsync := map[langDescKey]string{}
 	var unsyncOrder []langDescKey
-	var trackNumber, trackTotal, discNumber, discTotal Option[uint32]
+	var trackNumber, trackTotal, discNumber, discTotal meta.Option[uint32]
 
 	extendText := func(m map[string]string, k, v string, order *[]string) {
 		if cur, ok := m[k]; ok {
@@ -312,16 +317,16 @@ func fromTagItems(items []TagItem) []Frame {
 			m[k] = v
 		}
 	}
-	parseNumber := func(item *TagItem) Option[uint32] {
+	parseNumber := func(item *meta.TagItem) meta.Option[uint32] {
 		text, ok := item.Value().Text()
 		if !ok {
-			return None[uint32]()
+			return meta.None[uint32]()
 		}
-		n, err := atoi(strings.TrimSpace(text))
-		if err != nil || n < 0 {
-			return None[uint32]()
+		n, err := strconvParseU32(text)
+		if err != nil {
+			return meta.None[uint32]()
 		}
-		return Some(uint32(n))
+		return meta.Some(n)
 	}
 
 	var frames []Frame
@@ -342,14 +347,14 @@ func fromTagItems(items []TagItem) []Frame {
 		switch {
 		// Multi-valued TXXX key-to-frame mappings
 		case id3v2MultiTxxxKeys[itemKey]:
-			if desc, ok := itemKey.MapKey(TagTypeID3v2); ok {
+			if desc, ok := itemKey.MapKey(meta.TagTypeID3v2); ok {
 				if v, ok := textOf(); ok {
 					extendText(txxxFrames, desc, v, &txxxOrder)
 				}
 			}
 		// Single-valued text key-to-frame mappings — dedup by ID, first wins
-		case itemKey == ItemKeyIntegerBpm:
-			if mapped, ok := itemKey.MapKey(TagTypeID3v2); ok {
+		case itemKey == meta.ItemKeyIntegerBpm:
+			if mapped, ok := itemKey.MapKey(meta.TagTypeID3v2); ok {
 				if v, ok := textOf(); ok {
 					if fid, err := ParseFrameId(mapped); err == nil {
 						appendUnique(NewTextInformationFrame(fid, util.TextEncodingUTF8, v))
@@ -358,7 +363,7 @@ func fromTagItems(items []TagItem) []Frame {
 			}
 		// Single-valued TXXX mappings (ReplayGain) — last wins
 		case id3v2SingleTxxxKeys[itemKey]:
-			if desc, ok := itemKey.MapKey(TagTypeID3v2); ok {
+			if desc, ok := itemKey.MapKey(meta.TagTypeID3v2); ok {
 				if v, ok := textOf(); ok {
 					if _, exists := txxxFrames[desc]; !exists {
 						txxxOrder = append(txxxOrder, desc)
@@ -367,9 +372,9 @@ func fromTagItems(items []TagItem) []Frame {
 				}
 			}
 		// Comment/Unsync text — merged by (lang, description)
-		case itemKey == ItemKeyComment || itemKey == ItemKeyUnsyncLyrics:
+		case itemKey == meta.ItemKeyComment || itemKey == meta.ItemKeyUnsyncLyrics:
 			if v, ok := textOf(); ok {
-				ldk := langDescKey{itemKey == ItemKeyUnsyncLyrics, langOrXxx(item.Lang), item.Description}
+				ldk := langDescKey{itemKey == meta.ItemKeyUnsyncLyrics, langOrXxx(item.Lang), item.Description}
 				m := comments
 				order := &commentOrder
 				if ldk.lyrics {
@@ -385,53 +390,53 @@ func fromTagItems(items []TagItem) []Frame {
 			}
 		// Flag items
 		case itemKey.IsFlag():
-			if frameID, ok := itemKey.MapKey(TagTypeID3v2); ok {
+			if frameID, ok := itemKey.MapKey(meta.TagTypeID3v2); ok {
 				if text, ok := item.Value().Text(); ok {
-					if flag := flagItem(text); flag >= 0 {
+					if flag := util.FlagItem(text); flag >= 0 {
 						fid, err := ParseFrameId(frameID)
 						if err == nil {
-							appendUnique(NewTextInformationFrame(fid, util.TextEncodingUTF8, itoa(flag)))
+							appendUnique(NewTextInformationFrame(fid, util.TextEncodingUTF8, util.Itoa(flag)))
 						}
 					}
 				}
 			}
 		// iTunes advisory rating
-		case itemKey == ItemKeyParentalAdvisory:
+		case itemKey == meta.ItemKeyParentalAdvisory:
 			if text, ok := item.Value().Text(); ok {
 				if rating, ok := advisoryRatingFromStr(text); ok {
-					appendUnique(NewExtendedTextFrame(util.TextEncodingUTF8, "ITUNESADVISORY", itoa(int(rating))))
+					appendUnique(NewExtendedTextFrame(util.TextEncodingUTF8, "ITUNESADVISORY", util.Itoa(int(rating))))
 				}
 			}
 		// Timestamps
 		case itemKey.IsTimestamp():
-			if frameID, ok := itemKey.MapKey(TagTypeID3v2); ok {
+			if frameID, ok := itemKey.MapKey(meta.TagTypeID3v2); ok {
 				if text, ok := textOf(); ok {
 					fid, err := ParseFrameId(frameID)
 					if err != nil {
 						break
 					}
-					if ts, err := TimestampParseString(text); err == nil {
+					if ts, err := meta.TimestampParseString(text); err == nil {
 						appendUnique(NewTimestampFrame(fid, util.TextEncodingUTF8, ts))
 					} else {
 						appendUnique(NewTextInformationFrame(fid, util.TextEncodingUTF8, text))
 					}
 				}
 			}
-		case itemKey == ItemKeyTrackNumber:
+		case itemKey == meta.ItemKeyTrackNumber:
 			trackNumber = parseNumber(item)
-		case itemKey == ItemKeyTrackTotal:
+		case itemKey == meta.ItemKeyTrackTotal:
 			trackTotal = parseNumber(item)
-		case itemKey == ItemKeyDiscNumber:
+		case itemKey == meta.ItemKeyDiscNumber:
 			discNumber = parseNumber(item)
-		case itemKey == ItemKeyDiscTotal:
+		case itemKey == meta.ItemKeyDiscTotal:
 			discTotal = parseNumber(item)
-		case itemKey == ItemKeyMusicBrainzRecordingId:
+		case itemKey == meta.ItemKeyMusicBrainzRecordingId:
 			if v, ok := textOf(); ok && isASCII(v) {
 				appendUnique(NewUniqueFileIdentifierFrame(musicBrainzUfidOwner, []byte(v)))
 			}
-		case itemKey == ItemKeyPopularimeter:
+		case itemKey == meta.ItemKeyPopularimeter:
 			if v, ok := textOf(); ok {
-				if p, err := PopularimeterFromStr(v); err == nil {
+				if p, err := meta.PopularimeterFromStr(v); err == nil {
 					appendUnique(PopularimeterFrameFromPopularimeter(p))
 				}
 			}
@@ -447,7 +452,7 @@ func fromTagItems(items []TagItem) []Frame {
 				}
 			}
 		default:
-			if mapped, ok := itemKey.MapKey(TagTypeID3v2); ok && len(mapped) == 4 {
+			if mapped, ok := itemKey.MapKey(meta.TagTypeID3v2); ok && len(mapped) == 4 {
 				if mapped[0] == 'T' || isNonStandardTextKey(itemKey) {
 					if v, ok := textOf(); ok {
 						extendText(textFrames, mapped, v, &textOrder)
@@ -495,38 +500,38 @@ func fromTagItems(items []TagItem) []Frame {
 	return frames
 }
 
-func isTiplItemKey(k ItemKey) bool {
+func isTiplItemKey(k meta.ItemKey) bool {
 	_, ok := tiplRoleForItemKey(k)
 	return ok
 }
 
-var nonStandardTextKeys = map[ItemKey]bool{
-	ItemKeyMovement: true, ItemKeyMovementNumber: true, ItemKeyMovementTotal: true,
-	ItemKeyAppleId3v2ContentGroup: true,
+var nonStandardTextKeys = map[meta.ItemKey]bool{
+	meta.ItemKeyMovement: true, meta.ItemKeyMovementNumber: true, meta.ItemKeyMovementTotal: true,
+	meta.ItemKeyAppleId3v2ContentGroup: true,
 }
 
-func isNonStandardTextKey(k ItemKey) bool { return nonStandardTextKeys[k] }
+func isNonStandardTextKey(k meta.ItemKey) bool { return nonStandardTextKeys[k] }
 
 // newNumberPairFrame mirrors `new_number_pair_frame`.
-func newNumberPairFrame(id FrameId, number, total Option[uint32]) Frame {
+func newNumberPairFrame(id FrameId, number, total meta.Option[uint32]) Frame {
 	var content string
 	n, hasN := number.Get()
 	t, hasT := total.Get()
 	switch {
 	case hasN && hasT:
-		content = itoa(int(n)) + "/" + itoa(int(t))
+		content = util.Itoa(int(n)) + "/" + util.Itoa(int(t))
 	case hasN:
-		content = itoa(int(n))
+		content = util.Itoa(int(n))
 	case hasT:
-		content = "0/" + itoa(int(t))
+		content = "0/" + util.Itoa(int(t))
 	default:
 		return nil
 	}
 	return NewTextInformationFrame(id, util.TextEncodingUTF8, content)
 }
 
-func langFromXxx(s string) Lang {
-	var l Lang
+func langFromXxx(s string) meta.Lang {
+	var l meta.Lang
 	if len(s) == 3 {
 		copy(l[:], s)
 	}
@@ -534,11 +539,11 @@ func langFromXxx(s string) Lang {
 }
 
 func advisoryRatingFromStr(s string) (uint8, bool) {
-	n, err := atoi(s)
-	if err != nil || n < 0 || n > 255 {
+	n, err := strconv.ParseUint(s, 10, 8)
+	if err != nil {
 		return 0, false
 	}
-	return advisoryRatingFromU8(uint8(n))
+	return util.AdvisoryRatingFromU8(uint8(n))
 }
 
 func strconvParseU32(s string) (uint32, error) {

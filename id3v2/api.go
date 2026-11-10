@@ -3,7 +3,7 @@ package id3v2
 import (
 	"io"
 
-	"github.com/subframe7536/lofty-go/internal/meta"
+	meta "github.com/subframe7536/lofty-go/internal/meta"
 )
 
 // Public frame-level API mirroring Rust `Frame::parse` and
@@ -11,8 +11,8 @@ import (
 
 // ParseFrame parses a single frame's content from reader, mirroring Rust
 // `Frame::parse` (the tag-level `parse_frame` dispatch). Returns a nil frame
-// for unsupported/malformed content (Rust's `Option::None`).
-func ParseFrame(reader io.Reader, id FrameId, size uint32, frameFlags FrameFlags, version Id3v2Version, parseOptions ParseOptions) (Frame, error) {
+// for unsupported/malformed content (Rust's `meta.Option::None`).
+func ParseFrame(reader io.Reader, id FrameId, size uint32, frameFlags FrameFlags, version Id3v2Version, parseOptions meta.ParseOptions) (Frame, error) {
 	f, result, err := parseFrame(reader, id, size, frameFlags, version, parseOptions)
 	if err != nil || result != parsedFrameNext {
 		return nil, err
@@ -26,7 +26,7 @@ func ParseTextInformationFrame(reader io.Reader, id FrameId, frameFlags FrameFla
 }
 
 // AsBytes serializes the frame content, mirroring Rust `as_bytes`.
-func (f *TextInformationFrame) AsBytes(writeOptions WriteOptions) ([]byte, error) {
+func (f *TextInformationFrame) AsBytes(writeOptions meta.WriteOptions) ([]byte, error) {
 	return f.frameBytes(&frameEncodingContext{version: writeOptionsVersion(writeOptions), writeOptions: writeOptions})
 }
 
@@ -36,7 +36,7 @@ func ParseUrlLinkFrame(reader io.Reader, id FrameId, frameFlags FrameFlags) (*Ur
 }
 
 // AsBytes mirrors Rust `UrlLinkFrame::as_bytes`.
-func (f *UrlLinkFrame) AsBytes(writeOptions WriteOptions) ([]byte, error) {
+func (f *UrlLinkFrame) AsBytes(writeOptions meta.WriteOptions) ([]byte, error) {
 	return f.frameBytes(&frameEncodingContext{version: writeOptionsVersion(writeOptions), writeOptions: writeOptions})
 }
 
@@ -46,7 +46,7 @@ func ParseCommentFrame(reader io.Reader, frameFlags FrameFlags, version Id3v2Ver
 }
 
 // AsBytes mirrors Rust `CommentFrame::as_bytes`.
-func (f *CommentFrame) AsBytes(writeOptions WriteOptions) ([]byte, error) {
+func (f *CommentFrame) AsBytes(writeOptions meta.WriteOptions) ([]byte, error) {
 	return f.frameBytes(&frameEncodingContext{version: writeOptionsVersion(writeOptions), writeOptions: writeOptions})
 }
 
@@ -56,7 +56,7 @@ func ParseUnsynchronizedTextFrame(reader io.Reader, frameFlags FrameFlags, versi
 }
 
 // AsBytes mirrors Rust `UnsynchronizedTextFrame::as_bytes`.
-func (f *UnsynchronizedTextFrame) AsBytes(writeOptions WriteOptions) ([]byte, error) {
+func (f *UnsynchronizedTextFrame) AsBytes(writeOptions meta.WriteOptions) ([]byte, error) {
 	return f.frameBytes(&frameEncodingContext{version: writeOptionsVersion(writeOptions), writeOptions: writeOptions})
 }
 
@@ -66,7 +66,7 @@ func ParseExtendedTextFrame(reader io.Reader, frameFlags FrameFlags, version Id3
 }
 
 // AsBytes mirrors Rust `ExtendedTextFrame::as_bytes`.
-func (f *ExtendedTextFrame) AsBytes(writeOptions WriteOptions) ([]byte, error) {
+func (f *ExtendedTextFrame) AsBytes(writeOptions meta.WriteOptions) ([]byte, error) {
 	return f.frameBytes(&frameEncodingContext{version: writeOptionsVersion(writeOptions), writeOptions: writeOptions})
 }
 
@@ -76,7 +76,7 @@ func ParseExtendedUrlFrame(reader io.Reader, frameFlags FrameFlags, version Id3v
 }
 
 // AsBytes mirrors Rust `ExtendedUrlFrame::as_bytes`.
-func (f *ExtendedUrlFrame) AsBytes(writeOptions WriteOptions) ([]byte, error) {
+func (f *ExtendedUrlFrame) AsBytes(writeOptions meta.WriteOptions) ([]byte, error) {
 	return f.frameBytes(&frameEncodingContext{version: writeOptionsVersion(writeOptions), writeOptions: writeOptions})
 }
 
@@ -86,7 +86,7 @@ func ParseKeyValueFrame(reader io.Reader, id FrameId, frameFlags FrameFlags, ver
 }
 
 // AsBytes mirrors Rust `KeyValueFrame::as_bytes`.
-func (f *KeyValueFrame) AsBytes(writeOptions WriteOptions) ([]byte, error) {
+func (f *KeyValueFrame) AsBytes(writeOptions meta.WriteOptions) ([]byte, error) {
 	return f.frameBytes(&frameEncodingContext{version: writeOptionsVersion(writeOptions), writeOptions: writeOptions})
 }
 
@@ -96,17 +96,17 @@ func ParsePopularimeterFrame(reader io.Reader, frameFlags FrameFlags) (*Populari
 }
 
 // AsBytes mirrors Rust `PopularimeterFrame::as_bytes`.
-func (f *PopularimeterFrame) AsBytes(writeOptions WriteOptions) ([]byte, error) {
+func (f *PopularimeterFrame) AsBytes(writeOptions meta.WriteOptions) ([]byte, error) {
 	return f.frameBytes(&frameEncodingContext{version: writeOptionsVersion(writeOptions), writeOptions: writeOptions})
 }
 
 // ParseUniqueFileIdentifierFrame mirrors Rust `UniqueFileIdentifierFrame::parse`.
-func ParseUniqueFileIdentifierFrame(reader io.Reader, frameFlags FrameFlags, parseMode ParsingMode) (*UniqueFileIdentifierFrame, error) {
+func ParseUniqueFileIdentifierFrame(reader io.Reader, frameFlags FrameFlags, parseMode meta.ParsingMode) (*UniqueFileIdentifierFrame, error) {
 	return parseUniqueFileIdentifierFrame(reader, frameFlags, parseMode)
 }
 
 // AsBytes mirrors Rust `UniqueFileIdentifierFrame::as_bytes`.
-func (f *UniqueFileIdentifierFrame) AsBytes(writeOptions WriteOptions) ([]byte, error) {
+func (f *UniqueFileIdentifierFrame) AsBytes(writeOptions meta.WriteOptions) ([]byte, error) {
 	return f.frameBytes(&frameEncodingContext{version: writeOptionsVersion(writeOptions), writeOptions: writeOptions})
 }
 
@@ -116,17 +116,17 @@ func ParseOwnershipFrame(reader io.Reader, frameFlags FrameFlags) (*OwnershipFra
 }
 
 // AsBytes mirrors Rust `OwnershipFrame::as_bytes`.
-func (f *OwnershipFrame) AsBytes(writeOptions WriteOptions) ([]byte, error) {
+func (f *OwnershipFrame) AsBytes(writeOptions meta.WriteOptions) ([]byte, error) {
 	return f.frameBytes(&frameEncodingContext{version: writeOptionsVersion(writeOptions), writeOptions: writeOptions})
 }
 
 // ParseTimestampFrame mirrors Rust `TimestampFrame::parse`.
-func ParseTimestampFrame(reader io.Reader, id FrameId, frameFlags FrameFlags, parseMode ParsingMode) (*TimestampFrame, error) {
+func ParseTimestampFrame(reader io.Reader, id FrameId, frameFlags FrameFlags, parseMode meta.ParsingMode) (*TimestampFrame, error) {
 	return parseTimestampFrame(reader, id, frameFlags, parseMode)
 }
 
 // AsBytes mirrors Rust `TimestampFrame::as_bytes`.
-func (f *TimestampFrame) AsBytes(writeOptions WriteOptions) ([]byte, error) {
+func (f *TimestampFrame) AsBytes(writeOptions meta.WriteOptions) ([]byte, error) {
 	return f.frameBytes(&frameEncodingContext{version: writeOptionsVersion(writeOptions), writeOptions: writeOptions})
 }
 
@@ -146,17 +146,17 @@ func ParsePrivateFrame(reader io.Reader, frameFlags FrameFlags) (*PrivateFrame, 
 }
 
 // AsBytes mirrors Rust `PrivateFrame::as_bytes`.
-func (f *PrivateFrame) AsBytes(writeOptions WriteOptions) ([]byte, error) {
+func (f *PrivateFrame) AsBytes(writeOptions meta.WriteOptions) ([]byte, error) {
 	return f.frameBytes(&frameEncodingContext{version: writeOptionsVersion(writeOptions), writeOptions: writeOptions})
 }
 
 // ParseRelativeVolumeAdjustmentFrame mirrors Rust `RelativeVolumeAdjustmentFrame::parse`.
-func ParseRelativeVolumeAdjustmentFrame(reader io.Reader, frameFlags FrameFlags, parseMode ParsingMode) (*RelativeVolumeAdjustmentFrame, error) {
+func ParseRelativeVolumeAdjustmentFrame(reader io.Reader, frameFlags FrameFlags, parseMode meta.ParsingMode) (*RelativeVolumeAdjustmentFrame, error) {
 	return parseRelativeVolumeAdjustmentFrame(reader, frameFlags, parseMode)
 }
 
 // AsBytes mirrors Rust `RelativeVolumeAdjustmentFrame::as_bytes`.
-func (f *RelativeVolumeAdjustmentFrame) AsBytes(writeOptions WriteOptions) ([]byte, error) {
+func (f *RelativeVolumeAdjustmentFrame) AsBytes(writeOptions meta.WriteOptions) ([]byte, error) {
 	return f.frameBytes(&frameEncodingContext{version: writeOptionsVersion(writeOptions), writeOptions: writeOptions})
 }
 
@@ -166,31 +166,31 @@ func ParseAttachedPictureFrame(reader io.Reader, frameFlags FrameFlags, version 
 }
 
 // AsBytes mirrors Rust `AttachedPictureFrame::as_bytes`.
-func (f *AttachedPictureFrame) AsBytes(writeOptions WriteOptions) ([]byte, error) {
+func (f *AttachedPictureFrame) AsBytes(writeOptions meta.WriteOptions) ([]byte, error) {
 	return f.frameBytes(&frameEncodingContext{version: writeOptionsVersion(writeOptions), writeOptions: writeOptions})
 }
 
 // ParseChapterFrame mirrors Rust `ChapterFrame::parse`.
-func ParseChapterFrame(reader io.Reader, parseOptions ParseOptions, version Id3v2Version, frameFlags FrameFlags) (*ChapterFrame, error) {
+func ParseChapterFrame(reader io.Reader, parseOptions meta.ParseOptions, version Id3v2Version, frameFlags FrameFlags) (*ChapterFrame, error) {
 	return parseChapterFrame(reader, parseOptions, version, frameFlags)
 }
 
 // AsBytes mirrors Rust `ChapterFrame::as_bytes`.
-func (f *ChapterFrame) AsBytes(writeOptions WriteOptions) ([]byte, error) {
+func (f *ChapterFrame) AsBytes(writeOptions meta.WriteOptions) ([]byte, error) {
 	return f.frameBytes(&frameEncodingContext{version: writeOptionsVersion(writeOptions), writeOptions: writeOptions})
 }
 
 // ParseChapterTableOfContentsFrame mirrors Rust `ChapterTableOfContentsFrame::parse`.
-func ParseChapterTableOfContentsFrame(reader io.Reader, parseOptions ParseOptions, version Id3v2Version, frameFlags FrameFlags) (*ChapterTableOfContentsFrame, error) {
+func ParseChapterTableOfContentsFrame(reader io.Reader, parseOptions meta.ParseOptions, version Id3v2Version, frameFlags FrameFlags) (*ChapterTableOfContentsFrame, error) {
 	return parseChapterTableOfContentsFrame(reader, parseOptions, version, frameFlags)
 }
 
 // AsBytes mirrors Rust `ChapterTableOfContentsFrame::as_bytes`.
-func (f *ChapterTableOfContentsFrame) AsBytes(writeOptions WriteOptions) ([]byte, error) {
+func (f *ChapterTableOfContentsFrame) AsBytes(writeOptions meta.WriteOptions) ([]byte, error) {
 	return f.frameBytes(&frameEncodingContext{version: writeOptionsVersion(writeOptions), writeOptions: writeOptions})
 }
 
-func writeOptionsVersion(writeOptions WriteOptions) Id3v2Version {
+func writeOptionsVersion(writeOptions meta.WriteOptions) Id3v2Version {
 	if writeOptions.UseID3v23 {
 		return meta.Id3v2Version3
 	}

@@ -5,6 +5,9 @@ import (
 	"encoding/binary"
 	"hash/crc32"
 	"io"
+
+	meta "github.com/subframe7536/lofty-go/internal/meta"
+	"github.com/subframe7536/lofty-go/internal/util"
 )
 
 // crc32IEEE mirrors Rust's crc32 — same polynomial as hash/crc32 IEEE.
@@ -13,7 +16,7 @@ var crc32Table = crc32.MakeTable(crc32.IEEE)
 func crc32Of(content []byte) uint32 { return crc32.Checksum(content, crc32Table) }
 
 // createTag mirrors Rust `write::create_tag` (ID3v2.4).
-func createTag(flags Id3v2TagFlags, frames []Frame, writeOptions WriteOptions) ([]byte, error) {
+func createTag(flags Id3v2TagFlags, frames []Frame, writeOptions meta.WriteOptions) ([]byte, error) {
 	if len(frames) == 0 {
 		return nil, nil
 	}
@@ -104,7 +107,7 @@ func createTag(flags Id3v2TagFlags, frames []Frame, writeOptions WriteOptions) (
 }
 
 // createTagV3 mirrors Rust `write::create_tag_v3` (ID3v2.3).
-func createTagV3(flags Id3v2TagFlags, frames []Frame, writeOptions WriteOptions) ([]byte, error) {
+func createTagV3(flags Id3v2TagFlags, frames []Frame, writeOptions meta.WriteOptions) ([]byte, error) {
 	var id3v2 bytes.Buffer
 	id3v2.WriteString("ID3")
 	id3v2.Write([]byte{3, 0})
@@ -162,7 +165,7 @@ func createTagV3(flags Id3v2TagFlags, frames []Frame, writeOptions WriteOptions)
 func verifyTagSize(flags Id3v2TagFlags, tagLen, headerLen int, extendedHeaderLen uint32, preferredPadding uint32) (totalSize, paddingSize uint32, err error) {
 	length := uint32(tagLen - (headerLen - int(extendedHeaderLen)))
 	if length > synchsafeMax {
-		return 0, 0, &Id3v2EncodingError{Source: &TooMuchDataError{}}
+		return 0, 0, &Id3v2EncodingError{Source: &meta.TooMuchDataError{}}
 	}
 	if flags.Footer {
 		preferredPadding = 0
@@ -242,7 +245,7 @@ func createItemsV3(w io.Writer, frames []Frame, ctx *frameEncodingContext) error
 			}
 			if isTdor {
 				year := tsf.Timestamp.Year
-				newFrame := NewTextInformationFrame(FrameIdValid("TORY"), tsf.Encoding.ToID3v23(), itoa(int(year)))
+				newFrame := NewTextInformationFrame(FrameIdValid("TORY"), tsf.Encoding.ToID3v23(), util.Itoa(int(year)))
 				newFrame.SetFlags(tsf.Flags())
 				value, err := frameAsBytes(newFrame, ctx)
 				if err != nil {
@@ -257,7 +260,7 @@ func createItemsV3(w io.Writer, frames []Frame, ctx *frameEncodingContext) error
 			} else {
 				ts := tsf.Timestamp
 				newFrames := []Frame{
-					NewTextInformationFrame(FrameIdValid("TYER"), tsf.Encoding.ToID3v23(), itoa(int(ts.Year))),
+					NewTextInformationFrame(FrameIdValid("TYER"), tsf.Encoding.ToID3v23(), util.Itoa(int(ts.Year))),
 				}
 				if m, ok := ts.Month.Get(); ok {
 					if d, ok := ts.Day.Get(); ok {
@@ -337,7 +340,7 @@ func createItemsV3(w io.Writer, frames []Frame, ctx *frameEncodingContext) error
 }
 
 func formatTwoDigits(v uint8) string {
-	s := itoa(int(v))
+	s := util.Itoa(int(v))
 	if len(s) == 1 {
 		return "0" + s
 	}
@@ -345,7 +348,7 @@ func formatTwoDigits(v uint8) string {
 }
 
 // writeFrame mirrors `write::frame::write_frame`.
-func writeFrame(w io.Writer, name string, flags FrameFlags, value []byte, writeOptions WriteOptions) error {
+func writeFrame(w io.Writer, name string, flags FrameFlags, value []byte, writeOptions meta.WriteOptions) error {
 	if flags.Encryption.IsSome() {
 		return writeEncrypted(w, name, value, flags, writeOptions)
 	}
@@ -367,10 +370,10 @@ func writeFrame(w io.Writer, name string, flags FrameFlags, value []byte, writeO
 	return err
 }
 
-func writeEncrypted(w io.Writer, name string, value []byte, flags FrameFlags, writeOptions WriteOptions) error {
+func writeEncrypted(w io.Writer, name string, value []byte, flags FrameFlags, writeOptions meta.WriteOptions) error {
 	methodSymbol, _ := flags.Encryption.Get()
 	if methodSymbol <= 0x80 {
-		return frameEncodingErrorMsg(Some(FrameIdValid(name)),
+		return frameEncodingErrorMsg(meta.Some(FrameIdValid(name)),
 			"attempted to write an encrypted frame with an invalid method symbol")
 	}
 	if dli, ok := flags.DataLengthIndicator.Get(); ok && dli > 0 {
@@ -381,7 +384,7 @@ func writeEncrypted(w io.Writer, name string, value []byte, flags FrameFlags, wr
 			var err error
 			dli, err = synchsafe32Checked(dli)
 			if err != nil {
-				return frameEncodingError(None[FrameId](), err)
+				return frameEncodingError(meta.None[FrameId](), err)
 			}
 		}
 		var lb [4]byte
@@ -398,7 +401,7 @@ func writeEncrypted(w io.Writer, name string, value []byte, flags FrameFlags, wr
 	return frameEncodingMissingDLI(FrameIdValid(name))
 }
 
-func writeFrameHeader(w io.Writer, name string, length uint32, flags FrameFlags, writeOptions WriteOptions) error {
+func writeFrameHeader(w io.Writer, name string, length uint32, flags FrameFlags, writeOptions meta.WriteOptions) error {
 	var flagBytes uint16
 	if writeOptions.UseID3v23 {
 		flagBytes = flags.AsId3v23Bytes()
@@ -412,7 +415,7 @@ func writeFrameHeader(w io.Writer, name string, length uint32, flags FrameFlags,
 		var err error
 		length, err = synchsafe32Checked(length)
 		if err != nil {
-			return frameEncodingError(None[FrameId](), err)
+			return frameEncodingError(meta.None[FrameId](), err)
 		}
 	}
 	var tmp [4]byte

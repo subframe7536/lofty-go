@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	meta "github.com/subframe7536/lofty-go/internal/meta"
+	"github.com/subframe7536/lofty-go/internal/util"
+
 	bogem "github.com/bogem/id3v2/v2"
 )
 
@@ -15,7 +18,7 @@ func id3v2TestAsset(name string) string {
 	return "../lofty-rs/lofty/tests/tags/assets/id3v2/" + name
 }
 
-func readId3v2File(t *testing.T, path string, opts ParseOptions) *Tag {
+func readId3v2File(t *testing.T, path string, opts meta.ParseOptions) *meta.Tag {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -34,9 +37,9 @@ func readId3v2File(t *testing.T, path string, opts ParseOptions) *Tag {
 }
 
 // id3v2Dump serializes a generic tag to ID3v2 bytes.
-func id3v2Dump(t *testing.T, tag *Tag, useV23 bool) []byte {
+func id3v2Dump(t *testing.T, tag *meta.Tag, useV23 bool) []byte {
 	t.Helper()
-	wo := NewWriteOptions()
+	wo := meta.NewWriteOptions()
 	wo.UseID3v23 = useV23
 	encoded, err := Id3v2Serialize(tag, wo)
 	if err != nil {
@@ -46,7 +49,7 @@ func id3v2Dump(t *testing.T, tag *Tag, useV23 bool) []byte {
 }
 
 // id3v2Reparse parses written ID3v2 bytes back to a generic tag.
-func id3v2Reparse(t *testing.T, b []byte, opts ParseOptions) *Tag {
+func id3v2Reparse(t *testing.T, b []byte, opts meta.ParseOptions) *meta.Tag {
 	t.Helper()
 	r := bytes.NewReader(b)
 	header, err := ParseId3v2HeaderRaw(r)
@@ -77,18 +80,18 @@ func TestId3v2Full(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[ItemKey]string{
-		ItemKeyTrackTitle:    "TempleOS Hymn Risen (Remix)",
-		ItemKeyTrackArtist:   "Dave Eddy",
-		ItemKeyTrackNumber:   "1",
-		ItemKeyAlbumTitle:    "Summer",
-		ItemKeyRecordingDate: "2017",
-		ItemKeyGenre:         "Electronic",
-		ItemKeyLength:        "213017",
+	want := map[meta.ItemKey]string{
+		meta.ItemKeyTrackTitle:    "TempleOS Hymn Risen (Remix)",
+		meta.ItemKeyTrackArtist:   "Dave Eddy",
+		meta.ItemKeyTrackNumber:   "1",
+		meta.ItemKeyAlbumTitle:    "Summer",
+		meta.ItemKeyRecordingDate: "2017",
+		meta.ItemKeyGenre:         "Electronic",
+		meta.ItemKeyLength:        "213017",
 	}
 	for _, name := range []string{"test_full.id3v22", "test_full.id3v23", "test_full.id3v24"} {
 		t.Run(name, func(t *testing.T) {
-			tag := readId3v2File(t, id3v2TestAsset(name), NewParseOptions())
+			tag := readId3v2File(t, id3v2TestAsset(name), meta.NewParseOptions())
 			if tag.ItemCount() != len(want) {
 				t.Errorf("item count = %d, want %d", tag.ItemCount(), len(want))
 			}
@@ -102,10 +105,10 @@ func TestId3v2Full(t *testing.T) {
 				t.Fatalf("pictures = %d, want 1", tag.PictureCount())
 			}
 			pic := tag.Pictures()[0]
-			if pic.PicType() != PictureTypeCoverFront {
+			if pic.PicType() != meta.PictureTypeCoverFront {
 				t.Errorf("pic type = %v, want CoverFront", pic.PicType())
 			}
-			if mt, ok := pic.MimeType().Get(); !ok || mt != MimeTypePng {
+			if mt, ok := pic.MimeType().Get(); !ok || mt != meta.MimeTypePng {
 				t.Errorf("mime = %v (ok=%v), want PNG", mt, ok)
 			}
 			if _, ok := pic.Description(); ok {
@@ -141,20 +144,20 @@ func TestId3v2SpecialItemsRoundtrip(t *testing.T) {
 	}
 	tagBytes = append(tagBytes, frames...)
 
-	parse := func(t *testing.T, b []byte) *Tag {
+	parse := func(t *testing.T, b []byte) *meta.Tag {
 		t.Helper()
 		r := bytes.NewReader(b)
 		header, err := ParseId3v2HeaderRaw(r)
 		if err != nil {
 			t.Fatal(err)
 		}
-		tag, err := ParseId3v2(r, header, NewParseOptions())
+		tag, err := ParseId3v2(r, header, meta.NewParseOptions())
 		if err != nil {
 			t.Fatal(err)
 		}
 		return tag
 	}
-	findRva2 := func(t *testing.T, tag *Tag) *RelativeVolumeAdjustmentFrame {
+	findRva2 := func(t *testing.T, tag *meta.Tag) *RelativeVolumeAdjustmentFrame {
 		t.Helper()
 		companion, ok := tag.CompanionTag().(*Id3v2Tag)
 		if !ok || companion == nil {
@@ -171,7 +174,7 @@ func TestId3v2SpecialItemsRoundtrip(t *testing.T) {
 	}
 
 	tag := parse(t, tagBytes)
-	if s, _ := tag.GetString(ItemKeyTrackArtist); s != "Foo Artist" {
+	if s, _ := tag.GetString(meta.ItemKeyTrackArtist); s != "Foo Artist" {
 		t.Fatalf("artist = %q", s)
 	}
 	rva2 := findRva2(t, tag)
@@ -184,9 +187,9 @@ func TestId3v2SpecialItemsRoundtrip(t *testing.T) {
 	}
 
 	// Round-trip through the generic Tag — strict mode must still find it
-	strict := NewParseOptions()
-	strict.ParsingMode = ParsingModeStrict
-	reparsed, err := func() (*Tag, error) {
+	strict := meta.NewParseOptions()
+	strict.ParsingMode = meta.ParsingModeStrict
+	reparsed, err := func() (*meta.Tag, error) {
 		r := bytes.NewReader(id3v2Dump(t, tag, false))
 		header, err := ParseId3v2HeaderRaw(r)
 		if err != nil {
@@ -205,40 +208,40 @@ func TestId3v2SpecialItemsRoundtrip(t *testing.T) {
 	if !ok || ch.VolumeAdjustment != 30 {
 		t.Fatalf("RVA2 channels after round-trip = %+v", rva2.Channels)
 	}
-	if s, _ := reparsed.GetString(ItemKeyTrackArtist); s != "Foo Artist" {
+	if s, _ := reparsed.GetString(meta.ItemKeyTrackArtist); s != "Foo Artist" {
 		t.Fatalf("artist after round-trip = %q", s)
 	}
 }
 
 func TestParseId3v2(t *testing.T) {
-	tag := readId3v2File(t, id3v2TestAsset("test.id3v24"), NewParseOptions())
-	if s, _ := tag.GetString(ItemKeyTrackArtist); s != "Bar artist" {
+	tag := readId3v2File(t, id3v2TestAsset("test.id3v24"), meta.NewParseOptions())
+	if s, _ := tag.GetString(meta.ItemKeyTrackArtist); s != "Bar artist" {
 		t.Fatalf("artist = %q", s)
 	}
-	if s, _ := tag.GetString(ItemKeyTrackTitle); s != "Foo title" {
+	if s, _ := tag.GetString(meta.ItemKeyTrackTitle); s != "Foo title" {
 		t.Fatalf("title = %q", s)
 	}
-	if s, _ := tag.GetString(ItemKeyAlbumTitle); s != "Baz album" {
+	if s, _ := tag.GetString(meta.ItemKeyAlbumTitle); s != "Baz album" {
 		t.Fatalf("album = %q", s)
 	}
-	if s, _ := tag.GetString(ItemKeyComment); s != "Qux comment" {
+	if s, _ := tag.GetString(meta.ItemKeyComment); s != "Qux comment" {
 		t.Fatalf("comment = %q", s)
 	}
-	if s, _ := tag.GetString(ItemKeyRecordingDate); s != "1984" {
+	if s, _ := tag.GetString(meta.ItemKeyRecordingDate); s != "1984" {
 		t.Fatalf("date = %q", s)
 	}
-	if s, _ := tag.GetString(ItemKeyTrackNumber); s != "1" {
+	if s, _ := tag.GetString(meta.ItemKeyTrackNumber); s != "1" {
 		t.Fatalf("track = %q", s)
 	}
-	if s, _ := tag.GetString(ItemKeyGenre); s != "Classical" {
+	if s, _ := tag.GetString(meta.ItemKeyGenre); s != "Classical" {
 		t.Fatalf("genre = %q", s)
 	}
 }
 
 func TestId3v2ReRead(t *testing.T) {
-	tag := readId3v2File(t, id3v2TestAsset("test.id3v24"), NewParseOptions())
+	tag := readId3v2File(t, id3v2TestAsset("test.id3v24"), meta.NewParseOptions())
 	encoded := id3v2Dump(t, tag, false)
-	re := id3v2Reparse(t, encoded, NewParseOptions())
+	re := id3v2Reparse(t, encoded, meta.NewParseOptions())
 	if re.ItemCount() != tag.ItemCount() {
 		t.Fatalf("len = %d, want %d", re.ItemCount(), tag.ItemCount())
 	}
@@ -251,15 +254,15 @@ func TestId3v2ReRead(t *testing.T) {
 }
 
 func TestId3v2ToTag(t *testing.T) {
-	tag := readId3v2File(t, id3v2TestAsset("test.id3v24"), NewParseOptions())
+	tag := readId3v2File(t, id3v2TestAsset("test.id3v24"), meta.NewParseOptions())
 	// verify_tag (track_number + genre)
-	checks := map[ItemKey]string{
-		ItemKeyTrackTitle:  "Foo title",
-		ItemKeyTrackArtist: "Bar artist",
-		ItemKeyAlbumTitle:  "Baz album",
-		ItemKeyComment:     "Qux comment",
-		ItemKeyTrackNumber: "1",
-		ItemKeyGenre:       "Classical",
+	checks := map[meta.ItemKey]string{
+		meta.ItemKeyTrackTitle:  "Foo title",
+		meta.ItemKeyTrackArtist: "Bar artist",
+		meta.ItemKeyAlbumTitle:  "Baz album",
+		meta.ItemKeyComment:     "Qux comment",
+		meta.ItemKeyTrackNumber: "1",
+		meta.ItemKeyGenre:       "Classical",
 	}
 	for k, want := range checks {
 		if s, ok := tag.GetString(k); !ok || s != want {
@@ -269,13 +272,13 @@ func TestId3v2ToTag(t *testing.T) {
 }
 
 func TestTagToId3v2(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
-	tag.InsertText(ItemKeyTrackTitle, "Foo title")
-	tag.InsertText(ItemKeyTrackArtist, "Bar artist")
-	tag.InsertText(ItemKeyAlbumTitle, "Baz album")
-	tag.InsertText(ItemKeyComment, "Qux comment")
-	tag.InsertText(ItemKeyTrackNumber, "1")
-	tag.InsertText(ItemKeyGenre, "Classical")
+	tag := meta.NewTag(meta.TagTypeID3v2)
+	tag.InsertText(meta.ItemKeyTrackTitle, "Foo title")
+	tag.InsertText(meta.ItemKeyTrackArtist, "Bar artist")
+	tag.InsertText(meta.ItemKeyAlbumTitle, "Baz album")
+	tag.InsertText(meta.ItemKeyComment, "Qux comment")
+	tag.InsertText(meta.ItemKeyTrackNumber, "1")
+	tag.InsertText(meta.ItemKeyGenre, "Classical")
 
 	btag := bogemFrames(t, id3v2Dump(t, tag, false))
 	verify := func(id, want string) {
@@ -340,10 +343,10 @@ func TestGenreIdMultipleJoined(t *testing.T) {
 }
 
 func TestGenresIdMultipleIntoTag(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
-	tag.InsertText(ItemKeyGenre, "(51)(39)")
-	re := id3v2Reparse(t, id3v2Dump(t, tag, false), NewParseOptions())
-	genres := re.GetStrings(ItemKeyGenre)
+	tag := meta.NewTag(meta.TagTypeID3v2)
+	tag.InsertText(meta.ItemKeyGenre, "(51)(39)")
+	re := id3v2Reparse(t, id3v2Dump(t, tag, false), meta.NewParseOptions())
+	genres := re.GetStrings(meta.ItemKeyGenre)
 	if len(genres) < 2 || genres[0] != "Techno-Industrial" || genres[1] != "Noise" {
 		t.Fatalf("got %v", genres)
 	}
@@ -397,20 +400,20 @@ func TestGenresIdRemixCover(t *testing.T) {
 
 // --- TRCK/TPOS tests ---
 
-func trckText(t *testing.T, tag *Tag) string {
+func trckText(t *testing.T, tag *meta.Tag) string {
 	t.Helper()
 	btag := bogemFrames(t, id3v2Dump(t, tag, false))
 	return btag.GetTextFrame("TRCK").Text
 }
 
-func tposText(t *testing.T, tag *Tag) string {
+func tposText(t *testing.T, tag *meta.Tag) string {
 	t.Helper()
 	btag := bogemFrames(t, id3v2Dump(t, tag, false))
 	return btag.GetTextFrame("TPOS").Text
 }
 
 func TestSetTrack(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
+	tag := meta.NewTag(meta.TagTypeID3v2)
 	tag.SetTrack(1)
 	if got := trckText(t, tag); got != "1" {
 		t.Fatalf("TRCK = %q", got)
@@ -418,7 +421,7 @@ func TestSetTrack(t *testing.T) {
 }
 
 func TestSetTrackTotal(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
+	tag := meta.NewTag(meta.TagTypeID3v2)
 	tag.SetTrackTotal(2)
 	// DEFAULT_NUMBER_IN_PAIR fills in the number
 	if got := trckText(t, tag); got != "0/2" {
@@ -427,7 +430,7 @@ func TestSetTrackTotal(t *testing.T) {
 }
 
 func TestSetTrackAndTrackTotal(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
+	tag := meta.NewTag(meta.TagTypeID3v2)
 	tag.SetTrack(1)
 	tag.SetTrackTotal(2)
 	if got := trckText(t, tag); got != "1/2" {
@@ -436,7 +439,7 @@ func TestSetTrackAndTrackTotal(t *testing.T) {
 }
 
 func TestSetDisk(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
+	tag := meta.NewTag(meta.TagTypeID3v2)
 	tag.SetDisk(1)
 	if got := tposText(t, tag); got != "1" {
 		t.Fatalf("TPOS = %q", got)
@@ -444,7 +447,7 @@ func TestSetDisk(t *testing.T) {
 }
 
 func TestSetDiskTotal(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
+	tag := meta.NewTag(meta.TagTypeID3v2)
 	tag.SetDiskTotal(2)
 	if got := tposText(t, tag); got != "0/2" {
 		t.Fatalf("TPOS = %q", got)
@@ -452,7 +455,7 @@ func TestSetDiskTotal(t *testing.T) {
 }
 
 func TestSetDiskAndDiskTotal(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
+	tag := meta.NewTag(meta.TagTypeID3v2)
 	tag.SetDisk(1)
 	tag.SetDiskTotal(2)
 	if got := tposText(t, tag); got != "1/2" {
@@ -461,61 +464,61 @@ func TestSetDiskAndDiskTotal(t *testing.T) {
 }
 
 func TestTrackNumberTagToId3v2(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
-	tag.PushUnchecked(NewTagItem(ItemKeyTrackNumber, ItemValueText("1")))
+	tag := meta.NewTag(meta.TagTypeID3v2)
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyTrackNumber, meta.ItemValueText("1")))
 	if got := trckText(t, tag); got != "1" {
 		t.Fatalf("TRCK = %q", got)
 	}
 }
 
 func TestTrackTotalTagToId3v2(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
-	tag.PushUnchecked(NewTagItem(ItemKeyTrackTotal, ItemValueText("2")))
+	tag := meta.NewTag(meta.TagTypeID3v2)
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyTrackTotal, meta.ItemValueText("2")))
 	if got := trckText(t, tag); got != "0/2" {
 		t.Fatalf("TRCK = %q", got)
 	}
 }
 
 func TestTrackNumberAndTrackTotalTagToId3v2(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
-	tag.PushUnchecked(NewTagItem(ItemKeyTrackNumber, ItemValueText("1")))
-	tag.PushUnchecked(NewTagItem(ItemKeyTrackTotal, ItemValueText("2")))
+	tag := meta.NewTag(meta.TagTypeID3v2)
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyTrackNumber, meta.ItemValueText("1")))
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyTrackTotal, meta.ItemValueText("2")))
 	if got := trckText(t, tag); got != "1/2" {
 		t.Fatalf("TRCK = %q", got)
 	}
 }
 
 func TestDiskNumberTagToId3v2(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
-	tag.PushUnchecked(NewTagItem(ItemKeyDiscNumber, ItemValueText("1")))
+	tag := meta.NewTag(meta.TagTypeID3v2)
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyDiscNumber, meta.ItemValueText("1")))
 	if got := tposText(t, tag); got != "1" {
 		t.Fatalf("TPOS = %q", got)
 	}
 }
 
 func TestDiskTotalTagToId3v2(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
-	tag.PushUnchecked(NewTagItem(ItemKeyDiscTotal, ItemValueText("2")))
+	tag := meta.NewTag(meta.TagTypeID3v2)
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyDiscTotal, meta.ItemValueText("2")))
 	if got := tposText(t, tag); got != "0/2" {
 		t.Fatalf("TPOS = %q", got)
 	}
 }
 
 func TestDiskNumberAndDiskTotalTagToId3v2(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
-	tag.PushUnchecked(NewTagItem(ItemKeyDiscNumber, ItemValueText("1")))
-	tag.PushUnchecked(NewTagItem(ItemKeyDiscTotal, ItemValueText("2")))
+	tag := meta.NewTag(meta.TagTypeID3v2)
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyDiscNumber, meta.ItemValueText("1")))
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyDiscTotal, meta.ItemValueText("2")))
 	if got := tposText(t, tag); got != "1/2" {
 		t.Fatalf("TPOS = %q", got)
 	}
 }
 
 // create_tag_with_trck_and_tpos_frame — emulate via TRCK/TPOS text frames.
-func tagWithTrckTpos(content string) *Tag {
-	tag := NewTag(TagTypeID3v2)
+func tagWithTrckTpos(content string) *meta.Tag {
+	tag := meta.NewTag(meta.TagTypeID3v2)
 	// Write the raw pair value through a text item, then re-parse.
-	raw := NewTag(TagTypeID3v2)
-	for _, id := range []ItemKey{} {
+	raw := meta.NewTag(meta.TagTypeID3v2)
+	for _, id := range []meta.ItemKey{} {
 		_ = id
 	}
 	// Direct pair-split semantics mirror split_pair on a TRCK/TPOS frame.
@@ -523,11 +526,11 @@ func tagWithTrckTpos(content string) *Tag {
 	// Build the generic tag the way a parsed TRCK/TPOS would.
 	num, tot, ok := splitNumPair(content)
 	if ok {
-		tag.PushUnchecked(NewTagItem(ItemKeyTrackNumber, ItemValueText(num)))
-		tag.PushUnchecked(NewTagItem(ItemKeyDiscNumber, ItemValueText(num)))
+		tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyTrackNumber, meta.ItemValueText(num)))
+		tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyDiscNumber, meta.ItemValueText(num)))
 		if tot != "" {
-			tag.PushUnchecked(NewTagItem(ItemKeyTrackTotal, ItemValueText(tot)))
-			tag.PushUnchecked(NewTagItem(ItemKeyDiscTotal, ItemValueText(tot)))
+			tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyTrackTotal, meta.ItemValueText(tot)))
+			tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyDiscTotal, meta.ItemValueText(tot)))
 		}
 	}
 	return tag
@@ -600,14 +603,14 @@ func TestUfidFrameWithMusicBrainzRecordId(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tag, err := ParseId3v2(r, header, NewParseOptions())
+	tag, err := ParseId3v2(r, header, meta.NewParseOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
-	tag.PushUnchecked(NewTagItem(ItemKeyMusicBrainzRecordingId, ItemValueText(mbID)))
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyMusicBrainzRecordingId, meta.ItemValueText(mbID)))
 
-	re := id3v2Reparse(t, id3v2Dump(t, tag, false), NewParseOptions())
-	if s, ok := re.GetString(ItemKeyMusicBrainzRecordingId); !ok || s != mbID {
+	re := id3v2Reparse(t, id3v2Dump(t, tag, false), meta.NewParseOptions())
+	if s, ok := re.GetString(meta.ItemKeyMusicBrainzRecordingId); !ok || s != mbID {
 		t.Fatalf("mb id = %q", s)
 	}
 	// The non-MB UFID survives as a frame in the companion tag
@@ -645,31 +648,31 @@ func TestPopmFrame(t *testing.T) {
 	}
 
 	// The generic item maps 196 to a star rating through the custom provider.
-	tag := readId3v2File(t, id3v2TestAsset("test_popm.id3v24"), NewParseOptions())
-	items := tag.GetItems(ItemKeyPopularimeter)
+	tag := readId3v2File(t, id3v2TestAsset("test_popm.id3v24"), meta.NewParseOptions())
+	items := tag.GetItems(meta.ItemKeyPopularimeter)
 	if len(items) != 1 {
 		t.Fatalf("popm items = %d", len(items))
 	}
 	s, _ := items[0].Value().Text()
-	p, err := PopularimeterFromStr(s)
+	p, err := meta.PopularimeterFromStr(s)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if p.Email() != "foo@bar.com" || p.PlayCounter != 65535 {
 		t.Fatalf("popm = %v", p)
 	}
-	if p.MappedValue(TagTypeID3v2) != 196 {
-		t.Fatalf("mapped rating = %d", p.MappedValue(TagTypeID3v2))
+	if p.MappedValue(meta.TagTypeID3v2) != 196 {
+		t.Fatalf("mapped rating = %d", p.MappedValue(meta.TagTypeID3v2))
 	}
 }
 
 // --- multi-value ---
 
 func TestMultiValueFrameToTag(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
-	tag.InsertText(ItemKeyTrackArtist, "foo\x00bar\x00baz")
-	re := id3v2Reparse(t, id3v2Dump(t, tag, false), NewParseOptions())
-	got := re.GetStrings(ItemKeyTrackArtist)
+	tag := meta.NewTag(meta.TagTypeID3v2)
+	tag.InsertText(meta.ItemKeyTrackArtist, "foo\x00bar\x00baz")
+	re := id3v2Reparse(t, id3v2Dump(t, tag, false), meta.NewParseOptions())
+	got := re.GetStrings(meta.ItemKeyTrackArtist)
 	want := []string{"foo", "bar", "baz"}
 	if len(got) != len(want) {
 		t.Fatalf("got %v", got)
@@ -682,10 +685,10 @@ func TestMultiValueFrameToTag(t *testing.T) {
 }
 
 func TestMultiItemTagToId3v2(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
-	tag.PushUnchecked(NewTagItem(ItemKeyTrackArtist, ItemValueText("foo")))
-	tag.PushUnchecked(NewTagItem(ItemKeyTrackArtist, ItemValueText("bar")))
-	tag.PushUnchecked(NewTagItem(ItemKeyTrackArtist, ItemValueText("baz")))
+	tag := meta.NewTag(meta.TagTypeID3v2)
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyTrackArtist, meta.ItemValueText("foo")))
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyTrackArtist, meta.ItemValueText("bar")))
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyTrackArtist, meta.ItemValueText("baz")))
 
 	btag := bogemFrames(t, id3v2Dump(t, tag, false))
 	if got := btag.GetTextFrame("TPE1").Text; got != "foo/bar/baz" && got != "foo\x00bar\x00baz" {
@@ -694,26 +697,26 @@ func TestMultiItemTagToId3v2(t *testing.T) {
 }
 
 func TestMultiValueRoundtrip(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
-	push2 := func(k ItemKey, a, b string) {
+	tag := meta.NewTag(meta.TagTypeID3v2)
+	push2 := func(k meta.ItemKey, a, b string) {
 		tag.InsertText(k, a)
-		tag.PushUnchecked(NewTagItem(k, ItemValueText(b)))
+		tag.PushUnchecked(meta.NewTagItem(k, meta.ItemValueText(b)))
 	}
-	push2(ItemKeyTrackArtist, "TrackArtist 1", "TrackArtist 2")
-	push2(ItemKeyAlbumArtist, "AlbumArtist 1", "AlbumArtist 2")
-	push2(ItemKeyTrackTitle, "TrackTitle 1", "TrackTitle 2")
-	push2(ItemKeyAlbumTitle, "AlbumTitle 1", "AlbumTitle 2")
-	push2(ItemKeyContentGroup, "ContentGroup 1", "ContentGroup 2")
-	push2(ItemKeyGenre, "Genre 1", "Genre 2")
-	push2(ItemKeyMood, "Mood 1", "Mood 2")
-	push2(ItemKeyComposer, "Composer 1", "Composer 2")
-	push2(ItemKeyConductor, "Conductor 1", "Conductor 2")
-	push2(ItemKeyComment, "Comment 1", "Comment 2")
+	push2(meta.ItemKeyTrackArtist, "TrackArtist 1", "TrackArtist 2")
+	push2(meta.ItemKeyAlbumArtist, "AlbumArtist 1", "AlbumArtist 2")
+	push2(meta.ItemKeyTrackTitle, "TrackTitle 1", "TrackTitle 2")
+	push2(meta.ItemKeyAlbumTitle, "AlbumTitle 1", "AlbumTitle 2")
+	push2(meta.ItemKeyContentGroup, "ContentGroup 1", "ContentGroup 2")
+	push2(meta.ItemKeyGenre, "Genre 1", "Genre 2")
+	push2(meta.ItemKeyMood, "Mood 1", "Mood 2")
+	push2(meta.ItemKeyComposer, "Composer 1", "Composer 2")
+	push2(meta.ItemKeyConductor, "Conductor 1", "Conductor 2")
+	push2(meta.ItemKeyComment, "Comment 1", "Comment 2")
 	if tag.Len() != 20 {
 		t.Fatalf("len = %d", tag.Len())
 	}
 
-	re := id3v2Reparse(t, id3v2Dump(t, tag, false), NewParseOptions())
+	re := id3v2Reparse(t, id3v2Dump(t, tag, false), meta.NewParseOptions())
 	for _, item := range tag.Items() {
 		v, _ := item.Value().Text()
 		found := false
@@ -730,9 +733,9 @@ func TestMultiValueRoundtrip(t *testing.T) {
 }
 
 func TestArtistsTagConversion(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
+	tag := meta.NewTag(meta.TagTypeID3v2)
 	for _, a := range []string{"Foo", "Bar", "Baz"} {
-		tag.PushUnchecked(NewTagItem(ItemKeyTrackArtists, ItemValueText(a)))
+		tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyTrackArtists, meta.ItemValueText(a)))
 	}
 	btag := bogemFrames(t, id3v2Dump(t, tag, false))
 	// ARTISTS is a TXXX description
@@ -752,9 +755,9 @@ func TestArtistsTagConversion(t *testing.T) {
 }
 
 func TestMultiItemTagDump(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
-	tag.PushUnchecked(NewTagItem(ItemKeyTrackArtist, ItemValueText("Foo")))
-	tag.PushUnchecked(NewTagItem(ItemKeyTrackArtist, ItemValueText("Bar")))
+	tag := meta.NewTag(meta.TagTypeID3v2)
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyTrackArtist, meta.ItemValueText("Foo")))
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyTrackArtist, meta.ItemValueText("Bar")))
 	btag := bogemFrames(t, id3v2Dump(t, tag, false))
 	if got := btag.GetTextFrame("TPE1").Text; got != "Foo\x00Bar" {
 		t.Fatalf("TPE1 = %q", got)
@@ -762,10 +765,10 @@ func TestMultiItemTagDump(t *testing.T) {
 }
 
 func TestSingleValueFrame(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
-	tag.PushUnchecked(NewTagItem(ItemKeyIntegerBpm, ItemValueText("120")))
-	tag.PushUnchecked(NewTagItem(ItemKeyIntegerBpm, ItemValueText("130")))
-	tag.PushUnchecked(NewTagItem(ItemKeyIntegerBpm, ItemValueText("140")))
+	tag := meta.NewTag(meta.TagTypeID3v2)
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyIntegerBpm, meta.ItemValueText("120")))
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyIntegerBpm, meta.ItemValueText("130")))
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyIntegerBpm, meta.ItemValueText("140")))
 	btag := bogemFrames(t, id3v2Dump(t, tag, false))
 	// BPM is deduplicated — first wins
 	if got := btag.GetTextFrame("TBPM").Text; got != "120" {
@@ -775,15 +778,15 @@ func TestSingleValueFrame(t *testing.T) {
 
 func TestUtf16TxxxWithSingleBom(t *testing.T) {
 	// Just has to parse without error
-	_ = readId3v2File(t, id3v2TestAsset("issue_53.id3v24"), NewParseOptions())
+	_ = readId3v2File(t, id3v2TestAsset("issue_53.id3v24"), meta.NewParseOptions())
 }
 
 func TestReplaygainTagConversion(t *testing.T) {
-	// REPLAYGAIN_ALBUM_GAIN is a TXXX description mapped to an ItemKey
-	tag := NewTag(TagTypeID3v2)
-	tag.PushUnchecked(NewTagItem(ItemKeyReplayGainAlbumGain, ItemValueText("-10.43 dB")))
-	re := id3v2Reparse(t, id3v2Dump(t, tag, false), NewParseOptions())
-	if s, ok := re.GetString(ItemKeyReplayGainAlbumGain); !ok || s != "-10.43 dB" {
+	// REPLAYGAIN_ALBUM_GAIN is a TXXX description mapped to an meta.ItemKey
+	tag := meta.NewTag(meta.TagTypeID3v2)
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyReplayGainAlbumGain, meta.ItemValueText("-10.43 dB")))
+	re := id3v2Reparse(t, id3v2Dump(t, tag, false), meta.NewParseOptions())
+	if s, ok := re.GetString(meta.ItemKeyReplayGainAlbumGain); !ok || s != "-10.43 dB" {
 		t.Fatalf("replaygain = %q", s)
 	}
 }
@@ -793,9 +796,9 @@ func TestReplaygainTagConversion(t *testing.T) {
 func TestFlagItemConversion(t *testing.T) {
 	// Rust's flag_item_conversion asserts the Tag -> Id3v2Tag direction:
 	// both flags become text frames with normalized "0"/"1" values.
-	tag := NewTag(TagTypeID3v2)
-	tag.InsertText(ItemKeyFlagCompilation, "1")
-	tag.InsertText(ItemKeyFlagPodcast, "0")
+	tag := meta.NewTag(meta.TagTypeID3v2)
+	tag.InsertText(meta.ItemKeyFlagCompilation, "1")
+	tag.InsertText(meta.ItemKeyFlagPodcast, "0")
 
 	btag := bogemFrames(t, id3v2Dump(t, tag, false))
 	if got := btag.GetTextFrame("TCMP").Text; got != "1" {
@@ -814,7 +817,7 @@ func TestFlagItemConversion(t *testing.T) {
 
 	// On re-read Rust keeps PCST as a binary (retained) frame; the port's
 	// equivalent is an unknown binary item that round-trips byte-identically.
-	re := id3v2Reparse(t, id3v2Dump(t, tag, false), NewParseOptions())
+	re := id3v2Reparse(t, id3v2Dump(t, tag, false), meta.NewParseOptions())
 	found := false
 	if companion, ok := re.CompanionTag().(*Id3v2Tag); ok {
 		for _, f := range companion.Frames.Frames() {
@@ -830,26 +833,26 @@ func TestFlagItemConversion(t *testing.T) {
 }
 
 func TestTimestampRoundtrip(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
-	tag.InsertText(ItemKeyRecordingDate, "2024-06-03T14:08:49")
-	re := id3v2Reparse(t, id3v2Dump(t, tag, false), NewParseOptions())
-	if s, ok := re.GetString(ItemKeyRecordingDate); !ok || s != "2024-06-03T14:08:49" {
+	tag := meta.NewTag(meta.TagTypeID3v2)
+	tag.InsertText(meta.ItemKeyRecordingDate, "2024-06-03T14:08:49")
+	re := id3v2Reparse(t, id3v2Dump(t, tag, false), meta.NewParseOptions())
+	if s, ok := re.GetString(meta.ItemKeyRecordingDate); !ok || s != "2024-06-03T14:08:49" {
 		t.Fatalf("date = %q", s)
 	}
 }
 
 func TestPreserveCommentLangDescriptionOnConversion(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
-	item := NewTagItem(ItemKeyComment, ItemValueText("Foo comment"))
+	tag := meta.NewTag(meta.TagTypeID3v2)
+	item := meta.NewTagItem(meta.ItemKeyComment, meta.ItemValueText("Foo comment"))
 	item.Description = "Some description"
 	copy(item.Lang[:], "eng")
 	tag.PushUnchecked(item)
 
-	re := id3v2Reparse(t, id3v2Dump(t, tag, false), NewParseOptions())
+	re := id3v2Reparse(t, id3v2Dump(t, tag, false), meta.NewParseOptions())
 	if re.ItemCount() != 1 {
 		t.Fatalf("len = %d", re.ItemCount())
 	}
-	got := re.GetItems(ItemKeyComment)
+	got := re.GetItems(meta.ItemKeyComment)
 	if len(got) != 1 {
 		t.Fatalf("comments = %d", len(got))
 	}
@@ -876,8 +879,8 @@ func TestHoldBack4CharacterTxxxDescription(t *testing.T) {
 	if _, err := btag.WriteTo(&buf); err != nil {
 		t.Fatal(err)
 	}
-	tag := id3v2Reparse(t, buf.Bytes(), NewParseOptions())
-	re := id3v2Reparse(t, id3v2Dump(t, tag, false), NewParseOptions())
+	tag := id3v2Reparse(t, buf.Bytes(), meta.NewParseOptions())
+	re := id3v2Reparse(t, id3v2Dump(t, tag, false), meta.NewParseOptions())
 	// MODE is a 4-char TXXX description — it survives in the companion tag
 	found := false
 	if companion, ok := re.CompanionTag().(*Id3v2Tag); ok {
@@ -893,21 +896,21 @@ func TestHoldBack4CharacterTxxxDescription(t *testing.T) {
 }
 
 func TestSkipReadingCoverArt(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
-	pic := PictureUnchecked(make([]byte, 50)).
-		PicType(PictureTypeCoverFront).
-		MimeType(MimeTypeJpeg).
+	tag := meta.NewTag(meta.TagTypeID3v2)
+	pic := meta.PictureUnchecked(make([]byte, 50)).
+		PicType(meta.PictureTypeCoverFront).
+		MimeType(meta.MimeTypeJpeg).
 		Build()
 	tag.PushPicture(pic)
-	tag.InsertText(ItemKeyTrackArtist, "Foo artist")
+	tag.InsertText(meta.ItemKeyTrackArtist, "Foo artist")
 
-	opts := NewParseOptions()
+	opts := meta.NewParseOptions()
 	opts.ReadCoverArt = false
 	re := id3v2Reparse(t, id3v2Dump(t, tag, false), opts)
 	if re.PictureCount() != 0 {
 		t.Fatalf("pictures = %d", re.PictureCount())
 	}
-	if s, ok := re.GetString(ItemKeyTrackArtist); !ok || s != "Foo artist" {
+	if s, ok := re.GetString(meta.ItemKeyTrackArtist); !ok || s != "Foo artist" {
 		t.Fatalf("artist = %q", s)
 	}
 }
@@ -916,12 +919,12 @@ func TestSkipReadingCoverArt(t *testing.T) {
 
 func TestRemoveId3v24FramesOnId3v23Save(t *testing.T) {
 	// RVA2 is ID3v2.4-only — dropped when saving as 2.3
-	tag := NewTag(TagTypeID3v2)
-	item := NewTagItem(ItemKeyUnknown, ItemValueBinary([]byte{0x03, 0x01, 0x02}))
+	tag := meta.NewTag(meta.TagTypeID3v2)
+	item := meta.NewTagItem(meta.ItemKeyUnknown, meta.ItemValueBinary([]byte{0x03, 0x01, 0x02}))
 	item.Description = "RVA2"
 	tag.PushUnchecked(item)
 	encoded := id3v2Dump(t, tag, true)
-	// ItemKeyUnknown produces no frame — an empty tag serializes to nothing
+	// meta.ItemKeyUnknown produces no frame — an empty tag serializes to nothing
 	if len(encoded) != 0 {
 		t.Fatalf("encoded v2.3 tag = %d bytes", len(encoded))
 	}
@@ -929,8 +932,8 @@ func TestRemoveId3v24FramesOnId3v23Save(t *testing.T) {
 
 func TestChangeTextEncodingOnId3v23Save(t *testing.T) {
 	// UTF-16BE isn't allowed in 2.3 — text frames degrade to UTF-16
-	tag := NewTag(TagTypeID3v2)
-	tag.InsertText(ItemKeyTrackTitle, "Foo")
+	tag := meta.NewTag(meta.TagTypeID3v2)
+	tag.InsertText(meta.ItemKeyTrackTitle, "Foo")
 	encoded := id3v2Dump(t, tag, true)
 	// Scan the raw bytes for a UTF-16BE encoding byte (0x02) — none may appear
 	btag := bogemFrames(t, encoded)
@@ -939,15 +942,15 @@ func TestChangeTextEncodingOnId3v23Save(t *testing.T) {
 			t.Fatal("UTF-16BE encoding used in v2.3 tag")
 		}
 	}
-	re := id3v2Reparse(t, encoded, NewParseOptions())
-	if s, _ := re.GetString(ItemKeyTrackTitle); s != "Foo" {
+	re := id3v2Reparse(t, encoded, meta.NewParseOptions())
+	if s, _ := re.GetString(meta.ItemKeyTrackTitle); s != "Foo" {
 		t.Fatalf("title = %q", s)
 	}
 }
 
 func TestSplitTdorOnId3v23Save(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
-	tag.InsertText(ItemKeyOriginalReleaseDate, "2024-06-03T14:08:49")
+	tag := meta.NewTag(meta.TagTypeID3v2)
+	tag.InsertText(meta.ItemKeyOriginalReleaseDate, "2024-06-03T14:08:49")
 	encoded := id3v2Dump(t, tag, true)
 	btag := bogemFrames(t, encoded)
 	// TDOR downgrades to TORY — only the year survives
@@ -955,15 +958,15 @@ func TestSplitTdorOnId3v23Save(t *testing.T) {
 		t.Fatalf("TORY = %q", got)
 	}
 	// On re-read, TORY upgrades back to TDOR with only a year
-	re := id3v2Reparse(t, encoded, NewParseOptions())
-	if s, ok := re.GetString(ItemKeyOriginalReleaseDate); !ok || s != "2024" {
+	re := id3v2Reparse(t, encoded, meta.NewParseOptions())
+	if s, ok := re.GetString(meta.ItemKeyOriginalReleaseDate); !ok || s != "2024" {
 		t.Fatalf("orig date = %q", s)
 	}
 }
 
 func TestSplitTdrcOnId3v23Save(t *testing.T) {
-	tag := NewTag(TagTypeID3v2)
-	tag.InsertText(ItemKeyRecordingDate, "2024-06-03T14:08:49")
+	tag := meta.NewTag(meta.TagTypeID3v2)
+	tag.InsertText(meta.ItemKeyRecordingDate, "2024-06-03T14:08:49")
 	encoded := id3v2Dump(t, tag, true)
 	btag := bogemFrames(t, encoded)
 	// TDRC splits into TYER + TDAT + TIME on 2.3
@@ -977,8 +980,8 @@ func TestSplitTdrcOnId3v23Save(t *testing.T) {
 		t.Fatalf("TIME = %q", got)
 	}
 	// Re-read with implicit conversions merges them back to TDRC
-	re := id3v2Reparse(t, encoded, NewParseOptions())
-	if s, ok := re.GetString(ItemKeyRecordingDate); !ok || s != "2024-06-03T14:08" {
+	re := id3v2Reparse(t, encoded, meta.NewParseOptions())
+	if s, ok := re.GetString(meta.ItemKeyRecordingDate); !ok || s != "2024-06-03T14:08" {
 		t.Fatalf("date = %q", s)
 	}
 }
@@ -986,11 +989,11 @@ func TestSplitTdrcOnId3v23Save(t *testing.T) {
 // --- misc file-level tests ---
 
 func TestEnsureFrameSkippingWithinBounds(t *testing.T) {
-	opts := NewParseOptions()
-	opts.ParsingMode = ParsingModeBestAttempt
+	opts := meta.NewParseOptions()
+	opts.ParsingMode = meta.ParsingModeBestAttempt
 	tag := readId3v2File(t, id3v2TestAsset("skippable_frame_otherwise_valid.id3v24"), opts)
 	// The TDTG frame past the bad TDEN frame survives
-	if s, ok := tag.GetString(ItemKeyTaggingTime); !ok || s != "2014-06-10T02:16:10" {
+	if s, ok := tag.GetString(meta.ItemKeyTaggingTime); !ok || s != "2014-06-10T02:16:10" {
 		t.Fatalf("TDTG = %q (items=%v)", s, tag.Items())
 	}
 }
@@ -999,29 +1002,29 @@ func TestEnsureFrameSkippingWithinBounds(t *testing.T) {
 func TestBadFrameIDRelaxedId3v2(t *testing.T) {
 	// Contains a frame with a "+" in the ID, which is invalid.
 	// All other frames in the tag are valid, however.
-	opts := NewParseOptions()
-	opts.ParsingMode = ParsingModeRelaxed
+	opts := meta.NewParseOptions()
+	opts.ParsingMode = meta.ParsingModeRelaxed
 	tag := readId3v2File(t, id3v2TestAsset("bad_frame_otherwise_valid.id3v24"), opts)
 	// 6 valid frames and 1 invalid frame (T+LB, was TALB)
 	if tag.ItemCount() != 6 {
 		t.Fatalf("len = %d (items=%v)", tag.ItemCount(), tag.Items())
 	}
-	if s, _ := tag.GetString(ItemKeyTrackTitle); s != "Foo title" {
+	if s, _ := tag.GetString(meta.ItemKeyTrackTitle); s != "Foo title" {
 		t.Fatalf("title = %q", s)
 	}
-	if s, _ := tag.GetString(ItemKeyTrackArtist); s != "Bar artist" {
+	if s, _ := tag.GetString(meta.ItemKeyTrackArtist); s != "Bar artist" {
 		t.Fatalf("artist = %q", s)
 	}
-	if s, _ := tag.GetString(ItemKeyComment); s != "Qux comment" {
+	if s, _ := tag.GetString(meta.ItemKeyComment); s != "Qux comment" {
 		t.Fatalf("comment = %q", s)
 	}
-	if s, _ := tag.GetString(ItemKeyRecordingDate); s != "1984" {
+	if s, _ := tag.GetString(meta.ItemKeyRecordingDate); s != "1984" {
 		t.Fatalf("date = %q", s)
 	}
-	if s, _ := tag.GetString(ItemKeyTrackNumber); s != "1" {
+	if s, _ := tag.GetString(meta.ItemKeyTrackNumber); s != "1" {
 		t.Fatalf("track = %q", s)
 	}
-	if s, _ := tag.GetString(ItemKeyGenre); s != "Classical" {
+	if s, _ := tag.GetString(meta.ItemKeyGenre); s != "Classical" {
 		t.Fatalf("genre = %q", s)
 	}
 }
@@ -1033,8 +1036,8 @@ func TestUndersizedFrames(t *testing.T) {
 		"TPE1\x00\x00\x00\x0B\x00\x00\x00Serial-ATA")
 
 	// Relaxed mode should parse the tag fine, skipping the comment
-	opts := NewParseOptions()
-	opts.ParsingMode = ParsingModeRelaxed
+	opts := meta.NewParseOptions()
+	opts.ParsingMode = meta.ParsingModeRelaxed
 	r := bytes.NewReader(badTag)
 	header, err := ParseId3v2HeaderRaw(r)
 	if err != nil {
@@ -1044,12 +1047,12 @@ func TestUndersizedFrames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("relaxed parse failed: %v", err)
 	}
-	if s, ok := tag.GetString(ItemKeyTrackArtist); !ok || s != "Serial-ATA" {
+	if s, ok := tag.GetString(meta.ItemKeyTrackArtist); !ok || s != "Serial-ATA" {
 		t.Fatalf("artist = %q", s)
 	}
 
 	// Anything else should fail entirely
-	for _, mode := range []ParsingMode{ParsingModeStrict, ParsingModeBestAttempt} {
+	for _, mode := range []meta.ParsingMode{meta.ParsingModeStrict, meta.ParsingModeBestAttempt} {
 		opts.ParsingMode = mode
 		r = bytes.NewReader(badTag)
 		header, err = ParseId3v2HeaderRaw(r)
@@ -1063,8 +1066,8 @@ func TestUndersizedFrames(t *testing.T) {
 }
 
 func TestReadMultipleComposers(t *testing.T) {
-	tag := readId3v2File(t, id3v2TestAsset("multiple_composers.id3v24"), NewParseOptions())
-	got := tag.GetStrings(ItemKeyComposer)
+	tag := readId3v2File(t, id3v2TestAsset("multiple_composers.id3v24"), meta.NewParseOptions())
+	got := tag.GetStrings(meta.ItemKeyComposer)
 	if len(got) != 2 || got[0] != "A" || got[1] != "B" {
 		t.Fatalf("composers = %v", got)
 	}
@@ -1073,11 +1076,11 @@ func TestReadMultipleComposers(t *testing.T) {
 func TestTrimEndNullsWhenReadingFrameContent(t *testing.T) {
 	// Issue #273 — tag written by mid3v2; all frames contain
 	// null-terminated UTF-8 text that must come back trimmed.
-	tag := readId3v2File(t, id3v2TestAsset("trailing_nulls.id3v24"), NewParseOptions())
-	if s, _ := tag.GetString(ItemKeyTrackArtist); s != "Artist" {
+	tag := readId3v2File(t, id3v2TestAsset("trailing_nulls.id3v24"), meta.NewParseOptions())
+	if s, _ := tag.GetString(meta.ItemKeyTrackArtist); s != "Artist" {
 		t.Fatalf("artist = %q", s)
 	}
-	// TXXX:Writer has no ItemKey mapping — it stays in the companion tag,
+	// TXXX:Writer has no meta.ItemKey mapping — it stays in the companion tag,
 	// content NUL-trimmed.
 	found := false
 	if companion, ok := tag.CompanionTag().(*Id3v2Tag); ok {
@@ -1090,13 +1093,13 @@ func TestTrimEndNullsWhenReadingFrameContent(t *testing.T) {
 	if !found {
 		t.Fatal("TXXX:Writer missing or still NUL-terminated")
 	}
-	if s, _ := tag.GetString(ItemKeyUnsyncLyrics); s != "Lyrics to the song" {
+	if s, _ := tag.GetString(meta.ItemKeyUnsyncLyrics); s != "Lyrics to the song" {
 		t.Fatalf("lyrics = %q", s)
 	}
-	if s, _ := tag.GetString(ItemKeyComment); s != "Comment" {
+	if s, _ := tag.GetString(meta.ItemKeyComment); s != "Comment" {
 		t.Fatalf("comment = %q", s)
 	}
-	// WXXX:Fanpage has no ItemKey mapping — retained in the companion tag.
+	// WXXX:Fanpage has no meta.ItemKey mapping — retained in the companion tag.
 	found = false
 	if companion, ok := tag.CompanionTag().(*Id3v2Tag); ok {
 		for _, f := range companion.Frames.Frames() {
@@ -1113,22 +1116,22 @@ func TestTrimEndNullsWhenReadingFrameContent(t *testing.T) {
 
 func TestIssue36(t *testing.T) {
 	// A picture in a tag written as UTF-8 must read back losslessly
-	tag := NewTag(TagTypeID3v2)
-	pic := PictureUnchecked(make([]byte, 200)).
-		PicType(PictureTypeCoverFront).
-		MimeType(MimeTypeJpeg).
+	tag := meta.NewTag(meta.TagTypeID3v2)
+	pic := meta.PictureUnchecked(make([]byte, 200)).
+		PicType(meta.PictureTypeCoverFront).
+		MimeType(meta.MimeTypeJpeg).
 		Description("cover").
 		Build()
 	tag.PushPicture(pic)
 
 	encoded := id3v2Dump(t, tag, false)
-	re := id3v2Reparse(t, encoded, NewParseOptions())
+	re := id3v2Reparse(t, encoded, meta.NewParseOptions())
 	if re.PictureCount() != 1 {
 		t.Fatalf("pictures = %d", re.PictureCount())
 	}
 	p := re.Pictures()[0]
 	d, _ := p.Description()
-	if d != "cover" || p.PicType() != PictureTypeCoverFront {
+	if d != "cover" || p.PicType() != meta.PictureTypeCoverFront {
 		t.Fatalf("pic = %+v", p)
 	}
 	if len(p.Data()) != 200 {
@@ -1139,8 +1142,8 @@ func TestIssue36(t *testing.T) {
 // Ported from id3/v2/read.rs::zero_size_id3v2 — a header-only tag parses fine
 // under Strict.
 func TestId3v2ZeroSize(t *testing.T) {
-	po := NewParseOptions()
-	po.ParsingMode = ParsingModeStrict
+	po := meta.NewParseOptions()
+	po.ParsingMode = meta.ParsingModeStrict
 	tag := readId3v2File(t, id3v2TestAsset("zero.id3v2"), po)
 	if tag == nil {
 		t.Fatal("expected a tag")
@@ -1158,7 +1161,7 @@ func TestFindId3v2SeekBack(t *testing.T) {
 	if _, err := r.Seek(5, 0); err != nil {
 		t.Fatal(err)
 	}
-	_, _, found, err := FindId3v2(r, true, NewParseOptions())
+	_, _, found, err := FindId3v2(r, true, meta.NewParseOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1172,7 +1175,7 @@ func TestFindId3v2SeekBack(t *testing.T) {
 
 // Ported from src/id3/v2/tag/tests.rs::tipl_round_trip — mapped TIPL pairs
 // convert to generic items; unmapped pairs are held back and merge into a
-// single TIPL frame on write. TMCL has no ItemKey mappings, so all of its
+// single TIPL frame on write. TMCL has no meta.ItemKey mappings, so all of its
 // pairs are held back and re-emitted as TMCL (v2.4) or merged into IPLS (v2.3).
 func TestTiplRoundTrip(t *testing.T) {
 	// Build a v2.4 tag: TIPL with all mapped roles + one unmapped pair, and a
@@ -1180,7 +1183,7 @@ func TestTiplRoundTrip(t *testing.T) {
 	var content bytes.Buffer
 	writeFrame := func(id, body string) {
 		content.WriteString(id)
-		sz := synchsafe32(uint32(len(body)))
+		sz := util.Synchsafe32(uint32(len(body)))
 		content.Write(sz[:])
 		content.Write([]byte{0, 0}) // flags
 		content.WriteString(body)
@@ -1194,14 +1197,14 @@ func TestTiplRoundTrip(t *testing.T) {
 
 	var tagBytes bytes.Buffer
 	tagBytes.WriteString("ID3\x04\x00\x00")
-	ss := synchsafe32(uint32(content.Len()))
+	ss := util.Synchsafe32(uint32(content.Len()))
 	tagBytes.Write(ss[:])
 	tagBytes.Write(content.Bytes())
 
-	tag := id3v2Reparse(t, tagBytes.Bytes(), NewParseOptions())
+	tag := id3v2Reparse(t, tagBytes.Bytes(), meta.NewParseOptions())
 
 	// All 5 mapped roles are generic items
-	for _, k := range []ItemKey{ItemKeyProducer, ItemKeyArranger, ItemKeyEngineer, ItemKeyMixDj, ItemKeyMixEngineer} {
+	for _, k := range []meta.ItemKey{meta.ItemKeyProducer, meta.ItemKeyArranger, meta.ItemKeyEngineer, meta.ItemKeyMixDj, meta.ItemKeyMixEngineer} {
 		if s, ok := tag.GetString(k); !ok || s != "Serial-ATA" {
 			t.Fatalf("key %v = %q (ok=%v)", k, s, ok)
 		}
@@ -1230,14 +1233,14 @@ func TestTiplRoundTrip(t *testing.T) {
 	}
 
 	// Round-trip: the unmapped pairs merge back into single frames.
-	re := id3v2Reparse(t, id3v2Dump(t, tag, false), NewParseOptions())
+	re := id3v2Reparse(t, id3v2Dump(t, tag, false), meta.NewParseOptions())
 	if re.Len() != 5 {
 		t.Fatalf("re-read len = %d, want 5", re.Len())
 	}
 
 	// v2.3 write merges TIPL+TMCL into IPLS; on re-read IPLS upgrades to TIPL
 	// and the unmapped pairs stay in the companion tag.
-	re23 := id3v2Reparse(t, id3v2Dump(t, tag, true), NewParseOptions())
+	re23 := id3v2Reparse(t, id3v2Dump(t, tag, true), meta.NewParseOptions())
 	if re23.Len() != 5 {
 		t.Fatalf("v2.3 re-read len = %d, want 5", re23.Len())
 	}
@@ -1272,7 +1275,7 @@ func TestFailWriteBadFrame(t *testing.T) {
 	// URL content under a non-W ID is invalid
 	tag.Frames.Insert(NewUrlLinkFrame(FrameIdValid("ABCD"), "FOO URL"))
 	var buf bytes.Buffer
-	err := tag.DumpTo(&buf, NewWriteOptions())
+	err := tag.DumpTo(&buf, meta.NewWriteOptions())
 	if err == nil {
 		t.Fatal("expected write failure")
 	}
@@ -1288,13 +1291,13 @@ func TestId3v24Footer(t *testing.T) {
 	tag.SetFlags(Id3v2TagFlags{Footer: true})
 	tag.Frames.Insert(NewTextInformationFrame(FrameIdValid("TIT2"), TextEncodingUTF8, "Title"))
 	var buf bytes.Buffer
-	if err := tag.DumpTo(&buf, NewWriteOptions()); err != nil {
+	if err := tag.DumpTo(&buf, meta.NewWriteOptions()); err != nil {
 		t.Fatal(err)
 	}
 	writer := buf.Bytes()
 
-	strict := NewParseOptions()
-	strict.ParsingMode = ParsingModeStrict
+	strict := meta.NewParseOptions()
+	strict.ParsingMode = meta.ParsingModeStrict
 	r := bytes.NewReader(writer)
 	header, err := ParseId3v2HeaderRaw(r)
 	if err != nil {
@@ -1433,14 +1436,14 @@ func TestGetSetUserDefinedText(t *testing.T) {
 func TestPopmProviderMappings(t *testing.T) {
 	cases := []struct {
 		name  string
-		build func(StarRating, uint64) Popularimeter
+		build func(meta.StarRating, uint64) meta.Popularimeter
 		want  []uint8
 	}{
-		{"musicbee", PopularimeterMusicBee, []uint8{1, 64, 128, 196, 255}},
-		{"windows_media_player", PopularimeterWindowsMediaPlayer, []uint8{1, 64, 128, 196, 255}},
-		{"picard", PopularimeterPicard, []uint8{51, 102, 153, 204, 255}},
+		{"musicbee", meta.PopularimeterMusicBee, []uint8{1, 64, 128, 196, 255}},
+		{"windows_media_player", meta.PopularimeterWindowsMediaPlayer, []uint8{1, 64, 128, 196, 255}},
+		{"picard", meta.PopularimeterPicard, []uint8{51, 102, 153, 204, 255}},
 	}
-	stars := []StarRating{StarRatingOne, StarRatingTwo, StarRatingThree, StarRatingFour, StarRatingFive}
+	stars := []meta.StarRating{meta.StarRatingOne, meta.StarRatingTwo, meta.StarRatingThree, meta.StarRatingFour, meta.StarRatingFive}
 	for _, c := range cases {
 		for i, star := range stars {
 			frame := PopularimeterFrameFromPopularimeter(c.build(star, 0))

@@ -5,6 +5,10 @@ import (
 	"encoding/binary"
 	"io"
 	"time"
+
+	meta "github.com/subframe7536/lofty-go/internal/meta"
+	"github.com/subframe7536/lofty-go/internal/util"
+	"github.com/subframe7536/lofty-go/vorbis"
 )
 
 var oggPreamble = []byte("OggS")
@@ -54,7 +58,7 @@ func readOggPage(reader io.ReadSeeker) (*OggPage, error) {
 		return nil, err
 	}
 	if !bytes.Equal(hdr[:4], oggPreamble) {
-		return nil, &OggParseError{Source: &FakeTagError{}}
+		return nil, &OggParseError{Source: &meta.FakeTagError{}}
 	}
 	if hdr[4] != 0 {
 		return nil, &OggParseError{Message: "unsupported Ogg page version"}
@@ -192,80 +196,80 @@ type OggProperties struct {
 	Vbr  bool
 
 	// Opus: channel mapping derived from the mapping family + channel count
-	ChannelMask Option[ChannelMask]
+	ChannelMask meta.Option[meta.ChannelMask]
 }
 
-// FileProperties converts to generic [FileProperties].
-func (p OggProperties) FileProperties() FileProperties {
-	return NewFileProperties(
+// FileProperties converts to generic [meta.FileProperties].
+func (p OggProperties) FileProperties() meta.FileProperties {
+	return meta.NewFileProperties(
 		p.Duration,
-		Some(p.OverallBitrate),
-		Some(p.AudioBitrate),
-		Some(p.SampleRate),
-		None[uint8](),
-		Some(p.Channels),
-		None[ChannelMask](),
+		meta.Some(p.OverallBitrate),
+		meta.Some(p.AudioBitrate),
+		meta.Some(p.SampleRate),
+		meta.None[uint8](),
+		meta.Some(p.Channels),
+		meta.None[meta.ChannelMask](),
 	)
 }
 
 // OggVorbisFile is an Ogg Vorbis file.
 type OggVorbisFile struct {
 	Properties     OggProperties
-	VorbisComments Option[*VorbisCommentsTag]
+	VorbisComments meta.Option[*vorbis.VorbisCommentsTag]
 }
 
 // OggOpusFile is an Ogg Opus file.
 type OggOpusFile struct {
 	Properties     OggProperties
-	VorbisComments Option[*VorbisCommentsTag]
+	VorbisComments meta.Option[*vorbis.VorbisCommentsTag]
 }
 
 // OggSpeexFile is an Ogg Speex file.
 type OggSpeexFile struct {
 	Properties     OggProperties
-	VorbisComments Option[*VorbisCommentsTag]
+	VorbisComments meta.Option[*vorbis.VorbisCommentsTag]
 }
 
 // oggReadTagged reads an Ogg file: returns (properties, vorbis comments tag, file type).
-func oggReadTagged(reader io.ReadSeeker, parseOptions ParseOptions) (*OggProperties, *VorbisCommentsTag, FileType, error) {
+func oggReadTagged(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*OggProperties, *vorbis.VorbisCommentsTag, meta.FileType, error) {
 	start, err := reader.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return nil, nil, FileType{}, &FileParseError{Source: err}
+		return nil, nil, meta.FileType{}, &meta.FileParseError{Source: err}
 	}
 	streamEnd, err := reader.Seek(0, io.SeekEnd)
 	if err != nil {
-		return nil, nil, FileType{}, &FileParseError{Source: err}
+		return nil, nil, meta.FileType{}, &meta.FileParseError{Source: err}
 	}
 	streamLen := uint64(streamEnd - start)
 	if _, err := reader.Seek(start, io.SeekStart); err != nil {
-		return nil, nil, FileType{}, &FileParseError{Source: err}
+		return nil, nil, meta.FileType{}, &meta.FileParseError{Source: err}
 	}
 
 	serial, firstGranule, err := oggFirstPage(reader)
 	if err != nil {
-		return nil, nil, FileType{}, &FileParseError{Source: &OggParseError{Source: err}}
+		return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &OggParseError{Source: err}}
 	}
 	if _, err := reader.Seek(start, io.SeekStart); err != nil {
-		return nil, nil, FileType{}, &FileParseError{Source: err}
+		return nil, nil, meta.FileType{}, &meta.FileParseError{Source: err}
 	}
 
 	packets, _, err := oggPackets(reader, serial, 3)
 	if err != nil {
-		return nil, nil, FileType{}, &FileParseError{Source: &OggParseError{Source: err}}
+		return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &OggParseError{Source: err}}
 	}
 	if len(packets) < 2 {
-		return nil, nil, FileType{}, &FileParseError{Source: &OggParseError{Message: "missing Ogg header packets"}}
+		return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &OggParseError{Message: "missing Ogg header packets"}}
 	}
 
 	props := &OggProperties{}
-	var vc *VorbisCommentsTag
-	var fType FileType
+	var vc *vorbis.VorbisCommentsTag
+	var fType meta.FileType
 	var preSkip uint64
 
 	ident := packets[0]
 	switch {
 	case len(ident) >= 7 && bytes.Equal(ident[1:7], []byte("vorbis")) && ident[0] == 1:
-		fType = FileTypeVorbis
+		fType = meta.FileTypeVorbis
 		// Identification header: vorbis_version(4) channels(1) rate(4) bitrate_max(4) bitrate_nom(4) bitrate_min(4)
 		if len(ident) >= 30 {
 			props.Version = binary.LittleEndian.Uint32(ident[7:])
@@ -282,15 +286,15 @@ func oggReadTagged(reader io.ReadSeeker, parseOptions ParseOptions) (*OggPropert
 		comment := packets[1]
 		if len(comment) >= 7 && comment[0] == 3 && bytes.Equal(comment[1:7], []byte("vorbis")) {
 			if parseOptions.ReadTags {
-				t, err := ParseVorbisComments(comment[7:], parseOptions)
+				t, err := vorbis.ParseVorbisComments(comment[7:], parseOptions)
 				if err != nil {
-					return nil, nil, FileType{}, &FileParseError{Source: &VorbisCommentsParseError{Source: err}}
+					return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &vorbis.VorbisCommentsParseError{Source: err}}
 				}
 				vc = t
 			}
 		}
 	case len(ident) >= 8 && bytes.Equal(ident[:8], []byte("OpusHead")):
-		fType = FileTypeOpus
+		fType = meta.FileTypeOpus
 		// OpusHead: version(1) channels(1) preskip(2) rate(4) gain(2) mapping(1)
 		if len(ident) >= 19 {
 			props.Version = uint32(ident[8])
@@ -299,20 +303,20 @@ func oggReadTagged(reader io.ReadSeeker, parseOptions ParseOptions) (*OggPropert
 			props.InputSampleRate = binary.LittleEndian.Uint32(ident[12:])
 			props.OutputGainDb = float32(int16(binary.LittleEndian.Uint16(ident[16:]))) / 256
 			props.SampleRate = 48000 // Opus is always decoded at 48kHz
-			props.ChannelMask = ChannelMaskFromOpusChannels(props.Channels)
+			props.ChannelMask = meta.ChannelMaskFromOpusChannels(props.Channels)
 		}
 		comment := packets[1]
 		if len(comment) >= 8 && bytes.Equal(comment[:8], []byte("OpusTags")) {
 			if parseOptions.ReadTags {
-				t, err := ParseVorbisComments(comment[8:], parseOptions)
+				t, err := vorbis.ParseVorbisComments(comment[8:], parseOptions)
 				if err != nil {
-					return nil, nil, FileType{}, &FileParseError{Source: &VorbisCommentsParseError{Source: err}}
+					return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &vorbis.VorbisCommentsParseError{Source: err}}
 				}
 				vc = t
 			}
 		}
 	case len(ident) >= 8 && bytes.Equal(ident[:8], []byte("Speex   ")):
-		fType = FileTypeSpeex
+		fType = meta.FileTypeSpeex
 		// Speex header: rate(4) at offset 36, channels(4) at 48, bitrate(4) at 52
 		if len(ident) >= 80 {
 			props.Version = binary.LittleEndian.Uint32(ident[28:])
@@ -327,14 +331,14 @@ func oggReadTagged(reader io.ReadSeeker, parseOptions ParseOptions) (*OggPropert
 		}
 		comment := packets[1]
 		if parseOptions.ReadTags {
-			t, err := ParseVorbisComments(comment, parseOptions)
+			t, err := vorbis.ParseVorbisComments(comment, parseOptions)
 			if err != nil {
-				return nil, nil, FileType{}, &FileParseError{Source: &VorbisCommentsParseError{Source: err}}
+				return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &vorbis.VorbisCommentsParseError{Source: err}}
 			}
 			vc = t
 		}
 	default:
-		return nil, nil, FileType{}, &FileParseError{Source: &OggParseError{Message: "unsupported Ogg codec"}}
+		return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &OggParseError{Message: "unsupported Ogg codec"}}
 	}
 
 	if parseOptions.ReadProperties {
@@ -350,7 +354,7 @@ func oggReadTagged(reader io.ReadSeeker, parseOptions ParseOptions) (*OggPropert
 				total = 0
 			}
 			if total > 0 {
-				lengthMs := divRound(total*1000, uint64(props.SampleRate))
+				lengthMs := util.DivRound(total*1000, uint64(props.SampleRate))
 				props.Duration = time.Duration(lengthMs) * time.Millisecond
 
 				// Bitrate semantics are codec-specific (mirroring Rust):
@@ -365,21 +369,21 @@ func oggReadTagged(reader io.ReadSeeker, parseOptions ParseOptions) (*OggPropert
 					dataLen = streamLen - headerLen
 				}
 				switch fType {
-				case FileTypeVorbis:
+				case meta.FileTypeVorbis:
 					props.OverallBitrate = uint32(streamLen * 8 / lengthMs)
 					if props.BitrateNominal > 0 {
 						props.AudioBitrate = uint32(uint64(props.BitrateNominal) / 1000)
 					}
-				case FileTypeOpus:
+				case meta.FileTypeOpus:
 					props.OverallBitrate = uint32(streamLen * 8 / lengthMs)
 					props.AudioBitrate = uint32(dataLen * 8 / lengthMs)
-				case FileTypeSpeex:
+				case meta.FileTypeSpeex:
 					if props.BitrateNominal > 0 {
 						props.OverallBitrate = uint32(streamLen * 8 / lengthMs)
 						props.AudioBitrate = uint32(uint64(props.BitrateNominal) / 1000)
 					} else {
-						props.OverallBitrate = uint32(divRound(streamLen*8, lengthMs))
-						props.AudioBitrate = uint32(divRound(dataLen*8, lengthMs))
+						props.OverallBitrate = uint32(util.DivRound(streamLen*8, lengthMs))
+						props.AudioBitrate = uint32(util.DivRound(dataLen*8, lengthMs))
 					}
 				}
 			}
@@ -563,23 +567,23 @@ func oggPaginate(packets [][]byte, serial uint32, abgp uint64, flags byte) []*Og
 }
 
 // oggWriteVorbisComments replaces the comment packet in an Ogg file.
-func oggWriteVorbisComments(file FileLike, ft FileType, tag *Tag, writeOptions WriteOptions) error {
-	pics := make([]PictureInfoPair, 0, len(tag.Pictures()))
+func oggWriteVorbisComments(file meta.FileLike, ft meta.FileType, tag *meta.Tag, writeOptions meta.WriteOptions) error {
+	pics := make([]meta.PictureInfoPair, 0, len(tag.Pictures()))
 	for _, p := range tag.Pictures() {
-		info, err := PictureInformationFromPicture(&p)
+		info, err := meta.PictureInformationFromPicture(&p)
 		if err != nil {
-			info = PictureInformation{}
+			info = meta.PictureInformation{}
 		}
-		pics = append(pics, PictureInfoPair{Picture: p, Info: info})
+		pics = append(pics, meta.PictureInfoPair{Picture: p, Info: info})
 	}
 	return oggWriteVorbisCommentsPics(file, ft, tag, pics, writeOptions)
 }
 
 // oggWriteVorbisCommentsPics is [oggWriteVorbisComments] with explicit
-// [PictureInformation] for each picture comment.
-func oggWriteVorbisCommentsPics(file FileLike, ft FileType, tag *Tag, pics []PictureInfoPair, writeOptions WriteOptions) error {
-	return oggWriteVorbisCommentsImpl(file, ft, writeOptions, func(vendor string) *VorbisCommentsTag {
-		vc := VorbisCommentsTagForWritePics(tag, vendor, false)
+// [meta.PictureInformation] for each picture comment.
+func oggWriteVorbisCommentsPics(file meta.FileLike, ft meta.FileType, tag *meta.Tag, pics []meta.PictureInfoPair, writeOptions meta.WriteOptions) error {
+	return oggWriteVorbisCommentsImpl(file, ft, writeOptions, func(vendor string) *vorbis.VorbisCommentsTag {
+		vc := vorbis.VorbisCommentsTagForWritePics(tag, vendor, false)
 		vc.SetPictures(pics)
 		return vc
 	})
@@ -587,44 +591,44 @@ func oggWriteVorbisCommentsPics(file FileLike, ft FileType, tag *Tag, pics []Pic
 
 // oggWriteVorbisCommentsImpl replaces the comment packet in an Ogg file. The
 // `build` callback receives the file's retained vendor string.
-func oggWriteVorbisCommentsImpl(file FileLike, ft FileType, writeOptions WriteOptions, build func(vendor string) *VorbisCommentsTag) error {
+func oggWriteVorbisCommentsImpl(file meta.FileLike, ft meta.FileType, writeOptions meta.WriteOptions, build func(vendor string) *vorbis.VorbisCommentsTag) error {
 	var headerPacketCount int
 	var sig []byte
 	switch ft {
-	case FileTypeVorbis:
+	case meta.FileTypeVorbis:
 		headerPacketCount, sig = 3, []byte{3, 'v', 'o', 'r', 'b', 'i', 's'}
-	case FileTypeOpus:
+	case meta.FileTypeOpus:
 		headerPacketCount, sig = 2, []byte("OpusTags")
-	case FileTypeSpeex:
+	case meta.FileTypeSpeex:
 		headerPacketCount = 2
 	default:
-		return &FileEncodingError{Source: &UnsupportedTagError{}}
+		return &meta.FileEncodingError{Source: &meta.UnsupportedTagError{}}
 	}
 
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	packets, remainder, serial, err := OggReadCountPackets(file, headerPacketCount)
 	if err != nil {
-		return &FileEncodingError{Source: &OggParseError{Source: err}}
+		return &meta.FileEncodingError{Source: &OggParseError{Source: err}}
 	}
 	restPos, err := file.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	// Everything after the consumed page(s) is copied verbatim
 	rest, err := io.ReadAll(file)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	_ = restPos
 
 	if len(packets) < 2 {
-		return &FileEncodingError{Source: &OggParseError{Message: "missing Ogg header packets"}}
+		return &meta.FileEncodingError{Source: &OggParseError{Message: "missing Ogg header packets"}}
 	}
 	comment := packets[1]
 	if sig != nil && (len(comment) < len(sig) || !bytes.Equal(comment[:len(sig)], sig)) {
-		return &FileEncodingError{Source: &OggParseError{Source: &FakeTagError{}}}
+		return &meta.FileEncodingError{Source: &OggParseError{Source: &meta.FakeTagError{}}}
 	}
 
 	// Retain the vendor string
@@ -639,12 +643,12 @@ func oggWriteVorbisCommentsImpl(file FileLike, ft FileType, writeOptions WriteOp
 	// Items are serialized verbatim (incl. EncoderSoftware → ENCODER); the
 	// file's retained vendor is offered to the builder.
 	vc := build(vendor)
-	vcData, err := EncodeVorbisComments(vc)
+	vcData, err := vorbis.EncodeVorbisComments(vc)
 	if err != nil {
-		return &FileEncodingError{Source: &TagEncodingError{TagType: TagTypeVorbisComments, HasTagType: true, Source: err}}
+		return &meta.FileEncodingError{Source: &meta.TagEncodingError{TagType: meta.TagTypeVorbisComments, HasTagType: true, Source: err}}
 	}
 	newComment := append(append([]byte{}, sig...), vcData...)
-	if ft == FileTypeVorbis {
+	if ft == meta.FileTypeVorbis {
 		newComment = append(newComment, 1) // framing bit
 	}
 	// Pad the comment packet, aligned to written-page boundaries
@@ -682,168 +686,168 @@ func oggWriteVorbisCommentsImpl(file FileLike, ft FileType, writeOptions WriteOp
 
 	end, err := file.Seek(0, io.SeekEnd)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
-	return Splice(file, 0, uint64(end), out.Bytes())
+	return meta.Splice(file, 0, uint64(end), out.Bytes())
 }
 
-func (f *OggVorbisFile) FileType() FileType { return FileTypeVorbis }
-func (f *OggVorbisFile) GetProperties() *FileProperties {
+func (f *OggVorbisFile) FileType() meta.FileType { return meta.FileTypeVorbis }
+func (f *OggVorbisFile) GetProperties() *meta.FileProperties {
 	fp := f.Properties.FileProperties()
 	return &fp
 }
 func (f *OggVorbisFile) ContainsTag() bool { return f.VorbisComments.IsSome() }
-func (f *OggVorbisFile) ContainsTagType(t TagType) bool {
-	return t == TagTypeVorbisComments && f.VorbisComments.IsSome()
+func (f *OggVorbisFile) ContainsTagType(t meta.TagType) bool {
+	return t == meta.TagTypeVorbisComments && f.VorbisComments.IsSome()
 }
 
-func (f *OggVorbisFile) TaggedFile() *TaggedFile {
-	var tags []*Tag
+func (f *OggVorbisFile) TaggedFile() *meta.TaggedFile {
+	var tags []*meta.Tag
 	if t, ok := f.VorbisComments.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
-	return NewTaggedFile(FileTypeVorbis, tags, *f.GetProperties())
+	return meta.NewTaggedFile(meta.FileTypeVorbis, tags, *f.GetProperties())
 }
 
-func (f *OggVorbisFile) SavePath(path string, wo WriteOptions) error {
-	return SaveToPath(path, f, TagTypeVorbisComments, wo)
+func (f *OggVorbisFile) SavePath(path string, wo meta.WriteOptions) error {
+	return meta.SaveToPath(path, f, meta.TagTypeVorbisComments, wo)
 }
 
-func (f *OggVorbisFile) SaveFile(file FileLike, wo WriteOptions) error {
+func (f *OggVorbisFile) SaveFile(file meta.FileLike, wo meta.WriteOptions) error {
 	if t, ok := f.VorbisComments.Get(); ok {
-		return oggWriteVorbisCommentsImpl(file, f.FileType(), wo, func(string) *VorbisCommentsTag { return t })
+		return oggWriteVorbisCommentsImpl(file, f.FileType(), wo, func(string) *vorbis.VorbisCommentsTag { return t })
 	}
 	return nil
 }
 
-func (f *OggVorbisFile) RemoveFromPath(path string, t TagType) error {
-	return RemoveTagFromPath(path, t)
+func (f *OggVorbisFile) RemoveFromPath(path string, t meta.TagType) error {
+	return meta.RemoveTagFromPath(path, t)
 }
 
-func (f *OggOpusFile) FileType() FileType { return FileTypeOpus }
-func (f *OggOpusFile) GetProperties() *FileProperties {
+func (f *OggOpusFile) FileType() meta.FileType { return meta.FileTypeOpus }
+func (f *OggOpusFile) GetProperties() *meta.FileProperties {
 	fp := f.Properties.FileProperties()
 	return &fp
 }
 func (f *OggOpusFile) ContainsTag() bool { return f.VorbisComments.IsSome() }
-func (f *OggOpusFile) ContainsTagType(t TagType) bool {
-	return t == TagTypeVorbisComments && f.VorbisComments.IsSome()
+func (f *OggOpusFile) ContainsTagType(t meta.TagType) bool {
+	return t == meta.TagTypeVorbisComments && f.VorbisComments.IsSome()
 }
 
-func (f *OggOpusFile) TaggedFile() *TaggedFile {
-	var tags []*Tag
+func (f *OggOpusFile) TaggedFile() *meta.TaggedFile {
+	var tags []*meta.Tag
 	if t, ok := f.VorbisComments.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
-	return NewTaggedFile(FileTypeOpus, tags, *f.GetProperties())
+	return meta.NewTaggedFile(meta.FileTypeOpus, tags, *f.GetProperties())
 }
 
-func (f *OggOpusFile) SavePath(path string, wo WriteOptions) error {
-	return SaveToPath(path, f, TagTypeVorbisComments, wo)
+func (f *OggOpusFile) SavePath(path string, wo meta.WriteOptions) error {
+	return meta.SaveToPath(path, f, meta.TagTypeVorbisComments, wo)
 }
 
-func (f *OggOpusFile) SaveFile(file FileLike, wo WriteOptions) error {
+func (f *OggOpusFile) SaveFile(file meta.FileLike, wo meta.WriteOptions) error {
 	if t, ok := f.VorbisComments.Get(); ok {
-		return oggWriteVorbisCommentsImpl(file, f.FileType(), wo, func(string) *VorbisCommentsTag { return t })
+		return oggWriteVorbisCommentsImpl(file, f.FileType(), wo, func(string) *vorbis.VorbisCommentsTag { return t })
 	}
 	return nil
 }
 
-func (f *OggOpusFile) RemoveFromPath(path string, t TagType) error {
-	return RemoveTagFromPath(path, t)
+func (f *OggOpusFile) RemoveFromPath(path string, t meta.TagType) error {
+	return meta.RemoveTagFromPath(path, t)
 }
 
-func (f *OggSpeexFile) FileType() FileType { return FileTypeSpeex }
-func (f *OggSpeexFile) GetProperties() *FileProperties {
+func (f *OggSpeexFile) FileType() meta.FileType { return meta.FileTypeSpeex }
+func (f *OggSpeexFile) GetProperties() *meta.FileProperties {
 	fp := f.Properties.FileProperties()
 	return &fp
 }
 func (f *OggSpeexFile) ContainsTag() bool { return f.VorbisComments.IsSome() }
-func (f *OggSpeexFile) ContainsTagType(t TagType) bool {
-	return t == TagTypeVorbisComments && f.VorbisComments.IsSome()
+func (f *OggSpeexFile) ContainsTagType(t meta.TagType) bool {
+	return t == meta.TagTypeVorbisComments && f.VorbisComments.IsSome()
 }
 
-func (f *OggSpeexFile) TaggedFile() *TaggedFile {
-	var tags []*Tag
+func (f *OggSpeexFile) TaggedFile() *meta.TaggedFile {
+	var tags []*meta.Tag
 	if t, ok := f.VorbisComments.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
-	return NewTaggedFile(FileTypeSpeex, tags, *f.GetProperties())
+	return meta.NewTaggedFile(meta.FileTypeSpeex, tags, *f.GetProperties())
 }
 
-func (f *OggSpeexFile) SavePath(path string, wo WriteOptions) error {
-	return SaveToPath(path, f, TagTypeVorbisComments, wo)
+func (f *OggSpeexFile) SavePath(path string, wo meta.WriteOptions) error {
+	return meta.SaveToPath(path, f, meta.TagTypeVorbisComments, wo)
 }
 
-func (f *OggSpeexFile) SaveFile(file FileLike, wo WriteOptions) error {
+func (f *OggSpeexFile) SaveFile(file meta.FileLike, wo meta.WriteOptions) error {
 	if t, ok := f.VorbisComments.Get(); ok {
-		return oggWriteVorbisCommentsImpl(file, f.FileType(), wo, func(string) *VorbisCommentsTag { return t })
+		return oggWriteVorbisCommentsImpl(file, f.FileType(), wo, func(string) *vorbis.VorbisCommentsTag { return t })
 	}
 	return nil
 }
 
-func (f *OggSpeexFile) RemoveFromPath(path string, t TagType) error {
-	return RemoveTagFromPath(path, t)
+func (f *OggSpeexFile) RemoveFromPath(path string, t meta.TagType) error {
+	return meta.RemoveTagFromPath(path, t)
 }
 
 // OggVorbisFileReadFrom reads an [OggVorbisFile].
-func OggVorbisFileReadFrom(reader io.ReadSeeker, po ParseOptions) (*OggVorbisFile, error) {
+func OggVorbisFileReadFrom(reader io.ReadSeeker, po meta.ParseOptions) (*OggVorbisFile, error) {
 	props, vc, ft, err := oggReadTagged(reader, po)
 	if err != nil {
 		return nil, err
 	}
-	if !ft.Equal(FileTypeVorbis) {
-		return nil, &FileParseError{Source: &OggParseError{Message: "not a Vorbis stream"}}
+	if !ft.Equal(meta.FileTypeVorbis) {
+		return nil, &meta.FileParseError{Source: &OggParseError{Message: "not a Vorbis stream"}}
 	}
-	return &OggVorbisFile{Properties: *props, VorbisComments: optionFromPtr(vc)}, nil
+	return &OggVorbisFile{Properties: *props, VorbisComments: util.OptionFromPtr(vc)}, nil
 }
 
 // OggOpusFileReadFrom reads an [OggOpusFile].
-func OggOpusFileReadFrom(reader io.ReadSeeker, po ParseOptions) (*OggOpusFile, error) {
+func OggOpusFileReadFrom(reader io.ReadSeeker, po meta.ParseOptions) (*OggOpusFile, error) {
 	props, vc, ft, err := oggReadTagged(reader, po)
 	if err != nil {
 		return nil, err
 	}
-	if !ft.Equal(FileTypeOpus) {
-		return nil, &FileParseError{Source: &OggParseError{Message: "not an Opus stream"}}
+	if !ft.Equal(meta.FileTypeOpus) {
+		return nil, &meta.FileParseError{Source: &OggParseError{Message: "not an Opus stream"}}
 	}
-	return &OggOpusFile{Properties: *props, VorbisComments: optionFromPtr(vc)}, nil
+	return &OggOpusFile{Properties: *props, VorbisComments: util.OptionFromPtr(vc)}, nil
 }
 
 // OggSpeexFileReadFrom reads an [OggSpeexFile].
-func OggSpeexFileReadFrom(reader io.ReadSeeker, po ParseOptions) (*OggSpeexFile, error) {
+func OggSpeexFileReadFrom(reader io.ReadSeeker, po meta.ParseOptions) (*OggSpeexFile, error) {
 	props, vc, ft, err := oggReadTagged(reader, po)
 	if err != nil {
 		return nil, err
 	}
-	if !ft.Equal(FileTypeSpeex) {
-		return nil, &FileParseError{Source: &OggParseError{Message: "not a Speex stream"}}
+	if !ft.Equal(meta.FileTypeSpeex) {
+		return nil, &meta.FileParseError{Source: &OggParseError{Message: "not a Speex stream"}}
 	}
-	return &OggSpeexFile{Properties: *props, VorbisComments: optionFromPtr(vc)}, nil
+	return &OggSpeexFile{Properties: *props, VorbisComments: util.OptionFromPtr(vc)}, nil
 }
 
 func init() {
-	for _, ft := range []FileType{FileTypeVorbis, FileTypeOpus, FileTypeSpeex} {
-		RegisterFormatReader(ft, func(rs io.ReadSeeker, opts ParseOptions) (*TaggedFile, error) {
+	for _, ft := range []meta.FileType{meta.FileTypeVorbis, meta.FileTypeOpus, meta.FileTypeSpeex} {
+		meta.RegisterFormatReader(ft, func(rs io.ReadSeeker, opts meta.ParseOptions) (*meta.TaggedFile, error) {
 			props, vc, ft, err := oggReadTagged(rs, opts)
 			if err != nil {
 				return nil, err
 			}
-			var tags []*Tag
+			var tags []*meta.Tag
 			if vc != nil {
 				tags = append(tags, vc.Tag())
 			}
-			return NewTaggedFile(ft, tags, props.FileProperties()), nil
+			return meta.NewTaggedFile(ft, tags, props.FileProperties()), nil
 		})
-		RegisterFormatWriter(ft, func(file *VerifiedFile, tag *Tag, writeOptions WriteOptions) error {
-			if tag.TagType() != TagTypeVorbisComments {
-				return &FileEncodingError{Source: &UnsupportedTagError{}}
+		meta.RegisterFormatWriter(ft, func(file *meta.VerifiedFile, tag *meta.Tag, writeOptions meta.WriteOptions) error {
+			if tag.TagType() != meta.TagTypeVorbisComments {
+				return &meta.FileEncodingError{Source: &meta.UnsupportedTagError{}}
 			}
 			return oggWriteVorbisComments(file.File(), file.Format(), tag, writeOptions)
 		})
-		RegisterConcreteTagWriter(ft, TagTypeVorbisComments, func(file *VerifiedFile, tag any, writeOptions WriteOptions) error {
-			vc := tag.(*VorbisCommentsTag)
-			return oggWriteVorbisCommentsImpl(file.File(), file.Format(), writeOptions, func(string) *VorbisCommentsTag {
+		meta.RegisterConcreteTagWriter(ft, meta.TagTypeVorbisComments, func(file *meta.VerifiedFile, tag any, writeOptions meta.WriteOptions) error {
+			vc := tag.(*vorbis.VorbisCommentsTag)
+			return oggWriteVorbisCommentsImpl(file.File(), file.Format(), writeOptions, func(string) *vorbis.VorbisCommentsTag {
 				return vc
 			})
 		})

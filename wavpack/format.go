@@ -5,6 +5,11 @@ import (
 	"encoding/binary"
 	"io"
 	"time"
+
+	"github.com/subframe7536/lofty-go/ape"
+	"github.com/subframe7536/lofty-go/id3v1"
+	meta "github.com/subframe7536/lofty-go/internal/meta"
+	"github.com/subframe7536/lofty-go/internal/util"
 )
 
 var wvpkPreamble = []byte("wvpk")
@@ -20,20 +25,20 @@ type WavPackProperties struct {
 	SampleRate     uint32
 	BitDepth       uint8
 	Channels       uint8
-	ChannelMask    Option[ChannelMask]
+	ChannelMask    meta.Option[meta.ChannelMask]
 	IsLossless     bool
 }
 
 // FileProperties converts to generic [FileProperties].
-func (p WavPackProperties) FileProperties() FileProperties {
-	return NewFileProperties(
+func (p WavPackProperties) FileProperties() meta.FileProperties {
+	return meta.NewFileProperties(
 		p.Duration,
-		Some(p.OverallBitrate),
-		Some(p.AudioBitrate),
-		Some(p.SampleRate),
-		Some(p.BitDepth),
-		Some(p.Channels),
-		None[ChannelMask](),
+		meta.Some(p.OverallBitrate),
+		meta.Some(p.AudioBitrate),
+		meta.Some(p.SampleRate),
+		meta.Some(p.BitDepth),
+		meta.Some(p.Channels),
+		meta.None[meta.ChannelMask](),
 	)
 }
 
@@ -45,65 +50,65 @@ var wvSampleRates = [16]uint32{
 // WavPackFile is a WavPack file.
 type WavPackFile struct {
 	Properties WavPackProperties
-	ID3v1      Option[*Id3v1Tag]
-	Ape        Option[*ApeTag]
+	ID3v1      meta.Option[*id3v1.Id3v1Tag]
+	Ape        meta.Option[*ape.ApeTag]
 }
 
 // WavPackFileReadFrom reads a [WavPackFile] from a reader.
-func WavPackFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*WavPackFile, error) {
+func WavPackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*WavPackFile, error) {
 	var file WavPackFile
 	start, err := reader.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 	streamEnd, err := reader.Seek(0, io.SeekEnd)
 	if err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 	streamLen := uint64(streamEnd - start)
 
 	// Check for end tags (ID3v1, Lyrics3, APE)
-	newLen, id3v1Tag, apeTag, err := ReadEndTags(reader, start, streamLen, parseOptions)
+	newLen, id3v1Tag, apeTag, err := ape.ReadEndTags(reader, start, streamLen, parseOptions)
 	if err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 	streamLen = newLen
 
 	// Check wvpk signature up front (required regardless of options)
 	if _, err := reader.Seek(start, io.SeekStart); err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 	var magic [4]byte
 	if _, err := io.ReadFull(reader, magic[:]); err != nil {
-		return nil, &FileParseError{Source: err}
+		return nil, &meta.FileParseError{Source: err}
 	}
 	if !bytes.Equal(magic[:], wvpkPreamble) {
-		return nil, &FileParseError{Source: &FakeTagError{}}
+		return nil, &meta.FileParseError{Source: &meta.FakeTagError{}}
 	}
 
 	p := &file.Properties
 	if parseOptions.ReadProperties {
 		if err := wvReadProperties(reader, streamLen, uint64(streamEnd-start), parseOptions.ParsingMode, p); err != nil {
-			return nil, &FileParseError{Source: err}
+			return nil, &meta.FileParseError{Source: err}
 		}
 	}
 
 	if parseOptions.ReadTags {
 		if apeTag != nil {
-			file.Ape = Some(apeTag)
+			file.Ape = meta.Some(apeTag)
 		}
 		if id3v1Tag != nil {
-			file.ID3v1 = Some(id3v1Tag)
+			file.ID3v1 = meta.Some(id3v1Tag)
 		}
 	}
 	return &file, nil
 }
 
 // FileType implements AudioFile.
-func (f *WavPackFile) FileType() FileType { return FileTypeWavPack }
+func (f *WavPackFile) FileType() meta.FileType { return meta.FileTypeWavPack }
 
 // GetProperties implements AudioFile.
-func (f *WavPackFile) GetProperties() *FileProperties {
+func (f *WavPackFile) GetProperties() *meta.FileProperties {
 	fp := f.Properties.FileProperties()
 	return &fp
 }
@@ -112,48 +117,48 @@ func (f *WavPackFile) GetProperties() *FileProperties {
 func (f *WavPackFile) ContainsTag() bool { return f.ID3v1.IsSome() || f.Ape.IsSome() }
 
 // ContainsTagType implements AudioFile.
-func (f *WavPackFile) ContainsTagType(t TagType) bool {
+func (f *WavPackFile) ContainsTagType(t meta.TagType) bool {
 	switch t {
-	case TagTypeID3v1:
+	case meta.TagTypeID3v1:
 		return f.ID3v1.IsSome()
-	case TagTypeApe:
+	case meta.TagTypeApe:
 		return f.Ape.IsSome()
 	}
 	return false
 }
 
 // TaggedFile converts to a [TaggedFile].
-func (f *WavPackFile) TaggedFile() *TaggedFile {
-	var tags []*Tag
+func (f *WavPackFile) TaggedFile() *meta.TaggedFile {
+	var tags []*meta.Tag
 	if t, ok := f.ID3v1.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
 	if t, ok := f.Ape.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
-	return NewTaggedFile(FileTypeWavPack, tags, *f.GetProperties())
+	return meta.NewTaggedFile(meta.FileTypeWavPack, tags, *f.GetProperties())
 }
 
 // SavePath implements AudioFile.
-func (f *WavPackFile) SavePath(path string, wo WriteOptions) error {
-	return SaveToPath(path, f, TagTypeApe, wo)
+func (f *WavPackFile) SavePath(path string, wo meta.WriteOptions) error {
+	return meta.SaveToPath(path, f, meta.TagTypeApe, wo)
 }
 
 // SaveFile implements AudioFile.
-func (f *WavPackFile) SaveFile(file FileLike, wo WriteOptions) error {
-	var tags []*Tag
+func (f *WavPackFile) SaveFile(file meta.FileLike, wo meta.WriteOptions) error {
+	var tags []*meta.Tag
 	if t, ok := f.ID3v1.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
 	if t, ok := f.Ape.Get(); ok {
 		tags = append(tags, t.Tag())
 	}
-	return SaveTagFields(file, FileTypeWavPack, tags, wo)
+	return meta.SaveTagFields(file, meta.FileTypeWavPack, tags, wo)
 }
 
 // RemoveFromPath implements AudioFile.
-func (f *WavPackFile) RemoveFromPath(path string, t TagType) error {
-	return RemoveTagFromPath(path, t)
+func (f *WavPackFile) RemoveFromPath(path string, t meta.TagType) error {
+	return meta.RemoveTagFromPath(path, t)
 }
 
 const (
@@ -193,8 +198,8 @@ func (e *WavPackParseError) Unwrap() error { return e.Source }
 // (non-standard and DSD rates) and channel information.
 // wvReadProperties iterates WavPack blocks, mirroring Rust's
 // wavpack::properties::read_properties.
-func wvReadProperties(reader io.ReadSeeker, streamLen, fileLen uint64, mode ParsingMode, p *WavPackProperties) error {
-	strict := mode == ParsingModeStrict
+func wvReadProperties(reader io.ReadSeeker, streamLen, fileLen uint64, mode meta.ParsingMode, p *WavPackProperties) error {
+	strict := mode == meta.ParsingModeStrict
 	var offset uint64
 	var totalSamples uint32
 	for {
@@ -231,7 +236,7 @@ func wvReadProperties(reader io.ReadSeeker, streamLen, fileLen uint64, mode Pars
 
 		// Non-standard rates and DSD audio store the real rate in metadata blocks
 		if rateIdx == 15 || flags&wvFlagDSD != 0 {
-			contents, err := tryByteSlice(int(blockSize) - 24)
+			contents, err := util.TryByteSlice(int(blockSize) - 24)
 			if err != nil {
 				return err
 			}
@@ -269,10 +274,10 @@ func wvReadProperties(reader io.ReadSeeker, streamLen, fileLen uint64, mode Pars
 			if flags&wvFlagFinalBlock != 0 {
 				if flags&wvFlagMono != 0 {
 					p.Channels = 1
-					p.ChannelMask = Some(ChannelMaskMono)
+					p.ChannelMask = meta.Some(meta.ChannelMaskMono)
 				} else {
 					p.Channels = 2
-					p.ChannelMask = Some(ChannelMaskStereo)
+					p.ChannelMask = meta.Some(meta.ChannelMaskStereo)
 				}
 			}
 		}
@@ -306,7 +311,7 @@ func wvReadProperties(reader io.ReadSeeker, streamLen, fileLen uint64, mode Pars
 	return nil
 }
 
-func wvExtendedMetaInfo(content []byte, p *WavPackProperties, mode ParsingMode) error {
+func wvExtendedMetaInfo(content []byte, p *WavPackProperties, mode meta.ParsingMode) error {
 	for len(content) >= 2 {
 		id := content[0]
 		size := int(content[1]) << 1
@@ -340,7 +345,7 @@ func wvExtendedMetaInfo(content []byte, p *WavPackProperties, mode ParsingMode) 
 			}
 			multiplier := content[0]
 			if multiplier > 30 {
-				if mode == ParsingModeStrict {
+				if mode == meta.ParsingModeStrict {
 					return &WavPackParseError{Message: "invalid sample rate multiplier"}
 				}
 				return nil
@@ -370,7 +375,7 @@ func wvExtendedMetaInfo(content []byte, p *WavPackProperties, mode ParsingMode) 
 				p.Channels = uint8(channels)
 			}
 			if mask != 0 {
-				p.ChannelMask = Some(ChannelMask(mask))
+				p.ChannelMask = meta.Some(meta.ChannelMask(mask))
 			}
 		}
 		if size > len(content) {
@@ -384,9 +389,8 @@ func wvExtendedMetaInfo(content []byte, p *WavPackProperties, mode ParsingMode) 
 	return nil
 }
 
-// channelMaskFromDsfChannelType maps a DSF channel type to a ChannelMask.
 func init() {
-	RegisterFormatReader(FileTypeWavPack, func(rs io.ReadSeeker, opts ParseOptions) (*TaggedFile, error) {
+	meta.RegisterFormatReader(meta.FileTypeWavPack, func(rs io.ReadSeeker, opts meta.ParseOptions) (*meta.TaggedFile, error) {
 		f, err := WavPackFileReadFrom(rs, opts)
 		if err != nil {
 			return nil, err
@@ -394,13 +398,13 @@ func init() {
 		return f.TaggedFile(), nil
 	})
 
-	RegisterFormatWriter(FileTypeWavPack, func(file *VerifiedFile, tag *Tag, writeOptions WriteOptions) error {
+	meta.RegisterFormatWriter(meta.FileTypeWavPack, func(file *meta.VerifiedFile, tag *meta.Tag, writeOptions meta.WriteOptions) error {
 		switch tag.TagType() {
-		case TagTypeApe:
-			return ApeWriteTo(file.File(), ApeTagFromTag(tag), writeOptions)
-		case TagTypeID3v1:
-			return WriteId3v1(file.File(), Id3v1TagFromTag(tag), writeOptions)
+		case meta.TagTypeApe:
+			return ape.ApeWriteTo(file.File(), ape.ApeTagFromTag(tag), writeOptions)
+		case meta.TagTypeID3v1:
+			return id3v1.WriteId3v1(file.File(), id3v1.Id3v1TagFromTag(tag), writeOptions)
 		}
-		return &FileEncodingError{Source: &UnsupportedTagError{}}
+		return &meta.FileEncodingError{Source: &meta.UnsupportedTagError{}}
 	})
 }

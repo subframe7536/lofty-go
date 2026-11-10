@@ -48,7 +48,13 @@ func (t *Tag) Clone() *Tag {
 	copy(items, t.items)
 	pics := make([]Picture, len(t.pictures))
 	copy(pics, t.pictures)
-	return &Tag{tagType: t.tagType, items: items, pictures: pics, companionTag: t.companionTag}
+	return &Tag{
+		tagType:         t.tagType,
+		items:           items,
+		pictures:        pics,
+		companionTag:    t.companionTag,
+		OriginalVersion: t.OriginalVersion,
+	}
 }
 
 // ReMap changes the [TagType], remapping all items.
@@ -92,6 +98,10 @@ func (t *Tag) ItemCount() int { return len(t.items) }
 func (t *Tag) PictureCount() int { return len(t.pictures) }
 
 // Items returns the stored [TagItem]s as a slice.
+//
+// Note: This returns the backing slice for zero-allocation iteration. Callers must
+// not mutate elements directly. To modify items, use Tag methods such as [Tag.Insert],
+// [Tag.SetText], [Tag.Remove], or [Tag.Retain].
 func (t *Tag) Items() []TagItem { return t.items }
 
 // Ratings returns all [Popularimeter] ratings.
@@ -302,6 +312,10 @@ func (t *Tag) RemoveEmpty() {
 }
 
 // Pictures returns the stored [Picture]s as a slice.
+//
+// Note: This returns the backing slice for zero-allocation iteration. Callers must
+// not mutate elements directly. To modify pictures, use Tag methods such as
+// [Tag.PushPicture], [Tag.SetPicture], or [Tag.RemovePictureType].
 func (t *Tag) Pictures() []Picture { return t.pictures }
 
 // GetPictureType returns the first occurrence of the [PictureType].

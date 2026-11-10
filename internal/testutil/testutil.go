@@ -36,6 +36,9 @@ func TempFile(t *testing.T, assetPath string) *os.File {
 	t.Helper()
 	data, err := os.ReadFile(assetPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			t.Skipf("skipping test: fixture %s not found (missing lofty-rs)", assetPath)
+		}
 		t.Fatalf("failed to read asset %s: %v", assetPath, err)
 	}
 	f, err := os.CreateTemp(t.TempDir(), filepath.Base(assetPath))

@@ -7,7 +7,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/subframe7536/lofty-go/internal/meta"
+	"github.com/subframe7536/lofty-go/id3v1"
+
+	meta "github.com/subframe7536/lofty-go/internal/meta"
 	"github.com/subframe7536/lofty-go/internal/util"
 )
 
@@ -99,9 +101,9 @@ const (
 type TagRestrictions struct {
 	Size           TagSizeRestriction
 	TextEncoding   bool
-	TextFieldsSize Option[TextSizeRestriction]
+	TextFieldsSize meta.Option[TextSizeRestriction]
 	ImageEncoding  bool
-	ImageSize      Option[ImageSizeRestriction]
+	ImageSize      meta.Option[ImageSizeRestriction]
 }
 
 // tagRestrictionsFromByte decodes a restrictions byte (id3v2.4 §3.2 item d).
@@ -120,22 +122,22 @@ func tagRestrictionsFromByte(b byte) TagRestrictions {
 	}
 	switch b & 0x18 {
 	case 0x08:
-		r.TextFieldsSize = Some(TextSizeC1024)
+		r.TextFieldsSize = meta.Some(TextSizeC1024)
 	case 0x10:
-		r.TextFieldsSize = Some(TextSizeC128)
+		r.TextFieldsSize = meta.Some(TextSizeC128)
 	case 0x18:
-		r.TextFieldsSize = Some(TextSizeC30)
+		r.TextFieldsSize = meta.Some(TextSizeC30)
 	}
 	if b&0x04 != 0 {
 		r.ImageEncoding = true
 	}
 	switch b & 0x03 {
 	case 1:
-		r.ImageSize = Some(ImageSizeP256)
+		r.ImageSize = meta.Some(ImageSizeP256)
 	case 2:
-		r.ImageSize = Some(ImageSizeP64)
+		r.ImageSize = meta.Some(ImageSizeP64)
 	case 3:
-		r.ImageSize = Some(ImageSizeP6464)
+		r.ImageSize = meta.Some(ImageSizeP6464)
 	}
 	return r
 }
@@ -192,8 +194,12 @@ type Id3v2Header struct {
 }
 
 // FullTagSize returns the size of the entire tag, including header and footer.
+//
+// Like Rust's `Id3v2Header::full_tag_size`, the extended header size is added
+// even though it is already counted in [Id3v2Header.Size] — the resulting
+// double-count is mirrored intentionally for parity.
 func (h Id3v2Header) FullTagSize() uint32 {
-	size := h.Size + 10
+	size := h.Size + 10 + h.ExtendedSize
 	if h.Flags.Footer {
 		size += 10
 	}
@@ -207,7 +213,7 @@ func ParseId3v2HeaderRaw(reader io.Reader) (Id3v2Header, error) {
 		return Id3v2Header{}, err
 	}
 	if !bytes.Equal(b[:3], []byte("ID3")) {
-		return Id3v2Header{}, &Id3v2ParseError{Source: &FakeTagError{}}
+		return Id3v2Header{}, &Id3v2ParseError{Source: &meta.FakeTagError{}}
 	}
 	version := b[3]
 	if version != 2 && version != 3 && version != 4 {
@@ -229,13 +235,13 @@ func ParseId3v2HeaderRaw(reader io.Reader) (Id3v2Header, error) {
 		h.Flags.Footer = flags&0x10 != 0
 		h.Flags.ExtendedHeader = flags&0x40 != 0
 	}
-	h.Size = unsynchsafe32(b[6:10])
+	h.Size = util.Unsynchsafe32(b[6:10])
 	return h, nil
 }
 
 // ParseId3v2Header parses an ID3v2 header plus its extended header (if any)
 // from reader, matching Rust's `Id3v2Header::parse`.
-func ParseId3v2Header(reader io.Reader, parseOptions ParseOptions) (Id3v2Header, error) {
+func ParseId3v2Header(reader io.Reader, parseOptions meta.ParseOptions) (Id3v2Header, error) {
 	h, err := ParseId3v2HeaderRaw(reader)
 	if err != nil {
 		return h, err
@@ -243,26 +249,33 @@ func ParseId3v2Header(reader io.Reader, parseOptions ParseOptions) (Id3v2Header,
 	if !h.Flags.ExtendedHeader {
 		return h, nil
 	}
+	// In ID3v2.3, the extended header is considered separate from the tag
+	// header and is thus subject to unsynchronization; in v2.4 no flags apply.
+	extReader := reader
+	if h.Version == 3 && h.Flags.Unsynchronisation {
+		extReader = &unsyncReader{r: reader}
+	}
 	var sizeBuf [4]byte
-	if _, err := io.ReadFull(reader, sizeBuf[:]); err != nil {
+	if _, err := io.ReadFull(extReader, sizeBuf[:]); err != nil {
 		return h, &Id3v2ParseError{Source: err}
 	}
 	var extContent []byte
 	if h.Version == 3 {
-		// In ID3v2.3, the extended header is considered separate from the tag
-		// header and is thus NOT subject to unsynchronization.
 		h.ExtendedSize = binary.BigEndian.Uint32(sizeBuf[:])
+		if h.ExtendedSize != 6 && h.ExtendedSize != 10 {
+			return h, &Id3v2ParseError{Source: errBadExtendedHeaderSize}
+		}
 		extContent = make([]byte, h.ExtendedSize)
 	} else {
-		// In ID3v2.4, the extended header is subject to unsynchronization and
-		// the size includes its own size field.
-		h.ExtendedSize = unsynchsafe32(sizeBuf[:])
-		if h.ExtendedSize < 4 {
+		// The v2.4 extended header size is synchsafe and includes its own
+		// size field.
+		h.ExtendedSize = util.Unsynchsafe32(sizeBuf[:])
+		if h.ExtendedSize < 6 || h.ExtendedSize > 15 {
 			return h, &Id3v2ParseError{Source: errBadExtendedHeaderSize}
 		}
 		extContent = make([]byte, h.ExtendedSize-4)
 	}
-	if _, err := io.ReadFull(reader, extContent); err != nil {
+	if _, err := io.ReadFull(extReader, extContent); err != nil {
 		return h, &Id3v2ParseError{Source: err}
 	}
 	if err := h.parseExtendedHeader(extContent, parseOptions.ParsingMode); err != nil {
@@ -276,7 +289,7 @@ func ParseId3v2Header(reader io.Reader, parseOptions ParseOptions) (Id3v2Header,
 
 // parseExtendedHeader interprets the extended header content (after the size
 // field for v2.3; after the synchsafe size field for v2.4).
-func (h *Id3v2Header) parseExtendedHeader(content []byte, mode ParsingMode) error {
+func (h *Id3v2Header) parseExtendedHeader(content []byte, mode meta.ParsingMode) error {
 	if h.Version == 3 {
 		// ext content: 2-byte flags + 4-byte padding size + optional 4-byte CRC
 		if h.ExtendedSize != 6 && h.ExtendedSize != 10 {
@@ -289,10 +302,13 @@ func (h *Id3v2Header) parseExtendedHeader(content []byte, mode ParsingMode) erro
 		remaining := content[6:h.ExtendedSize]
 		if extFlags&0x8000 != 0 {
 			h.Flags.Crc = true
+			if len(remaining) < 4 {
+				return &Id3v2ParseError{Source: io.ErrUnexpectedEOF}
+			}
 			remaining = remaining[4:]
 		}
 		if extFlags&^0x8000 != 0 || len(remaining) != 0 {
-			if mode == ParsingModeStrict {
+			if mode == meta.ParsingModeStrict {
 				return &Id3v2ParseError{Source: errBadExtendedHeaderFlags}
 			}
 		}
@@ -333,7 +349,7 @@ func (h *Id3v2Header) parseExtendedHeader(content []byte, mode ParsingMode) erro
 		content = content[2:]
 	}
 	if extFlags&^0x70 != 0 || len(content) != 0 {
-		if mode == ParsingModeStrict {
+		if mode == meta.ParsingModeStrict {
 			return &Id3v2ParseError{Source: errBadExtendedHeaderFlags}
 		}
 	}
@@ -454,44 +470,44 @@ func (t *Id3v2Tag) SetAlbum(album string) { t.setText("TALB", album) }
 func (t *Id3v2Tag) RemoveAlbum() { t.Frames.Remove(FrameIdValid("TALB")) }
 
 // Track returns the tag's track number (TRCK "N/T" first part).
-func (t *Id3v2Tag) Track() Option[uint32] {
+func (t *Id3v2Tag) Track() meta.Option[uint32] {
 	return firstPairValue(t.text("TRCK"))
 }
 
 // SetTrack sets the tag's track number, preserving the total if present.
-func (t *Id3v2Tag) SetTrack(track uint32) { t.setNumberPair("TRCK", Some(track)) }
+func (t *Id3v2Tag) SetTrack(track uint32) { t.setNumberPair("TRCK", meta.Some(track)) }
 
 // RemoveTrack removes the tag's track number.
 func (t *Id3v2Tag) RemoveTrack() { t.Frames.Remove(FrameIdValid("TRCK")) }
 
 // TrackTotal returns the tag's total tracks (TRCK "N/T" second part).
-func (t *Id3v2Tag) TrackTotal() Option[uint32] {
+func (t *Id3v2Tag) TrackTotal() meta.Option[uint32] {
 	return secondPairValue(t.text("TRCK"))
 }
 
 // SetTrackTotal sets the tag's total tracks, preserving the number if present.
-func (t *Id3v2Tag) SetTrackTotal(total uint32) { t.setNumberPairTotal("TRCK", Some(total)) }
+func (t *Id3v2Tag) SetTrackTotal(total uint32) { t.setNumberPairTotal("TRCK", meta.Some(total)) }
 
 // RemoveTrackTotal removes the tag's total tracks.
-func (t *Id3v2Tag) RemoveTrackTotal() { t.setNumberPairTotal("TRCK", None[uint32]()) }
+func (t *Id3v2Tag) RemoveTrackTotal() { t.setNumberPairTotal("TRCK", meta.None[uint32]()) }
 
 // Disk returns the tag's disc number (TPOS).
-func (t *Id3v2Tag) Disk() Option[uint32] { return firstPairValue(t.text("TPOS")) }
+func (t *Id3v2Tag) Disk() meta.Option[uint32] { return firstPairValue(t.text("TPOS")) }
 
 // SetDisk sets the tag's disc number, preserving the total if present.
-func (t *Id3v2Tag) SetDisk(disk uint32) { t.setNumberPair("TPOS", Some(disk)) }
+func (t *Id3v2Tag) SetDisk(disk uint32) { t.setNumberPair("TPOS", meta.Some(disk)) }
 
 // RemoveDisk removes the tag's disc number.
 func (t *Id3v2Tag) RemoveDisk() { t.Frames.Remove(FrameIdValid("TPOS")) }
 
 // DiskTotal returns the tag's total discs (TPOS).
-func (t *Id3v2Tag) DiskTotal() Option[uint32] { return secondPairValue(t.text("TPOS")) }
+func (t *Id3v2Tag) DiskTotal() meta.Option[uint32] { return secondPairValue(t.text("TPOS")) }
 
 // SetDiskTotal sets the tag's total discs, preserving the number if present.
-func (t *Id3v2Tag) SetDiskTotal(total uint32) { t.setNumberPairTotal("TPOS", Some(total)) }
+func (t *Id3v2Tag) SetDiskTotal(total uint32) { t.setNumberPairTotal("TPOS", meta.Some(total)) }
 
 // RemoveDiskTotal removes the tag's total discs.
-func (t *Id3v2Tag) RemoveDiskTotal() { t.setNumberPairTotal("TPOS", None[uint32]()) }
+func (t *Id3v2Tag) RemoveDiskTotal() { t.setNumberPairTotal("TPOS", meta.None[uint32]()) }
 
 // Date returns the tag's timestamp (TDRC).
 func (t *Id3v2Tag) Date() string { return t.text("TDRC") }
@@ -499,7 +515,7 @@ func (t *Id3v2Tag) Date() string { return t.text("TDRC") }
 // SetDate sets the tag's timestamp (TDRC) — accepts a parseable timestamp
 // string or falls back to plain text.
 func (t *Id3v2Tag) SetDate(date string) {
-	if ts, err := TimestampParseString(date); err == nil {
+	if ts, err := meta.TimestampParseString(date); err == nil {
 		t.Frames.Insert(NewTimestampFrame(FrameIdValid("TDRC"), util.TextEncodingUTF8, ts))
 		return
 	}
@@ -554,7 +570,7 @@ func (t *Id3v2Tag) SetComment(comment string) {
 		}
 	}
 	if !set {
-		remaining = append(remaining, NewCommentFrame(util.TextEncodingUTF8, LangUnknown, EmptyContentDescriptor, comment))
+		remaining = append(remaining, NewCommentFrame(util.TextEncodingUTF8, meta.LangUnknown, EmptyContentDescriptor, comment))
 	}
 	t.Frames.SetFrames(remaining)
 }
@@ -571,34 +587,34 @@ func (t *Id3v2Tag) RemoveComment() {
 	t.Frames.SetFrames(remaining)
 }
 
-func firstPairValue(text string) Option[uint32] {
+func firstPairValue(text string) meta.Option[uint32] {
 	num, _ := splitNumTotal(text)
 	if num == "" {
-		return None[uint32]()
+		return meta.None[uint32]()
 	}
 	if n, err := strconv.ParseUint(strings.TrimSpace(num), 10, 32); err == nil {
-		return Some(uint32(n))
+		return meta.Some(uint32(n))
 	}
-	return None[uint32]()
+	return meta.None[uint32]()
 }
 
-func secondPairValue(text string) Option[uint32] {
+func secondPairValue(text string) meta.Option[uint32] {
 	_, tot := splitNumTotal(text)
 	if tot == "" {
-		return None[uint32]()
+		return meta.None[uint32]()
 	}
 	if n, err := strconv.ParseUint(strings.TrimSpace(tot), 10, 32); err == nil {
-		return Some(uint32(n))
+		return meta.Some(uint32(n))
 	}
-	return None[uint32]()
+	return meta.None[uint32]()
 }
 
 // setNumberPair sets the number of an "N/T" frame, preserving the total.
-func (t *Id3v2Tag) setNumberPair(id string, num Option[uint32]) {
+func (t *Id3v2Tag) setNumberPair(id string, num meta.Option[uint32]) {
 	_, tot := splitNumTotal(t.text(id))
-	var totOpt Option[uint32]
+	var totOpt meta.Option[uint32]
 	if n, err := strconv.ParseUint(strings.TrimSpace(tot), 10, 32); err == nil && tot != "" {
-		totOpt = Some(uint32(n))
+		totOpt = meta.Some(uint32(n))
 	}
 	if f := newNumberPairFrame(FrameIdValid(id), num, totOpt); f != nil {
 		t.Frames.Insert(f)
@@ -608,11 +624,11 @@ func (t *Id3v2Tag) setNumberPair(id string, num Option[uint32]) {
 }
 
 // setNumberPairTotal sets the total of an "N/T" frame, preserving the number.
-func (t *Id3v2Tag) setNumberPairTotal(id string, total Option[uint32]) {
+func (t *Id3v2Tag) setNumberPairTotal(id string, total meta.Option[uint32]) {
 	num, _ := splitNumTotal(t.text(id))
-	var numOpt Option[uint32]
+	var numOpt meta.Option[uint32]
 	if n, err := strconv.ParseUint(strings.TrimSpace(num), 10, 32); err == nil && num != "" {
-		numOpt = Some(uint32(n))
+		numOpt = meta.Some(uint32(n))
 	}
 	if f := newNumberPairFrame(FrameIdValid(id), numOpt, total); f != nil {
 		t.Frames.Insert(f)
@@ -622,14 +638,14 @@ func (t *Id3v2Tag) setNumberPairTotal(id string, total Option[uint32]) {
 }
 
 // DumpTo writes the tag to writer, mirroring Rust `Id3v2Tag::dump_to`.
-func (t *Id3v2Tag) DumpTo(writer io.Writer, writeOptions WriteOptions) error {
+func (t *Id3v2Tag) DumpTo(writer io.Writer, writeOptions meta.WriteOptions) error {
 	frames := t.Frames.CloneFrames()
 	encoded, err := createTag(t.flags, frames, writeOptions)
 	if err != nil {
-		return &TagEncodingError{TagType: TagTypeID3v2, HasTagType: true, Source: err}
+		return &meta.TagEncodingError{TagType: meta.TagTypeID3v2, HasTagType: true, Source: err}
 	}
 	if _, err := writer.Write(encoded); err != nil {
-		return &TagEncodingError{TagType: TagTypeID3v2, HasTagType: true, Source: err}
+		return &meta.TagEncodingError{TagType: meta.TagTypeID3v2, HasTagType: true, Source: err}
 	}
 	return nil
 }
@@ -638,7 +654,7 @@ func (t *Id3v2Tag) DumpTo(writer io.Writer, writeOptions WriteOptions) error {
 
 // ParseId3v2 reads an ID3v2 tag from reader (header already consumed) and
 // returns it as a generic [Tag]. Use [ParseId3v2Tag] for the native model.
-func ParseId3v2(reader io.Reader, header Id3v2Header, parseOptions ParseOptions) (*Tag, error) {
+func ParseId3v2(reader io.Reader, header Id3v2Header, parseOptions meta.ParseOptions) (*meta.Tag, error) {
 	itag, err := ParseId3v2Tag(reader, header, parseOptions)
 	if err != nil {
 		return nil, err
@@ -648,110 +664,110 @@ func ParseId3v2(reader io.Reader, header Id3v2Header, parseOptions ParseOptions)
 
 // Id3v2Serialize serializes a generic [Tag] to ID3v2 bytes, mirroring Rust's
 // `dump_to` on a generic Tag (default flags + item/companion/picture frames).
-func Id3v2Serialize(tag *Tag, writeOptions WriteOptions) ([]byte, error) {
+func Id3v2Serialize(tag *meta.Tag, writeOptions meta.WriteOptions) ([]byte, error) {
 	frames := tagFrames(tag)
 	return createTag(Id3v2TagFlags{}, frames, writeOptions)
 }
 
 // Tag converts the tag to a generic [Tag], mirroring Rust's `split_tag`.
-func (t *Id3v2Tag) Tag() *Tag { return Id3v2TagToTag(t) }
+func (t *Id3v2Tag) Tag() *meta.Tag { return Id3v2TagToTag(t) }
 
 // SaveTo writes the native tag into file at the ID3v2 position, mirroring
 // Rust `TagWriteExt::save_to` — replaces any existing tag, removes when empty.
-func (t *Id3v2Tag) SaveTo(file FileLike, writeOptions WriteOptions) error {
-	vf, err := NewVerifiedFile(file, writeOptions.ParseOptions)
+func (t *Id3v2Tag) SaveTo(file meta.FileLike, writeOptions meta.WriteOptions) error {
+	vf, err := meta.NewVerifiedFile(file, writeOptions.ParseOptions)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	return t.SaveToVerified(vf, writeOptions)
 }
 
 // SaveToPath writes the tag to a path.
-func (t *Id3v2Tag) SaveToPath(path string, writeOptions WriteOptions) error {
-	vf, f, err := VerifiedFileFromPath(path, writeOptions.ParseOptions)
+func (t *Id3v2Tag) SaveToPath(path string, writeOptions meta.WriteOptions) error {
+	vf, f, err := meta.VerifiedFileFromPath(path, writeOptions.ParseOptions)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	defer f.Close()
 	return t.SaveToVerified(vf, writeOptions)
 }
 
-// SaveToVerified writes the tag into a [VerifiedFile], skipping the public
+// SaveToVerified writes the tag into a [meta.VerifiedFile], skipping the public
 // support check — mirrors Rust's `TagWriteExt::save_to`, which AudioFile save
 // paths invoke directly (e.g. ID3v2 in FLAC is read-only yet still written).
-func (t *Id3v2Tag) SaveToVerified(vf *VerifiedFile, writeOptions WriteOptions) error {
+func (t *Id3v2Tag) SaveToVerified(vf *meta.VerifiedFile, writeOptions meta.WriteOptions) error {
 	format := vf.Format()
-	support := format.TagSupport(TagTypeID3v2)
-	if support == TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
-		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	support := format.TagSupport(meta.TagTypeID3v2)
+	if support == meta.TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
+		return &meta.FileEncodingError{FileType: format, Source: &meta.UnsupportedTagError{}}
 	}
 	var encoded []byte
 	if !t.Frames.IsEmpty() {
 		var err error
 		encoded, err = createTag(t.flags, t.Frames.CloneFrames(), writeOptions)
 		if err != nil {
-			return &FileEncodingError{FileType: format, Source: &TagEncodingError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
+			return &meta.FileEncodingError{FileType: format, Source: &meta.TagEncodingError{TagType: meta.TagTypeID3v2, HasTagType: true, Source: err}}
 		}
 	}
 	// Format-specific placement (WAV/AIFF chunk, DSF end-of-stream)
-	if handled, err := WriteConcreteTag(vf, TagTypeID3v2, encoded, writeOptions); handled {
+	if handled, err := meta.WriteConcreteTag(vf, meta.TagTypeID3v2, encoded, writeOptions); handled {
 		return err
 	}
 	file := vf.File()
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	_, rangeEnd, found, err := FindId3v2(file, false, writeOptions.ParseOptions)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	var end uint64
 	if found {
 		end = uint64(rangeEnd)
 	}
-	return Splice(file, 0, end, encoded)
+	return meta.Splice(file, 0, end, encoded)
 }
 
-// RemoveFrom removes an ID3v2 tag from a [FileLike].
-func (t *Id3v2Tag) RemoveFrom(file FileLike, writeOptions WriteOptions) error {
-	return TagTypeID3v2.RemoveFrom(file, writeOptions)
+// RemoveFrom removes an ID3v2 tag from a [meta.FileLike].
+func (t *Id3v2Tag) RemoveFrom(file meta.FileLike, writeOptions meta.WriteOptions) error {
+	return meta.TagTypeID3v2.RemoveFrom(file, writeOptions)
 }
 
 // RemoveFromPath removes an ID3v2 tag from a path.
-func (t *Id3v2Tag) RemoveFromPath(path string, writeOptions WriteOptions) error {
-	return TagTypeID3v2.RemoveFromPath(path, writeOptions)
+func (t *Id3v2Tag) RemoveFromPath(path string, writeOptions meta.WriteOptions) error {
+	return meta.TagTypeID3v2.RemoveFromPath(path, writeOptions)
 }
 
 // WriteId3v2 writes an ID3v2 tag at the start of a file.
-func WriteId3v2(file FileLike, tag *Tag, writeOptions WriteOptions) error {
+func WriteId3v2(file meta.FileLike, tag *meta.Tag, writeOptions meta.WriteOptions) error {
 	var encoded []byte
 	if !tag.IsEmpty() {
 		var err error
 		encoded, err = Id3v2Serialize(tag, writeOptions)
 		if err != nil {
-			return &FileEncodingError{Source: &TagEncodingError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
+			return &meta.FileEncodingError{Source: &meta.TagEncodingError{TagType: meta.TagTypeID3v2, HasTagType: true, Source: err}}
 		}
 	}
 
 	// Find the existing tag range
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	_, rangeEnd, found, err := FindId3v2(file, false, writeOptions.ParseOptions)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	var start, end uint64
 	if found {
 		end = uint64(rangeEnd)
 	}
-	return Splice(file, start, end, encoded)
+	return meta.Splice(file, start, end, encoded)
 }
 
 // FindId3v2 finds an ID3v2 tag at the current position (possibly preceded by junk).
 // Returns the header (if found), the end position of the tag, whether found, and an error.
 // On success the reader is positioned at the end of the tag; on failure at the original position.
-func FindId3v2(reader io.ReadSeeker, read bool, parseOptions ParseOptions) (Id3v2Header, int64, bool, error) {
+func FindId3v2(reader io.ReadSeeker, read bool, parseOptions meta.ParseOptions) (Id3v2Header, int64, bool, error) {
 	start, err := reader.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return Id3v2Header{}, 0, false, err
@@ -787,7 +803,7 @@ func FindId3v2(reader io.ReadSeeker, read bool, parseOptions ParseOptions) (Id3v
 	}
 
 	if read {
-		content, err := tryByteSlice(int(header.Size))
+		content, err := util.TryByteSlice(int(header.Size))
 		if err != nil {
 			return header, 0, false, &Id3v2ParseError{Source: err}
 		}
@@ -863,9 +879,9 @@ func parseId3Genre(genre string, preserveIndexes bool) string {
 	if len(genre) > 3 {
 		return genre
 	}
-	if id, err := atoi(genre); err == nil && id >= 0 {
-		if id < len(id3v1Genres) && !preserveIndexes {
-			return id3v1Genres[id]
+	if id, err := util.Atoi(genre); err == nil && id >= 0 {
+		if id < len(id3v1.Id3v1Genres) && !preserveIndexes {
+			return id3v1.Id3v1Genres[id]
 		}
 		return genre
 	}
@@ -909,7 +925,7 @@ func id3v2GenresIter(value string, preserveIndexes bool) []string {
 
 // isU8Num reports whether s parses as a u8.
 func isU8Num(s string) bool {
-	n, err := atoi(s)
+	n, err := util.Atoi(s)
 	return err == nil && n >= 0 && n <= 255
 }
 
@@ -946,22 +962,22 @@ var id3v23DiscardFrames = map[string]bool{
 
 // id3v2MultiTxxxKeys merge multiple items into a single TXXX frame,
 // NUL-separated (Rust `from_tag` multi-valued TXXX arm).
-var id3v2MultiTxxxKeys = map[ItemKey]bool{
-	ItemKeyTrackArtists: true, ItemKeyAlbumArtists: true,
-	ItemKeyDirector: true, ItemKeyAcoustId: true,
-	ItemKeyAcoustIdFingerprint: true, ItemKeyCatalogNumber: true,
-	ItemKeyMusicBrainzArtistId: true, ItemKeyMusicBrainzReleaseArtistId: true,
-	ItemKeyMusicBrainzWorkId: true, ItemKeyMusicBrainzReleaseType: true,
-	ItemKeyMusicBrainzTrackId: true, ItemKeyMusicBrainzReleaseId: true,
-	ItemKeyMusicBrainzReleaseGroupId: true, ItemKeyReleaseCountry: true,
-	ItemKeyBarcode: true, ItemKeyColor: true, ItemKeyWork: true,
+var id3v2MultiTxxxKeys = map[meta.ItemKey]bool{
+	meta.ItemKeyTrackArtists: true, meta.ItemKeyAlbumArtists: true,
+	meta.ItemKeyDirector: true, meta.ItemKeyAcoustId: true,
+	meta.ItemKeyAcoustIdFingerprint: true, meta.ItemKeyCatalogNumber: true,
+	meta.ItemKeyMusicBrainzArtistId: true, meta.ItemKeyMusicBrainzReleaseArtistId: true,
+	meta.ItemKeyMusicBrainzWorkId: true, meta.ItemKeyMusicBrainzReleaseType: true,
+	meta.ItemKeyMusicBrainzTrackId: true, meta.ItemKeyMusicBrainzReleaseId: true,
+	meta.ItemKeyMusicBrainzReleaseGroupId: true, meta.ItemKeyReleaseCountry: true,
+	meta.ItemKeyBarcode: true, meta.ItemKeyColor: true, meta.ItemKeyWork: true,
 }
 
 // id3v2SingleTxxxKeys write a single TXXX frame; duplicates are
 // deduplicated keeping the last value (Rust HashMap insert semantics).
-var id3v2SingleTxxxKeys = map[ItemKey]bool{
-	ItemKeyReplayGainAlbumGain: true, ItemKeyReplayGainAlbumPeak: true,
-	ItemKeyReplayGainTrackGain: true, ItemKeyReplayGainTrackPeak: true,
+var id3v2SingleTxxxKeys = map[meta.ItemKey]bool{
+	meta.ItemKeyReplayGainAlbumGain: true, meta.ItemKeyReplayGainAlbumPeak: true,
+	meta.ItemKeyReplayGainTrackGain: true, meta.ItemKeyReplayGainTrackPeak: true,
 }
 
 func splitNumTotal(s string) (num, total string) {
@@ -1014,25 +1030,25 @@ func id3v2DecodeTextBody(data []byte) string {
 	switch data[0] {
 	case 1:
 		d := data[1:]
-		order := littleEndian
+		order := util.LittleEndian
 		if len(d) >= 2 && d[0] == 0xFE && d[1] == 0xFF {
-			order = bigEndian
+			order = util.BigEndian
 		}
-		s, err := utf16DecodeBytes(d, order)
+		s, err := util.Utf16DecodeBytes(d, order)
 		if err == nil {
 			return s
 		}
-		return latin1Decode(d)
+		return util.Latin1Decode(d)
 	case 2:
-		s, err := utf16DecodeBytes(data[1:], bigEndian)
+		s, err := util.Utf16DecodeBytes(data[1:], util.BigEndian)
 		if err == nil {
 			return s
 		}
-		return latin1Decode(data[1:])
+		return util.Latin1Decode(data[1:])
 	case 3:
-		return trimEndNulls(string(data[1:]))
+		return util.TrimEndNulls(string(data[1:]))
 	default:
-		return latin1Decode(data[1:])
+		return util.Latin1Decode(data[1:])
 	}
 }
 
@@ -1047,8 +1063,8 @@ func isASCII(s string) bool {
 }
 
 // langOrXxx returns "XXX" for an unset language, mirroring Rust's UNKNOWN_LANGUAGE.
-func langOrXxx(l Lang) string {
-	if l == LangUnknown || l == [3]byte{} {
+func langOrXxx(l meta.Lang) string {
+	if l == meta.LangUnknown || l == [3]byte{} {
 		return "XXX"
 	}
 	return string(l[:])
@@ -1095,7 +1111,7 @@ var v3ToV4FrameIds = map[string]string{
 }
 
 func init() {
-	meta.RegisterTagDumper(TagTypeID3v2, func(tag *Tag, writer io.Writer, writeOptions WriteOptions) error {
+	meta.RegisterTagDumper(meta.TagTypeID3v2, func(tag *meta.Tag, writer io.Writer, writeOptions meta.WriteOptions) error {
 		if tag.IsEmpty() {
 			return nil
 		}
@@ -1110,9 +1126,9 @@ func init() {
 
 // RemoveKey removes all frames mapping to `key`, mirroring Rust's
 // `TagExt::remove_key` on `Id3v2Tag`.
-func (t *Id3v2Tag) RemoveKey(key ItemKey) {
+func (t *Id3v2Tag) RemoveKey(key meta.ItemKey) {
 	removed := map[string]bool{}
-	if id, ok := key.MapKey(TagTypeID3v2); ok {
+	if id, ok := key.MapKey(meta.TagTypeID3v2); ok {
 		removed[id] = true
 	}
 	// Keys sharing a frame ID (e.g. TrackNumber/TrackTotal -> TRCK) and

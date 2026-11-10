@@ -5,13 +5,16 @@ import (
 	"encoding/binary"
 	"io"
 	"strings"
+
+	"github.com/subframe7536/lofty-go/internal/meta"
+	"github.com/subframe7536/lofty-go/internal/util"
 )
 
 // VorbisCommentsTag is a Vorbis comment header (used by FLAC, Vorbis, Opus, Speex).
 type VorbisCommentsTag struct {
 	Vendor   string
-	items    []TagItem
-	pictures []PictureInfoPair
+	items    []meta.TagItem
+	pictures []meta.PictureInfoPair
 }
 
 // NewVorbisCommentsTag creates an empty tag with the default vendor.
@@ -20,16 +23,16 @@ func NewVorbisCommentsTag() *VorbisCommentsTag {
 }
 
 // Items returns the tag's items.
-func (t *VorbisCommentsTag) Items() []TagItem { return t.items }
+func (t *VorbisCommentsTag) Items() []meta.TagItem { return t.items }
 
 // Pictures returns the tag's pictures with their stored information.
-func (t *VorbisCommentsTag) Pictures() []PictureInfoPair { return t.pictures }
+func (t *VorbisCommentsTag) Pictures() []meta.PictureInfoPair { return t.pictures }
 
 // SetPictures replaces the tag's stored pictures.
-func (t *VorbisCommentsTag) SetPictures(pictures []PictureInfoPair) { t.pictures = pictures }
+func (t *VorbisCommentsTag) SetPictures(pictures []meta.PictureInfoPair) { t.pictures = pictures }
 
 // GetString gets the first string value for a key.
-func (t *VorbisCommentsTag) GetString(key ItemKey) (string, bool) {
+func (t *VorbisCommentsTag) GetString(key meta.ItemKey) (string, bool) {
 	for _, item := range t.items {
 		if item.Key() == key {
 			if s, ok := item.Value().IntoString(); ok {
@@ -41,7 +44,7 @@ func (t *VorbisCommentsTag) GetString(key ItemKey) (string, bool) {
 }
 
 // GetStrings gets all string values for a key.
-func (t *VorbisCommentsTag) GetStrings(key ItemKey) []string {
+func (t *VorbisCommentsTag) GetStrings(key meta.ItemKey) []string {
 	var out []string
 	for _, item := range t.items {
 		if item.Key() == key {
@@ -54,22 +57,22 @@ func (t *VorbisCommentsTag) GetStrings(key ItemKey) []string {
 }
 
 // Insert replaces all items with the same key.
-func (t *VorbisCommentsTag) Insert(item TagItem) {
+func (t *VorbisCommentsTag) Insert(item meta.TagItem) {
 	t.Remove(item.Key())
 	t.items = append(t.items, item)
 }
 
 // Push appends an item.
-func (t *VorbisCommentsTag) Push(item TagItem) {
-	_, ok := item.Key().MapKey(TagTypeVorbisComments)
-	if ok || item.Key() == ItemKeyUnknown {
+func (t *VorbisCommentsTag) Push(item meta.TagItem) {
+	_, ok := item.Key().MapKey(meta.TagTypeVorbisComments)
+	if ok || item.Key() == meta.ItemKeyUnknown {
 		t.items = append(t.items, item)
 	}
 }
 
 // Remove deletes all items with the key.
-func (t *VorbisCommentsTag) Remove(key ItemKey) {
-	var kept []TagItem
+func (t *VorbisCommentsTag) Remove(key meta.ItemKey) {
+	var kept []meta.TagItem
 	for _, i := range t.items {
 		if i.Key() != key {
 			kept = append(kept, i)
@@ -81,13 +84,13 @@ func (t *VorbisCommentsTag) Remove(key ItemKey) {
 // RemoveKey deletes all items with the format-specific key, returning the
 // removed values, mirroring Rust `VorbisComments::remove`.
 func (t *VorbisCommentsTag) RemoveKey(key string) []string {
-	var kept []TagItem
+	var kept []meta.TagItem
 	var removed []string
 	for _, i := range t.items {
 		matched := false
-		if k, ok := i.Key().MapKey(TagTypeVorbisComments); ok && k == key {
+		if k, ok := i.Key().MapKey(meta.TagTypeVorbisComments); ok && k == key {
 			matched = true
-		} else if i.Key() == ItemKeyUnknown && i.Description == key {
+		} else if i.Key() == meta.ItemKeyUnknown && i.Description == key {
 			matched = true
 		}
 		if matched {
@@ -117,11 +120,11 @@ func verifyVorbisKey(key string) bool {
 }
 
 // vorbisItemKey returns the raw field name for an item.
-func vorbisItemKey(item TagItem) string {
-	if item.Key() == ItemKeyUnknown {
+func vorbisItemKey(item meta.TagItem) string {
+	if item.Key() == meta.ItemKeyUnknown {
 		return item.Description
 	}
-	k, _ := item.Key().MapKey(TagTypeVorbisComments)
+	k, _ := item.Key().MapKey(meta.TagTypeVorbisComments)
 	return k
 }
 
@@ -154,11 +157,11 @@ func (t *VorbisCommentsTag) GetAll(key string) []string {
 	return out
 }
 
-// newVorbisItem builds a [TagItem] for a raw field name.
-func newVorbisItem(key, value string) TagItem {
-	itemKey := ItemKeyOrUnknown(TagTypeVorbisComments, key)
-	item := NewTagItem(itemKey, ItemValueText(value))
-	if itemKey == ItemKeyUnknown {
+// newVorbisItem builds a [meta.TagItem] for a raw field name.
+func newVorbisItem(key, value string) meta.TagItem {
+	itemKey := meta.ItemKeyOrUnknown(meta.TagTypeVorbisComments, key)
+	item := meta.NewTagItem(itemKey, meta.ItemValueText(value))
+	if itemKey == meta.ItemKeyUnknown {
 		item.Description = key
 	}
 	return item
@@ -171,7 +174,7 @@ func (t *VorbisCommentsTag) InsertKV(key, value string) {
 	if !verifyVorbisKey(key) {
 		return
 	}
-	var kept []TagItem
+	var kept []meta.TagItem
 	for _, item := range t.items {
 		if !strings.EqualFold(vorbisItemKey(item), key) {
 			kept = append(kept, item)
@@ -240,10 +243,10 @@ func (t *VorbisCommentsTag) Track() (uint32, bool) {
 		if s, ok = t.Get("TRACKNUM"); !ok {
 			return 0, false
 		} else {
-			return u32FromString(s)
+			return util.U32FromString(s)
 		}
 	} else {
-		return u32FromString(s)
+		return util.U32FromString(s)
 	}
 }
 
@@ -251,7 +254,7 @@ func (t *VorbisCommentsTag) Track() (uint32, bool) {
 func (t *VorbisCommentsTag) SetTrack(value uint32) {
 	t.RemoveKey("TRACKNUMBER")
 	t.RemoveKey("TRACKNUM")
-	t.InsertKV("TRACKNUMBER", itoa(int(value)))
+	t.InsertKV("TRACKNUMBER", util.Itoa(int(value)))
 }
 
 // RemoveTrack removes the track number.
@@ -266,16 +269,16 @@ func (t *VorbisCommentsTag) TrackTotal() (uint32, bool) {
 		if s, ok = t.Get("TOTALTRACKS"); !ok {
 			return 0, false
 		} else {
-			return u32FromString(s)
+			return util.U32FromString(s)
 		}
 	} else {
-		return u32FromString(s)
+		return util.U32FromString(s)
 	}
 }
 
 // SetTrackTotal sets the total tracks, normalizing to TRACKTOTAL.
 func (t *VorbisCommentsTag) SetTrackTotal(value uint32) {
-	t.InsertKV("TRACKTOTAL", itoa(int(value)))
+	t.InsertKV("TRACKTOTAL", util.Itoa(int(value)))
 	t.RemoveKey("TOTALTRACKS")
 }
 
@@ -291,11 +294,11 @@ func (t *VorbisCommentsTag) Disk() (uint32, bool) {
 	if !ok {
 		return 0, false
 	}
-	return u32FromString(s)
+	return util.U32FromString(s)
 }
 
 // SetDisk sets the disc number.
-func (t *VorbisCommentsTag) SetDisk(value uint32) { t.InsertKV("DISCNUMBER", itoa(int(value))) }
+func (t *VorbisCommentsTag) SetDisk(value uint32) { t.InsertKV("DISCNUMBER", util.Itoa(int(value))) }
 
 // RemoveDisk removes the disc number.
 func (t *VorbisCommentsTag) RemoveDisk() { t.RemoveKey("DISCNUMBER") }
@@ -306,16 +309,16 @@ func (t *VorbisCommentsTag) DiskTotal() (uint32, bool) {
 		if s, ok = t.Get("TOTALDISCS"); !ok {
 			return 0, false
 		} else {
-			return u32FromString(s)
+			return util.U32FromString(s)
 		}
 	} else {
-		return u32FromString(s)
+		return util.U32FromString(s)
 	}
 }
 
 // SetDiskTotal sets the total discs, normalizing to DISCTOTAL.
 func (t *VorbisCommentsTag) SetDiskTotal(value uint32) {
-	t.InsertKV("DISCTOTAL", itoa(int(value)))
+	t.InsertKV("DISCTOTAL", util.Itoa(int(value)))
 	t.RemoveKey("TOTALDISCS")
 }
 
@@ -326,18 +329,18 @@ func (t *VorbisCommentsTag) RemoveDiskTotal() {
 }
 
 // Date returns the recording date, checking DATE then YEAR.
-func (t *VorbisCommentsTag) Date() Option[Timestamp] {
+func (t *VorbisCommentsTag) Date() meta.Option[meta.Timestamp] {
 	if s, ok := t.Get("DATE"); ok {
-		return tryParseTimestamp(s)
+		return util.TryParseTimestamp(s)
 	}
 	if s, ok := t.Get("YEAR"); ok {
-		return tryParseTimestamp(s)
+		return util.TryParseTimestamp(s)
 	}
-	return None[Timestamp]()
+	return meta.None[meta.Timestamp]()
 }
 
 // SetDate sets the recording date, normalizing to DATE.
-func (t *VorbisCommentsTag) SetDate(value Timestamp) {
+func (t *VorbisCommentsTag) SetDate(value meta.Timestamp) {
 	t.InsertKV("DATE", value.String())
 	t.RemoveKey("YEAR")
 }
@@ -349,26 +352,26 @@ func (t *VorbisCommentsTag) RemoveDate() {
 }
 
 // PushPicture adds a picture, extracting the information from its data.
-func (t *VorbisCommentsTag) PushPicture(p Picture) {
-	info, err := PictureInformationFromPicture(&p)
+func (t *VorbisCommentsTag) PushPicture(p meta.Picture) {
+	info, err := meta.PictureInformationFromPicture(&p)
 	if err != nil {
-		info = PictureInformation{}
+		info = meta.PictureInformation{}
 	}
-	t.pictures = append(t.pictures, PictureInfoPair{Picture: p, Info: info})
+	t.pictures = append(t.pictures, meta.PictureInfoPair{Picture: p, Info: info})
 }
 
 // InsertPicture adds a picture with explicit information, mirroring Rust's
 // `OggPictureStorage::insert_picture`.
-func (t *VorbisCommentsTag) InsertPicture(p Picture, info Option[PictureInformation]) error {
+func (t *VorbisCommentsTag) InsertPicture(p meta.Picture, info meta.Option[meta.PictureInformation]) error {
 	i, ok := info.Get()
 	if !ok {
 		var err error
-		i, err = PictureInformationFromPicture(&p)
+		i, err = meta.PictureInformationFromPicture(&p)
 		if err != nil {
-			i = PictureInformation{}
+			i = meta.PictureInformation{}
 		}
 	}
-	t.pictures = append(t.pictures, PictureInfoPair{Picture: p, Info: i})
+	t.pictures = append(t.pictures, meta.PictureInfoPair{Picture: p, Info: i})
 	return nil
 }
 
@@ -387,13 +390,13 @@ func (t *VorbisCommentsTag) IsEmpty() bool {
 func (t *VorbisCommentsTag) Len() int { return len(t.items) + len(t.pictures) }
 
 // Tag converts to a generic [Tag].
-func (t *VorbisCommentsTag) Tag() *Tag {
-	tag := NewTag(TagTypeVorbisComments)
+func (t *VorbisCommentsTag) Tag() *meta.Tag {
+	tag := meta.NewTag(meta.TagTypeVorbisComments)
 	var remainder *VorbisCommentsTag
 	for _, item := range t.items {
-		if item.Key() == ItemKeyUnknown {
+		if item.Key() == meta.ItemKeyUnknown {
 			// Unmappable items stay in the companion (Rust's split_tag)
-			if getGlobalOptions().PreserveFormatSpecificItems {
+			if util.GetGlobalOptions().PreserveFormatSpecificItems {
 				if remainder == nil {
 					remainder = NewVorbisCommentsTag()
 				}
@@ -409,8 +412,8 @@ func (t *VorbisCommentsTag) Tag() *Tag {
 	}
 	// Preserve the vendor string as an EncoderSoftware item if one does
 	// not already exist.
-	if t.Vendor != "" && !tag.Contains(ItemKeyEncoderSoftware) {
-		tag.PushUnchecked(NewTagItem(ItemKeyEncoderSoftware, ItemValueText(t.Vendor)))
+	if t.Vendor != "" && !tag.Contains(meta.ItemKeyEncoderSoftware) {
+		tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyEncoderSoftware, meta.ItemValueText(t.Vendor)))
 	}
 	for _, pic := range t.pictures {
 		tag.PushPicture(pic.Picture)
@@ -419,12 +422,12 @@ func (t *VorbisCommentsTag) Tag() *Tag {
 }
 
 // VorbisCommentsTagFromTag converts a generic [Tag] to a [VorbisCommentsTag].
-func VorbisCommentsTagFromTag(input *Tag, vendor string) *VorbisCommentsTag {
+func VorbisCommentsTagFromTag(input *meta.Tag, vendor string) *VorbisCommentsTag {
 	input = input.Clone()
 	vc := &VorbisCommentsTag{Vendor: vendor}
 	// Format-specific items preserved in the companion merge back first
 	// (Rust's MergeTag for the VorbisComments remainder).
-	if getGlobalOptions().PreserveFormatSpecificItems {
+	if util.GetGlobalOptions().PreserveFormatSpecificItems {
 		if comp, ok := input.CompanionTag().(*VorbisCommentsTag); ok && comp != nil {
 			vc.items = append(vc.items, comp.items...)
 			if vc.Vendor == "" {
@@ -433,7 +436,7 @@ func VorbisCommentsTagFromTag(input *Tag, vendor string) *VorbisCommentsTag {
 		}
 	}
 	// The first EncoderSoftware item becomes the vendor string.
-	for _, item := range input.Take(ItemKeyEncoderSoftware) {
+	for _, item := range input.Take(meta.ItemKeyEncoderSoftware) {
 		if s, ok := item.Value().IntoString(); ok {
 			vc.Vendor = s
 			break
@@ -441,14 +444,14 @@ func VorbisCommentsTagFromTag(input *Tag, vendor string) *VorbisCommentsTag {
 	}
 	for _, item := range input.Items() {
 		// Binary items are not allowed in Vorbis comments
-		if item.Value().Kind() == ItemValueKindBinary {
+		if item.Value().Kind() == meta.ItemValueKindBinary {
 			continue
 		}
 		// Normalize flag items
-		if item.Key() == ItemKeyFlagCompilation {
+		if item.Key() == meta.ItemKeyFlagCompilation {
 			if s, ok := item.Value().IntoString(); ok {
-				if flag := flagItem(s); flag >= 0 {
-					item.SetValue(ItemValueText(itoa(flag)))
+				if flag := util.FlagItem(s); flag >= 0 {
+					item.SetValue(meta.ItemValueText(util.Itoa(flag)))
 				}
 			}
 		}
@@ -464,7 +467,7 @@ func VorbisCommentsTagFromTag(input *Tag, vendor string) *VorbisCommentsTag {
 
 // ParseVorbisComments parses the vendor+comments content (no "vorbis"/"OpusTags"
 // signature, no framing bit — callers strip those).
-func ParseVorbisComments(content []byte, parseOptions ParseOptions) (*VorbisCommentsTag, error) {
+func ParseVorbisComments(content []byte, parseOptions meta.ParseOptions) (*VorbisCommentsTag, error) {
 	tag := NewVorbisCommentsTag()
 	pos := 0
 	readU32 := func() (uint32, error) {
@@ -517,7 +520,7 @@ func ParseVorbisComments(content []byte, parseOptions ParseOptions) (*VorbisComm
 			}
 			pic, info, err := pictureFromFlacBytes(data)
 			if err == nil {
-				tag.pictures = append(tag.pictures, PictureInfoPair{Picture: pic, Info: info})
+				tag.pictures = append(tag.pictures, meta.PictureInfoPair{Picture: pic, Info: info})
 			}
 		case "COVERART", "COVERARTMIME":
 			if !parseOptions.ReadCoverArt {
@@ -528,27 +531,27 @@ func ParseVorbisComments(content []byte, parseOptions ParseOptions) (*VorbisComm
 				if err != nil {
 					continue
 				}
-				pic := PictureUnchecked(data).PicType(PictureTypeCoverFront).Build()
+				pic := meta.PictureUnchecked(data).PicType(meta.PictureTypeCoverFront).Build()
 				if len(data) >= 8 {
-					if mt, err := mimetypeFromBin(data[:8]); err == nil {
+					if mt, err := meta.MimetypeFromBin(data[:8]); err == nil {
 						pic.SetMimeType(mt)
 					}
 				}
 				tag.PushPicture(pic)
 			}
 		case "BINARY":
-			item := NewTagItem(ItemKeyUnknown, ItemValueBinary([]byte(value)))
+			item := meta.NewTagItem(meta.ItemKeyUnknown, meta.ItemValueBinary([]byte(value)))
 			item.Description = key
 			tag.items = append(tag.items, item)
 		case "TRACKNUMBER", "DISCNUMBER":
 			upperKey := strings.ToUpper(key)
 			isTrack := upperKey == "TRACKNUMBER"
-			itemKey := ItemKeyDiscNumber
+			itemKey := meta.ItemKeyDiscNumber
 			if isTrack {
-				itemKey = ItemKeyTrackNumber
+				itemKey = meta.ItemKeyTrackNumber
 			}
 			raw := func() {
-				tag.items = append(tag.items, NewTagItem(itemKey, ItemValueText(value)))
+				tag.items = append(tag.items, meta.NewTagItem(itemKey, meta.ItemValueText(value)))
 			}
 			if !parseOptions.ImplicitConversions {
 				raw()
@@ -556,11 +559,11 @@ func ParseVorbisComments(content []byte, parseOptions ParseOptions) (*VorbisComm
 			}
 			// Support the case of TRACKNUMBER/DISCNUMBER being current/total
 			parts := strings.SplitN(value, "/", 2)
-			current, hasCurrent := u32FromString(parts[0])
+			current, hasCurrent := util.U32FromString(parts[0])
 			var total uint32
 			var hasTotal bool
 			if len(parts) == 2 {
-				total, hasTotal = u32FromString(parts[1])
+				total, hasTotal = util.U32FromString(parts[1])
 			}
 			if isTrack {
 				if hasTotal {
@@ -583,14 +586,14 @@ func ParseVorbisComments(content []byte, parseOptions ParseOptions) (*VorbisComm
 			}
 		default:
 			if email, ok := strings.CutPrefix(key, "RATING:"); ok {
-				item := NewTagItem(ItemKeyPopularimeter, ItemValueText(value))
+				item := meta.NewTagItem(meta.ItemKeyPopularimeter, meta.ItemValueText(value))
 				item.Description = email
 				tag.items = append(tag.items, item)
 				continue
 			}
-			itemKey := ItemKeyOrUnknown(TagTypeVorbisComments, key)
-			item := NewTagItem(itemKey, ItemValueText(value))
-			if itemKey == ItemKeyUnknown {
+			itemKey := meta.ItemKeyOrUnknown(meta.TagTypeVorbisComments, key)
+			item := meta.NewTagItem(itemKey, meta.ItemValueText(value))
+			if itemKey == meta.ItemKeyUnknown {
 				item.Description = key
 			}
 			tag.items = append(tag.items, item)
@@ -606,9 +609,9 @@ func EncodeVorbisComments(tag *VorbisCommentsTag) ([]byte, error) {
 	var entries []kv
 
 	for _, item := range tag.items {
-		if item.Key() == ItemKeyUnknown {
+		if item.Key() == meta.ItemKeyUnknown {
 			if item.Description != "" {
-				if item.Value().Kind() == ItemValueKindBinary {
+				if item.Value().Kind() == meta.ItemValueKindBinary {
 					b, _ := item.Value().IntoBinary()
 					entries = append(entries, kv{item.Description, string(b)})
 				} else if s, ok := item.Value().IntoString(); ok {
@@ -617,7 +620,7 @@ func EncodeVorbisComments(tag *VorbisCommentsTag) ([]byte, error) {
 			}
 			continue
 		}
-		key, ok := item.Key().MapKey(TagTypeVorbisComments)
+		key, ok := item.Key().MapKey(meta.TagTypeVorbisComments)
 		if !ok {
 			continue
 		}
@@ -627,7 +630,7 @@ func EncodeVorbisComments(tag *VorbisCommentsTag) ([]byte, error) {
 		}
 		// Ratings with an associated email are stored as RATING:<email>
 		// (Rust's merge_tag special case).
-		if item.Key() == ItemKeyPopularimeter && item.Description != "" {
+		if item.Key() == meta.ItemKeyPopularimeter && item.Description != "" {
 			key = key + ":" + item.Description
 		}
 		entries = append(entries, kv{key, s})
@@ -641,7 +644,7 @@ func EncodeVorbisComments(tag *VorbisCommentsTag) ([]byte, error) {
 	for _, e := range entries {
 		size += 4 + len(e.k) + 1 + len(e.v)
 	}
-	buf, err := tryCapSlice[byte](size)
+	buf, err := util.TryCapSlice[byte](size)
 	if err != nil {
 		return nil, &VorbisCommentsEncodingError{Source: err}
 	}
@@ -691,8 +694,8 @@ func (e *VorbisCommentsEncodingError) Error() string {
 func (e *VorbisCommentsEncodingError) Unwrap() error { return e.Source }
 
 // pictureFromFlacBytes parses a FLAC METADATA_BLOCK_PICTURE block.
-func pictureFromFlacBytes(data []byte) (Picture, PictureInformation, error) {
-	return PictureFromFlacBytes(data, false, ParsingModeBestAttempt)
+func pictureFromFlacBytes(data []byte) (meta.Picture, meta.PictureInformation, error) {
+	return meta.PictureFromFlacBytes(data, false, meta.ParsingModeBestAttempt)
 }
 
 // flacBytes serializes a picture to a FLAC picture block body.
@@ -700,27 +703,27 @@ func pictureFromFlacBytes(data []byte) (Picture, PictureInformation, error) {
 // VorbisCommentsTagForWrite builds a [VorbisCommentsTag] for encoding: all tag
 // items are kept as comments, and the given vendor is used for the vendor
 // field (mirroring Rust's VorbisCommentsRef write path).
-func VorbisCommentsTagForWrite(input *Tag, vendor string) *VorbisCommentsTag {
+func VorbisCommentsTagForWrite(input *meta.Tag, vendor string) *VorbisCommentsTag {
 	return VorbisCommentsTagForWritePics(input, vendor, true)
 }
 
 // VorbisCommentsTagForWritePics is [VorbisCommentsTagForWrite] with optional
 // picture embedding. Pictures are only embedded as comments for Ogg; FLAC
 // stores them in dedicated PICTURE metadata blocks.
-func VorbisCommentsTagForWritePics(input *Tag, vendor string, withPics bool) *VorbisCommentsTag {
+func VorbisCommentsTagForWritePics(input *meta.Tag, vendor string, withPics bool) *VorbisCommentsTag {
 	// The tag's EncoderSoftware is taken as the vendor string
-	if s, ok := input.GetString(ItemKeyEncoderSoftware); ok && s != "" {
+	if s, ok := input.GetString(meta.ItemKeyEncoderSoftware); ok && s != "" {
 		vendor = s
 	}
 	vc := &VorbisCommentsTag{Vendor: vendor}
 	for _, item := range input.Items() {
-		if item.Value().Kind() == ItemValueKindBinary {
+		if item.Value().Kind() == meta.ItemValueKindBinary {
 			continue
 		}
-		if item.Key() == ItemKeyFlagCompilation {
+		if item.Key() == meta.ItemKeyFlagCompilation {
 			if s, ok := item.Value().IntoString(); ok {
-				if flag := flagItem(s); flag >= 0 {
-					item.SetValue(ItemValueText(itoa(flag)))
+				if flag := util.FlagItem(s); flag >= 0 {
+					item.SetValue(meta.ItemValueText(util.Itoa(flag)))
 				}
 			}
 		}
@@ -740,8 +743,8 @@ func (t *VorbisCommentsTag) TakeItems() [][2]string {
 	out := make([][2]string, 0, len(t.items))
 	for _, i := range t.items {
 		key := i.Description
-		if i.Key() != ItemKeyUnknown {
-			if k, ok := i.Key().MapKey(TagTypeVorbisComments); ok {
+		if i.Key() != meta.ItemKeyUnknown {
+			if k, ok := i.Key().MapKey(meta.TagTypeVorbisComments); ok {
 				key = k
 			}
 		}
@@ -754,13 +757,13 @@ func (t *VorbisCommentsTag) TakeItems() [][2]string {
 
 // SetPicture replaces the picture at `index`, mirroring Rust
 // `OggPictureStorage::set_picture`.
-func (t *VorbisCommentsTag) SetPicture(index int, picture Picture, info PictureInformation) {
-	t.pictures[index] = PictureInfoPair{Picture: picture, Info: info}
+func (t *VorbisCommentsTag) SetPicture(index int, picture meta.Picture, info meta.PictureInformation) {
+	t.pictures[index] = meta.PictureInfoPair{Picture: picture, Info: info}
 }
 
 // RemovePicture removes and returns the picture at `index`, mirroring Rust
 // `OggPictureStorage::remove_picture`.
-func (t *VorbisCommentsTag) RemovePicture(index int) PictureInfoPair {
+func (t *VorbisCommentsTag) RemovePicture(index int) meta.PictureInfoPair {
 	pic := t.pictures[index]
 	t.pictures = append(t.pictures[:index], t.pictures[index+1:]...)
 	return pic
@@ -768,8 +771,8 @@ func (t *VorbisCommentsTag) RemovePicture(index int) PictureInfoPair {
 
 // RemovePictureType removes all pictures of `pictureType`, mirroring Rust
 // `OggPictureStorage::remove_picture_type`.
-func (t *VorbisCommentsTag) RemovePictureType(pictureType PictureType) {
-	var kept []PictureInfoPair
+func (t *VorbisCommentsTag) RemovePictureType(pictureType meta.PictureType) {
+	var kept []meta.PictureInfoPair
 	for _, p := range t.pictures {
 		if p.Picture.PicType() != pictureType {
 			kept = append(kept, p)
@@ -780,7 +783,7 @@ func (t *VorbisCommentsTag) RemovePictureType(pictureType PictureType) {
 
 // RemovePictures removes and returns all pictures, mirroring Rust
 // `OggPictureStorage::remove_pictures`.
-func (t *VorbisCommentsTag) RemovePictures() []PictureInfoPair {
+func (t *VorbisCommentsTag) RemovePictures() []meta.PictureInfoPair {
 	pics := t.pictures
 	t.pictures = nil
 	return pics
@@ -788,10 +791,10 @@ func (t *VorbisCommentsTag) RemovePictures() []PictureInfoPair {
 
 // DumpTo writes the tag's metadata packet to a writer, mirroring Rust
 // `VorbisComments::dump_to` — this is only the tag data, not a usable file.
-func (t *VorbisCommentsTag) DumpTo(writer io.Writer, writeOptions WriteOptions) error {
+func (t *VorbisCommentsTag) DumpTo(writer io.Writer, writeOptions meta.WriteOptions) error {
 	data, err := EncodeVorbisComments(t)
 	if err != nil {
-		return &TagEncodingError{TagType: TagTypeVorbisComments, HasTagType: true, Source: err}
+		return &meta.TagEncodingError{TagType: meta.TagTypeVorbisComments, HasTagType: true, Source: err}
 	}
 	_, err = writer.Write(data)
 	return err
@@ -799,42 +802,42 @@ func (t *VorbisCommentsTag) DumpTo(writer io.Writer, writeOptions WriteOptions) 
 
 // SaveTo writes the tag into a Vorbis/Opus/Speex/FLAC file, mirroring Rust
 // `VorbisComments::save_to`.
-func (t *VorbisCommentsTag) SaveTo(file FileLike, writeOptions WriteOptions) error {
-	vf, err := NewVerifiedFile(file, writeOptions.ParseOptions)
+func (t *VorbisCommentsTag) SaveTo(file meta.FileLike, writeOptions meta.WriteOptions) error {
+	vf, err := meta.NewVerifiedFile(file, writeOptions.ParseOptions)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	return t.saveToVerified(vf, writeOptions)
 }
 
 // SaveToPath writes the tag to a path.
-func (t *VorbisCommentsTag) SaveToPath(path string, writeOptions WriteOptions) error {
-	vf, f, err := VerifiedFileFromPath(path, writeOptions.ParseOptions)
+func (t *VorbisCommentsTag) SaveToPath(path string, writeOptions meta.WriteOptions) error {
+	vf, f, err := meta.VerifiedFileFromPath(path, writeOptions.ParseOptions)
 	if err != nil {
-		return &FileEncodingError{Source: err}
+		return &meta.FileEncodingError{Source: err}
 	}
 	defer f.Close()
 	return t.saveToVerified(vf, writeOptions)
 }
 
-func (t *VorbisCommentsTag) saveToVerified(vf *VerifiedFile, writeOptions WriteOptions) error {
+func (t *VorbisCommentsTag) saveToVerified(vf *meta.VerifiedFile, writeOptions meta.WriteOptions) error {
 	format := vf.Format()
-	support := format.TagSupport(TagTypeVorbisComments)
-	if support == TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
-		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	support := format.TagSupport(meta.TagTypeVorbisComments)
+	if support == meta.TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
+		return &meta.FileEncodingError{FileType: format, Source: &meta.UnsupportedTagError{}}
 	}
-	if handled, err := WriteConcreteTag(vf, TagTypeVorbisComments, t, writeOptions); handled {
+	if handled, err := meta.WriteConcreteTag(vf, meta.TagTypeVorbisComments, t, writeOptions); handled {
 		return err
 	}
-	return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	return &meta.FileEncodingError{FileType: format, Source: &meta.UnsupportedTagError{}}
 }
 
-// RemoveFrom removes a Vorbis comment block from a [FileLike].
-func (t *VorbisCommentsTag) RemoveFrom(file FileLike, writeOptions WriteOptions) error {
-	return TagTypeVorbisComments.RemoveFrom(file, writeOptions)
+// RemoveFrom removes a Vorbis comment block from a [meta.FileLike].
+func (t *VorbisCommentsTag) RemoveFrom(file meta.FileLike, writeOptions meta.WriteOptions) error {
+	return meta.TagTypeVorbisComments.RemoveFrom(file, writeOptions)
 }
 
 // RemoveFromPath removes a Vorbis comment block from a path.
-func (t *VorbisCommentsTag) RemoveFromPath(path string, writeOptions WriteOptions) error {
-	return TagTypeVorbisComments.RemoveFromPath(path, writeOptions)
+func (t *VorbisCommentsTag) RemoveFromPath(path string, writeOptions meta.WriteOptions) error {
+	return meta.TagTypeVorbisComments.RemoveFromPath(path, writeOptions)
 }

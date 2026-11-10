@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"os"
 	"testing"
+
+	meta "github.com/subframe7536/lofty-go/internal/meta"
 )
 
 func id3v2ItemAsset(t *testing.T, name string) []byte {
@@ -45,7 +47,7 @@ func TestAtxtDecodeEncode(t *testing.T) {
 		!bytes.Equal(parsed.AudioData, want.AudioData) {
 		t.Fatalf("parsed = %+v", parsed)
 	}
-	encoded, err := want.AsBytes(NewWriteOptions())
+	encoded, err := want.AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +62,7 @@ func TestChapDecodeEncode(t *testing.T) {
 	children.Push(NewTextInformationFrame(FrameIdValid("TIT2"), TextEncodingLatin1, "Chapter 1 - Lofty"))
 	want := NewChapterFrame("CH1", 1000, 4000, 80, 256, children)
 
-	parsed, err := parseChapterFrame(bytes.NewReader(id3v2ItemAsset(t, "test.chap")), NewParseOptions(), id3v2Version4, FrameFlags{})
+	parsed, err := parseChapterFrame(bytes.NewReader(id3v2ItemAsset(t, "test.chap")), meta.NewParseOptions(), id3v2Version4, FrameFlags{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +73,7 @@ func TestChapDecodeEncode(t *testing.T) {
 	if v, ok := parsed.Children.GetText(FrameIdValid("TIT2")); !ok || v != "Chapter 1 - Lofty" {
 		t.Fatalf("TIT2 = %q (ok=%v)", v, ok)
 	}
-	encoded, err := want.AsBytes(NewWriteOptions())
+	encoded, err := want.AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +93,7 @@ func TestCtocDecodeEncode(t *testing.T) {
 		children,
 	)
 
-	parsed, err := parseChapterTableOfContentsFrame(bytes.NewReader(id3v2ItemAsset(t, "test.ctoc")), NewParseOptions(), id3v2Version4, FrameFlags{})
+	parsed, err := parseChapterTableOfContentsFrame(bytes.NewReader(id3v2ItemAsset(t, "test.ctoc")), meta.NewParseOptions(), id3v2Version4, FrameFlags{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +104,7 @@ func TestCtocDecodeEncode(t *testing.T) {
 	if v, ok := parsed.Children.GetText(FrameIdValid("TIT2")); !ok || v != "TOC 1 - The Beginning" {
 		t.Fatalf("TIT2 = %q (ok=%v)", v, ok)
 	}
-	encoded, err := want.AsBytes(NewWriteOptions())
+	encoded, err := want.AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +125,7 @@ func TestCtocManyRoots(t *testing.T) {
 		tag.Frames.Insert(newRoot(id))
 	}
 	var buf bytes.Buffer
-	if err := tag.DumpTo(&buf, NewWriteOptions()); err != nil {
+	if err := tag.DumpTo(&buf, meta.NewWriteOptions()); err != nil {
 		t.Fatal(err)
 	}
 	r := bytes.NewReader(buf.Bytes())
@@ -131,7 +133,7 @@ func TestCtocManyRoots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed, err := ParseId3v2Tag(r, header, NewParseOptions())
+	parsed, err := ParseId3v2Tag(r, header, meta.NewParseOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,9 +152,9 @@ func TestCtocManyRoots(t *testing.T) {
 func TestGeobDecodeEncode(t *testing.T) {
 	want := NewGeneralEncapsulatedObject(
 		TextEncodingLatin1,
-		Some("audio/mpeg"),
-		Some("a.mp3"),
-		Some("Test Asset"),
+		meta.Some("audio/mpeg"),
+		meta.Some("a.mp3"),
+		meta.Some("Test Asset"),
 		fullTestMp3(t),
 	)
 	parsed, err := ParseGeneralEncapsulatedObject(id3v2ItemAsset(t, "test.geob"), FrameFlags{})
@@ -171,7 +173,7 @@ func TestGeobDecodeEncode(t *testing.T) {
 	if !bytes.Equal(parsed.Data, want.Data) {
 		t.Fatal("data mismatch")
 	}
-	encoded, err := want.AsBytes(NewWriteOptions())
+	encoded, err := want.AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +227,7 @@ func TestTiplDecodeEncode(t *testing.T) {
 		parsed.KeyValuePairs[1] != [2]string{"mixer", "lofty-rs"} {
 		t.Fatalf("pairs = %v", parsed.KeyValuePairs)
 	}
-	encoded, err := want(TextEncodingLatin1).AsBytes(NewWriteOptions())
+	encoded, err := want(TextEncodingLatin1).AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +244,7 @@ func TestTiplDecodeEncode(t *testing.T) {
 		parsed16.KeyValuePairs[1] != [2]string{"mixer", "lofty-rs"} {
 		t.Fatalf("utf16 pairs = %v", parsed16.KeyValuePairs)
 	}
-	encoded16, err := want(TextEncodingUTF16).AsBytes(NewWriteOptions())
+	encoded16, err := want(TextEncodingUTF16).AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +262,7 @@ func TestOwneDecodeEncode(t *testing.T) {
 	if parsed.PricePaid != "USD1000" || parsed.DateOfPurchase != "19840407" || parsed.Seller != "FooBar" {
 		t.Fatalf("parsed = %+v", parsed)
 	}
-	encoded, err := NewOwnershipFrame(TextEncodingLatin1, "USD1000", "19840407", "FooBar").AsBytes(NewWriteOptions())
+	encoded, err := NewOwnershipFrame(TextEncodingLatin1, "USD1000", "19840407", "FooBar").AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +275,7 @@ func TestOwneDecodeEncode(t *testing.T) {
 func TestWritePopm(t *testing.T) {
 	testPopm := func(t *testing.T, email string, rating uint8, counter uint64) {
 		t.Helper()
-		b, err := NewPopularimeterFrame(email, rating, counter).AsBytes(NewWriteOptions())
+		b, err := NewPopularimeterFrame(email, rating, counter).AsBytes(meta.NewWriteOptions())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -321,7 +323,7 @@ func TestPrivDecodeEncode(t *testing.T) {
 	if parsed.Owner != "foo@bar.com" || string(parsed.PrivateData) != "some data" {
 		t.Fatalf("parsed = %+v", parsed)
 	}
-	encoded, err := NewPrivateFrame("foo@bar.com", []byte("some data")).AsBytes(NewWriteOptions())
+	encoded, err := NewPrivateFrame("foo@bar.com", []byte("some data")).AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,11 +338,11 @@ func TestRva2DecodeEncode(t *testing.T) {
 		// NOTE: the fixture stores 0x00f0 (240) for master volume while Rust's
 		// expected() says 15 — Rust's PartialEq only compares identification,
 		// so upstream never checks channel values. We assert the real decode.
-		ChannelTypeMasterVolume: {ChannelType: ChannelTypeMasterVolume, VolumeAdjustment: 240, BitsRepresentingPeak: 4, PeakVolume: Some([]byte{4})},
-		ChannelTypeFrontLeft:    {ChannelType: ChannelTypeFrontLeft, VolumeAdjustment: 21, BitsRepresentingPeak: 0, PeakVolume: None[[]byte]()},
-		ChannelTypeSubwoofer:    {ChannelType: ChannelTypeSubwoofer, VolumeAdjustment: 30, BitsRepresentingPeak: 11, PeakVolume: Some([]byte{0xFF, 0x07})},
+		ChannelTypeMasterVolume: {ChannelType: ChannelTypeMasterVolume, VolumeAdjustment: 240, BitsRepresentingPeak: 4, PeakVolume: meta.Some([]byte{4})},
+		ChannelTypeFrontLeft:    {ChannelType: ChannelTypeFrontLeft, VolumeAdjustment: 21, BitsRepresentingPeak: 0, PeakVolume: meta.None[[]byte]()},
+		ChannelTypeSubwoofer:    {ChannelType: ChannelTypeSubwoofer, VolumeAdjustment: 30, BitsRepresentingPeak: 11, PeakVolume: meta.Some([]byte{0xFF, 0x07})},
 	})
-	parsed, err := parseRelativeVolumeAdjustmentFrame(bytes.NewReader(id3v2ItemAsset(t, "test.rva2")), FrameFlags{}, ParsingModeStrict)
+	parsed, err := parseRelativeVolumeAdjustmentFrame(bytes.NewReader(id3v2ItemAsset(t, "test.rva2")), FrameFlags{}, meta.ParsingModeStrict)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +362,7 @@ func TestRva2DecodeEncode(t *testing.T) {
 		}
 	}
 
-	encoded, err := want.AsBytes(NewWriteOptions())
+	encoded, err := want.AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +390,7 @@ func TestSyltDecodeEncode(t *testing.T) {
 		{1938000, "\nCorrectly"},
 	}
 	want := func(enc TextEncoding) *SynchronizedTextFrame {
-		return NewSynchronizedTextFrame(enc, [3]byte{'e', 'n', 'g'}, TimestampFormatMS, SyncTextLyrics, Some("Test Sync Text"), wantItems)
+		return NewSynchronizedTextFrame(enc, [3]byte{'e', 'n', 'g'}, TimestampFormatMS, SyncTextLyrics, meta.Some("Test Sync Text"), wantItems)
 	}
 	check := func(f *SynchronizedTextFrame, enc TextEncoding) {
 		t.Helper()
@@ -415,7 +417,7 @@ func TestSyltDecodeEncode(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(parsed, TextEncodingLatin1)
-	encoded, err := want(TextEncodingLatin1).AsBytes(NewWriteOptions())
+	encoded, err := want(TextEncodingLatin1).AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +430,7 @@ func TestSyltDecodeEncode(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(parsed16, TextEncodingUTF16)
-	encoded16, err := want(TextEncodingUTF16).AsBytes(NewWriteOptions())
+	encoded16, err := want(TextEncodingUTF16).AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,20 +441,21 @@ func TestSyltDecodeEncode(t *testing.T) {
 
 // unique_file_identifier.rs::issue_204_invalid_ufid_parsing_mode_best_attempt
 func TestIssue204InvalidUfid(t *testing.T) {
-	b, err := NewUniqueFileIdentifierFrame("", []byte{0}).AsBytes(NewWriteOptions())
+	b, err := NewUniqueFileIdentifierFrame("", []byte{0}).AsBytes(meta.NewWriteOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := parseUniqueFileIdentifierFrame(bytes.NewReader(b), FrameFlags{}, ParsingModeStrict); err == nil {
+	if _, err := parseUniqueFileIdentifierFrame(bytes.NewReader(b), FrameFlags{}, meta.ParsingModeStrict); err == nil {
 		t.Fatal("strict should fail on empty owner")
 	}
-	if _, err := parseUniqueFileIdentifierFrame(bytes.NewReader(b), FrameFlags{}, ParsingModeBestAttempt); err != nil {
+	if _, err := parseUniqueFileIdentifierFrame(bytes.NewReader(b), FrameFlags{}, meta.ParsingModeBestAttempt); err != nil {
 		t.Fatalf("best-attempt should tolerate empty owner: %v", err)
 	}
 }
 
-// pairs.rs::whitespace_in_number / empty_number_string — numbers are trimmed
-// before parsing; empty/whitespace strings produce no frame at all.
+// pairs.rs::whitespace_in_number / empty_number_string — Rust's trimming
+// `set_number` is used by the APE conversion; id3v2 `from_tag` uses a
+// non-trimming `parse_number`, so whitespace-padded text produces no frame.
 func TestNumberPairWhitespace(t *testing.T) {
 	tag := NewId3v2Tag()
 	tag.SetTrack(12)
@@ -460,17 +463,15 @@ func TestNumberPairWhitespace(t *testing.T) {
 		t.Fatalf("track = %v (ok=%v)", v, ok)
 	}
 
-	// The set_number equivalent lives in the generic conversion path — a
-	// whitespace-padded item text parses to the number, empty produces no frame.
-	gtag := NewTag(TagTypeID3v2)
-	gtag.PushUnchecked(NewTagItem(ItemKeyTrackNumber, ItemValueText("  12  ")))
+	gtag := meta.NewTag(meta.TagTypeID3v2)
+	gtag.PushUnchecked(meta.NewTagItem(meta.ItemKeyTrackNumber, meta.ItemValueText("  12  ")))
 	itag := Id3v2TagFromTag(gtag)
-	if v, ok := itag.Frames.GetText(FrameIdValid("TRCK")); !ok || v != "12" {
-		t.Fatalf("TRCK = %q (ok=%v)", v, ok)
+	if _, ok := itag.Frames.GetText(FrameIdValid("TRCK")); ok {
+		t.Fatal("whitespace-padded TRCK should produce no frame (Rust parse_number does not trim)")
 	}
 
-	gtag2 := NewTag(TagTypeID3v2)
-	gtag2.PushUnchecked(NewTagItem(ItemKeyTrackNumber, ItemValueText("        ")))
+	gtag2 := meta.NewTag(meta.TagTypeID3v2)
+	gtag2.PushUnchecked(meta.NewTagItem(meta.ItemKeyTrackNumber, meta.ItemValueText("        ")))
 	itag2 := Id3v2TagFromTag(gtag2)
 	if _, ok := itag2.Frames.GetText(FrameIdValid("TRCK")); ok {
 		t.Fatal("whitespace-only TRCK should produce no frame")

@@ -7,54 +7,32 @@ import (
 	"io"
 	"reflect"
 	"strings"
+
+	meta "github.com/subframe7536/lofty-go/internal/meta"
+	"github.com/subframe7536/lofty-go/internal/util"
 )
 
 // unsyncReader streams unsynchronised ID3v2 content, dropping the 0x00 that
 // follows every 0xFF (mirrors Rust's UnsynchronizedStream).
 type unsyncReader struct {
-	r    io.Reader
-	pend byte // pending 0x00 to skip after an 0xFF
-	have bool
+	r  io.Reader
+	ff bool // last emitted byte was 0xFF; a following 0x00 is skipped
 }
 
 func (u *unsyncReader) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	n := 0
-	if u.have {
-		p[0] = u.pend
-		u.have = false
-		n = 1
-	}
-	m, err := u.r.Read(p[n:])
-	data := p[n : n+m]
-	w := n
+	m, err := u.r.Read(p)
+	data := p[:m]
+	w := 0
 	for i := 0; i < len(data); i++ {
 		b := data[i]
-		if b == 0xFF {
-			if i+1 < len(data) {
-				p[w] = b
-				w++
-				i++
-				if data[i] == 0x00 {
-					continue
-				}
-				p[w] = data[i]
-				w++
-				continue
-			}
-			// Last byte is 0xFF: its 0x00 check needs the next read —
-			// unless the stream already ended.
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				p[w] = b
-				w++
-			} else {
-				u.pend = b
-				u.have = true
-			}
+		if u.ff && b == 0x00 {
+			u.ff = false
 			continue
 		}
+		u.ff = b == 0xFF
 		p[w] = b
 		w++
 	}
@@ -78,7 +56,7 @@ const (
 
 // ParseId3v2Tag reads the tag content (after the header was consumed) into a
 // native [Id3v2Tag]. Mirrors Rust `parse_id3v2`.
-func ParseId3v2Tag(reader io.Reader, header Id3v2Header, parseOptions ParseOptions) (*Id3v2Tag, error) {
+func ParseId3v2Tag(reader io.Reader, header Id3v2Header, parseOptions meta.ParseOptions) (*Id3v2Tag, error) {
 	contentSize := int64(header.Size - header.ExtendedSize)
 	var r io.Reader
 	switch reader.(type) {
@@ -91,7 +69,7 @@ func ParseId3v2Tag(reader io.Reader, header Id3v2Header, parseOptions ParseOptio
 		// syscall on a raw file. The whole limited region is consumed
 		// either way.
 		if contentSize > 0 {
-			if buf, aerr := tryByteSlice(int(contentSize)); aerr == nil {
+			if buf, aerr := util.TryByteSlice(int(contentSize)); aerr == nil {
 				n, rerr := io.ReadFull(reader, buf)
 				if rerr != nil && rerr != io.EOF && rerr != io.ErrUnexpectedEOF {
 					return nil, &Id3v2ParseError{Source: rerr}
@@ -111,12 +89,12 @@ func ParseId3v2Tag(reader io.Reader, header Id3v2Header, parseOptions ParseOptio
 	}
 
 	tag, err := readAllFramesIntoTag(r, header, parseOptions)
-	// Consume any remaining tag content (padding, discarded frames) so callers
-	// are positioned at the tag's end.
-	_, _ = io.Copy(io.Discard, r)
 	if err != nil {
 		return nil, &Id3v2ParseError{Source: err}
 	}
+	// Consume any remaining tag content (padding, discarded frames) so callers
+	// are positioned at the tag's end.
+	_, _ = io.Copy(io.Discard, r)
 
 	// Construct TDRC frame from TYER, TDAT, and TIME frames
 	if parseOptions.ImplicitConversions && header.Version == id3v2Version3 {
@@ -145,23 +123,23 @@ func constructTdrcFromV3(tag *Id3v2Tag) {
 		return
 	}
 
-	tdrc := Timestamp{Year: yf.Timestamp.Year}
+	tdrc := meta.Timestamp{Year: yf.Timestamp.Year}
 	dateUsed, timeUsed := false, false
 
 	if date, ok := tag.Frames.GetText(tdat); ok && len(date) == 4 && isASCII(date) {
 		day, err1 := atoiU8(date[:2])
 		month, err2 := atoiU8(date[2:])
 		if err1 && err2 {
-			tdrc.Month = Some(month)
-			tdrc.Day = Some(day)
+			tdrc.Month = meta.Some(month)
+			tdrc.Day = meta.Some(day)
 			dateUsed = true
 
 			if t, ok := tag.Frames.GetText(time_); ok && len(t) == 4 && isASCII(t) {
 				hour, err3 := atoiU8(t[:2])
 				minute, err4 := atoiU8(t[2:])
 				if err3 && err4 {
-					tdrc.Hour = Some(hour)
-					tdrc.Minute = Some(minute)
+					tdrc.Hour = meta.Some(hour)
+					tdrc.Minute = meta.Some(minute)
 					timeUsed = true
 				}
 			}
@@ -178,14 +156,14 @@ func constructTdrcFromV3(tag *Id3v2Tag) {
 }
 
 func atoiU8(s string) (uint8, bool) {
-	n, err := atoi(s)
+	n, err := util.Atoi(s)
 	if err != nil || n < 0 || n > 255 {
 		return 0, false
 	}
 	return uint8(n), true
 }
 
-func readAllFramesIntoTag(reader io.Reader, header Id3v2Header, parseOptions ParseOptions) (*Id3v2Tag, error) {
+func readAllFramesIntoTag(reader io.Reader, header Id3v2Header, parseOptions meta.ParseOptions) (*Id3v2Tag, error) {
 	tag := NewId3v2Tag()
 	tag.SetOriginalVersion(header.Version)
 	tag.SetFlags(header.Flags)
@@ -197,7 +175,7 @@ func readAllFramesIntoTag(reader io.Reader, header Id3v2Header, parseOptions Par
 	return tag, nil
 }
 
-func readAllFramesIntoList(reader io.Reader, version Id3v2Version, flags Id3v2TagFlags, parseOptions ParseOptions) (*FrameList, error) {
+func readAllFramesIntoList(reader io.Reader, version Id3v2Version, flags Id3v2TagFlags, parseOptions meta.ParseOptions) (*FrameList, error) {
 	list := NewFrameList()
 	for {
 		frame, result, err := parsedFrameRead(reader, version, flags, parseOptions)
@@ -242,7 +220,7 @@ func parseV2Header(reader io.Reader) (FrameId, uint32, bool, error) {
 }
 
 // parseFrameHeader parses an ID3v2.3/2.4 frame header.
-func parseFrameHeader(reader io.Reader, synchsafe bool, parseOptions ParseOptions) (FrameId, FrameFlags, uint32, bool, error) {
+func parseFrameHeader(reader io.Reader, synchsafe bool, parseOptions meta.ParseOptions) (FrameId, FrameFlags, uint32, bool, error) {
 	var header [10]byte
 	if _, err := io.ReadFull(reader, header[:]); err != nil {
 		return FrameId{}, FrameFlags{}, 0, false, nil
@@ -253,7 +231,7 @@ func parseFrameHeader(reader io.Reader, synchsafe bool, parseOptions ParseOption
 
 	size := binary.BigEndian.Uint32(header[4:8])
 	if synchsafe {
-		size = unsynchsafe32(header[4:8])
+		size = util.Unsynchsafe32(header[4:8])
 	}
 
 	// Some apps make v3 tags with v2 frame IDs
@@ -312,7 +290,7 @@ func utf8DecodeStrChecked(b []byte) (string, error) {
 }
 
 // parsedFrameRead mirrors Rust `ParsedFrame::read`.
-func parsedFrameRead(reader io.Reader, version Id3v2Version, tagFlags Id3v2TagFlags, parseOptions ParseOptions) (Frame, parsedFrameResult, error) {
+func parsedFrameRead(reader io.Reader, version Id3v2Version, tagFlags Id3v2TagFlags, parseOptions meta.ParseOptions) (Frame, parsedFrameResult, error) {
 	var id FrameId
 	var flags FrameFlags
 	var size uint32
@@ -329,12 +307,12 @@ func parsedFrameRead(reader io.Reader, version Id3v2Version, tagFlags Id3v2TagFl
 		id, flags, size, ok, err = parseFrameHeader(reader, true, parseOptions)
 	}
 	if err != nil {
-		if parseOptions.ParsingMode == ParsingModeStrict {
-			return nil, 0, frameParseError(None[FrameId](), err)
+		if parseOptions.ParsingMode == meta.ParsingModeStrict {
+			return nil, 0, frameParseError(meta.None[FrameId](), err)
 		}
 		// Skip this frame and continue reading
 		if serr := skipFrameContent(reader, size); serr != nil {
-			return nil, 0, frameParseError(None[FrameId](), serr)
+			return nil, 0, frameParseError(meta.None[FrameId](), serr)
 		}
 		return nil, parsedFrameSkip, nil
 	}
@@ -344,7 +322,7 @@ func parsedFrameRead(reader io.Reader, version Id3v2Version, tagFlags Id3v2TagFl
 
 	if !parseOptions.ReadCoverArt && id == FrameIdValid("APIC") {
 		if serr := skipFrameContent(reader, size); serr != nil {
-			return nil, 0, frameParseError(Some(id), serr)
+			return nil, 0, frameParseError(meta.Some(id), serr)
 		}
 		return nil, parsedFrameSkip, nil
 	}
@@ -355,11 +333,11 @@ func parsedFrameRead(reader io.Reader, version Id3v2Version, tagFlags Id3v2TagFl
 	}
 
 	if size == 0 {
-		if parseOptions.ParsingMode == ParsingModeStrict {
+		if parseOptions.ParsingMode == meta.ParsingModeStrict {
 			return nil, 0, frameParseUndersized(id)
 		}
 		if serr := skipFrameContent(reader, size); serr != nil {
-			return nil, 0, frameParseError(Some(id), serr)
+			return nil, 0, frameParseError(meta.Some(id), serr)
 		}
 		return nil, parsedFrameSkip, nil
 	}
@@ -371,9 +349,9 @@ func parsedFrameRead(reader io.Reader, version Id3v2Version, tagFlags Id3v2TagFl
 		}
 		var b [1]byte
 		if _, err := io.ReadFull(reader, b[:]); err != nil {
-			return nil, 0, frameParseError(Some(id), err)
+			return nil, 0, frameParseError(meta.Some(id), err)
 		}
-		flags.Encryption = Some(b[0])
+		flags.Encryption = meta.Some(b[0])
 		size--
 	}
 
@@ -384,9 +362,9 @@ func parsedFrameRead(reader io.Reader, version Id3v2Version, tagFlags Id3v2TagFl
 		}
 		var b [1]byte
 		if _, err := io.ReadFull(reader, b[:]); err != nil {
-			return nil, 0, frameParseError(Some(id), err)
+			return nil, 0, frameParseError(meta.Some(id), err)
 		}
-		flags.GroupingIdentity = Some(b[0])
+		flags.GroupingIdentity = meta.Some(b[0])
 		size--
 	}
 
@@ -397,9 +375,9 @@ func parsedFrameRead(reader io.Reader, version Id3v2Version, tagFlags Id3v2TagFl
 		}
 		var lb [4]byte
 		if _, err := io.ReadFull(reader, lb[:]); err != nil {
-			return nil, 0, frameParseError(Some(id), err)
+			return nil, 0, frameParseError(meta.Some(id), err)
 		}
-		flags.DataLengthIndicator = Some(unsynchsafe32(lb[:]))
+		flags.DataLengthIndicator = meta.Some(util.Unsynchsafe32(lb[:]))
 		size -= 4
 	}
 
@@ -408,12 +386,12 @@ func parsedFrameRead(reader io.Reader, version Id3v2Version, tagFlags Id3v2TagFl
 	}
 
 	// Read the frame content
-	content, err := tryByteSlice(int(size))
+	content, err := util.TryByteSlice(int(size))
 	if err != nil {
-		return nil, 0, frameParseError(Some(id), err)
+		return nil, 0, frameParseError(meta.Some(id), err)
 	}
 	if _, err := io.ReadFull(reader, content); err != nil {
-		return nil, 0, frameParseError(Some(id), err)
+		return nil, 0, frameParseError(meta.Some(id), err)
 	}
 
 	// Flags applied in order: unsynchronization -> compression -> encryption
@@ -423,12 +401,12 @@ func parsedFrameRead(reader io.Reader, version Id3v2Version, tagFlags Id3v2TagFl
 	if flags.Compression {
 		zr, err := zlib.NewReader(bytes.NewReader(content))
 		if err != nil {
-			return nil, 0, frameParseError(Some(id), err)
+			return nil, 0, frameParseError(meta.Some(id), err)
 		}
 		content, err = io.ReadAll(zr)
 		zr.Close()
 		if err != nil {
-			return nil, 0, frameParseError(Some(id), err)
+			return nil, 0, frameParseError(meta.Some(id), err)
 		}
 	}
 	if flags.Encryption.IsSome() {
@@ -487,12 +465,12 @@ func id3v2MinContentSize(id string, version Id3v2Version) uint32 {
 }
 
 // parseFrame mirrors `parse_frame` + `parse_content` dispatch.
-func parseFrame(reader io.Reader, id FrameId, size uint32, flags FrameFlags, version Id3v2Version, parseOptions ParseOptions) (Frame, parsedFrameResult, error) {
+func parseFrame(reader io.Reader, id FrameId, size uint32, flags FrameFlags, version Id3v2Version, parseOptions meta.ParseOptions) (Frame, parsedFrameResult, error) {
 	if size < id3v2MinContentSize(id.String(), version) {
-		if parseOptions.ParsingMode == ParsingModeRelaxed {
+		if parseOptions.ParsingMode == meta.ParsingModeRelaxed {
 			return nil, parsedFrameSkip, nil
 		}
-		return nil, 0, setFrameErrID(frameParseError(None[FrameId](), &NotEnoughDataError{}), id)
+		return nil, 0, setFrameErrID(frameParseError(meta.None[FrameId](), &NotEnoughDataError{}), id)
 	}
 
 	var frame Frame
@@ -580,7 +558,7 @@ func parseFrame(reader io.Reader, id FrameId, size uint32, flags FrameFlags, ver
 
 // NotEnoughDataError mirrors Rust's error of the same name.
 type NotEnoughDataError struct {
-	Needed Option[int]
+	Needed meta.Option[int]
 }
 
 func (e *NotEnoughDataError) Error() string {

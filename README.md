@@ -44,6 +44,20 @@ Everything lives under `lofty.` — format packages exist for advanced use
 (e.g. `id3v2.Tag`, `mp4.Ilst`), but the root facade re-exports the whole
 public API and activates all format registrations on import.
 
+## Configuration
+
+Lofty supports process-wide configuration via `lofty.ApplyGlobalOptions`:
+
+```go
+opts := lofty.NewGlobalOptions()
+opts.AllocationLimit = 32 * 1024 * 1024 // 32 MiB allocation limit per item
+lofty.ApplyGlobalOptions(opts)
+```
+
+Unlike Rust (which uses thread-local options), Go's `GlobalOptions` are process-global
+and guarded by a mutex. Call `ApplyGlobalOptions` during application initialization
+(`main()` or `init()`) before performing concurrent parse or write operations.
+
 ## Supported formats
 
 | Format | Tags | Read | Write |
@@ -102,7 +116,7 @@ symbols to a subpackage with `go run ./scripts/facadegen`.
 
 Only two, both deliberate (`go.mod`):
 
-- `github.com/bogem/id3v2/v2` — ID3v2 frame parse/write
+- `github.com/bogem/id3v2/v2` — test-only ID3v2 parse oracle (production read/write is the native `id3v2` package)
 - `github.com/go-flac/go-flac/v2` — FLAC metadata blocks
 
 MP4 atom traversal, Ogg page read/write, and Latin-1/UTF-16 codecs are

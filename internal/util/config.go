@@ -193,7 +193,9 @@ func NewWriteOptions() WriteOptions {
 // GlobalOptions control all interactions with Lofty.
 //
 // In the Rust version these are thread-local; in Go they are process-global,
-// protected by a mutex.
+// protected by a mutex. Callers should configure GlobalOptions during program
+// initialization (e.g. in main or init) before performing concurrent parse
+// or write operations.
 type GlobalOptions struct {
 	// UseCustomResolvers controls whether or not to check registered custom resolvers
 	// (default true).
@@ -234,7 +236,8 @@ var (
 	globalOptions   = NewGlobalOptions()
 )
 
-// ApplyGlobalOptions applies the given [GlobalOptions].
+// ApplyGlobalOptions applies the given [GlobalOptions]. It is recommended
+// to call this during application startup before concurrent file operations.
 func ApplyGlobalOptions(options GlobalOptions) {
 	globalOptionsMu.Lock()
 	globalOptions = options

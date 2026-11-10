@@ -8,9 +8,11 @@ import (
 	"io"
 	"os"
 	"testing"
+
+	meta "github.com/subframe7536/lofty-go/internal/meta"
 )
 
-func mustApeItem(t *testing.T, key string, value ItemValue) *ApeItem {
+func mustApeItem(t *testing.T, key string, value meta.ItemValue) *ApeItem {
 	t.Helper()
 	item, err := NewApeItem(key, value)
 	if err != nil {
@@ -30,16 +32,16 @@ func readApev2Asset(t *testing.T) []byte {
 
 func TestApeParseApe(t *testing.T) {
 	expected := NewApeTag()
-	expected.Push(mustApeItem(t, "TITLE", ItemValueText("Foo title")))
-	expected.Push(mustApeItem(t, "ARTIST", ItemValueText("Bar artist")))
-	expected.Push(mustApeItem(t, "ALBUM", ItemValueText("Baz album")))
-	expected.Push(mustApeItem(t, "COMMENT", ItemValueText("Qux comment")))
-	expected.Push(mustApeItem(t, "YEAR", ItemValueText("1984")))
-	expected.Push(mustApeItem(t, "TRACK", ItemValueText("1")))
-	expected.Push(mustApeItem(t, "GENRE", ItemValueText("Classical")))
+	expected.Push(mustApeItem(t, "TITLE", meta.ItemValueText("Foo title")))
+	expected.Push(mustApeItem(t, "ARTIST", meta.ItemValueText("Bar artist")))
+	expected.Push(mustApeItem(t, "ALBUM", meta.ItemValueText("Baz album")))
+	expected.Push(mustApeItem(t, "COMMENT", meta.ItemValueText("Qux comment")))
+	expected.Push(mustApeItem(t, "YEAR", meta.ItemValueText("1984")))
+	expected.Push(mustApeItem(t, "TRACK", meta.ItemValueText("1")))
+	expected.Push(mustApeItem(t, "GENRE", meta.ItemValueText("Classical")))
 
 	reader := bytes.NewReader(readApev2Asset(t))
-	parsed, header, err := ReadApeTag(reader, false, NewParseOptions())
+	parsed, header, err := ReadApeTag(reader, false, meta.NewParseOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,8 +76,8 @@ func TestApeWithoutHeader(t *testing.T) {
 	if _, err := reader.Seek(-32, io.SeekEnd); err != nil {
 		t.Fatal(err)
 	}
-	po := NewParseOptions()
-	po.ParsingMode = ParsingModeStrict
+	po := meta.NewParseOptions()
+	po.ParsingMode = meta.ParsingModeStrict
 	parsed, _, err := ReadApeTag(reader, true, po)
 	if err != nil {
 		t.Fatal(err)
@@ -94,8 +96,8 @@ func TestApeWithoutFooter(t *testing.T) {
 	tagBytes := data[:len(data)-32]
 	binary.LittleEndian.PutUint32(tagBytes[20:], apeHeaderContainsHeader|apeHeaderIsHeader)
 
-	po := NewParseOptions()
-	po.ParsingMode = ParsingModeStrict
+	po := meta.NewParseOptions()
+	po.ParsingMode = meta.ParsingModeStrict
 	parsed, _, err := ReadApeTag(bytes.NewReader(tagBytes), false, po)
 	if err != nil {
 		t.Fatal(err)
@@ -107,15 +109,15 @@ func TestApeWithoutFooter(t *testing.T) {
 
 func TestApeReRead(t *testing.T) {
 	reader := bytes.NewReader(readApev2Asset(t))
-	parsed, header, err := ReadApeTag(reader, false, NewParseOptions())
+	parsed, header, err := ReadApeTag(reader, false, meta.NewParseOptions())
 	if err != nil || header == nil || parsed == nil {
 		t.Fatalf("read: %v", err)
 	}
 	var buf bytes.Buffer
-	if err := dumpTag(parsed.Tag(), &buf, NewWriteOptions()); err != nil {
+	if err := meta.DumpTag(parsed.Tag(), &buf, meta.NewWriteOptions()); err != nil {
 		t.Fatal(err)
 	}
-	reParsed, header2, err := ReadApeTag(bytes.NewReader(buf.Bytes()), false, NewParseOptions())
+	reParsed, header2, err := ReadApeTag(bytes.NewReader(buf.Bytes()), false, meta.NewParseOptions())
 	if err != nil || header2 == nil || reParsed == nil {
 		t.Fatalf("re-read: %v", err)
 	}
@@ -130,40 +132,40 @@ func TestApeReRead(t *testing.T) {
 	}
 }
 
-func verifyTagCommon(t *testing.T, tag *Tag, trackNumber, genre bool) {
+func verifyTagCommon(t *testing.T, tag *meta.Tag, trackNumber, genre bool) {
 	t.Helper()
-	check := func(key ItemKey, want string) {
+	check := func(key meta.ItemKey, want string) {
 		t.Helper()
 		if got, _ := tag.GetString(key); got != want {
 			t.Fatalf("%v = %q, want %q", key, got, want)
 		}
 	}
-	check(ItemKeyTrackTitle, "Foo title")
-	check(ItemKeyTrackArtist, "Bar artist")
-	check(ItemKeyAlbumTitle, "Baz album")
-	check(ItemKeyComment, "Qux comment")
+	check(meta.ItemKeyTrackTitle, "Foo title")
+	check(meta.ItemKeyTrackArtist, "Bar artist")
+	check(meta.ItemKeyAlbumTitle, "Baz album")
+	check(meta.ItemKeyComment, "Qux comment")
 	if trackNumber {
-		check(ItemKeyTrackNumber, "1")
+		check(meta.ItemKeyTrackNumber, "1")
 	}
 	if genre {
-		check(ItemKeyGenre, "Classical")
+		check(meta.ItemKeyGenre, "Classical")
 	}
 }
 
-func createTagCommon(ty TagType) *Tag {
-	tag := NewTag(ty)
-	tag.InsertText(ItemKeyTrackTitle, "Foo title")
-	tag.InsertText(ItemKeyTrackArtist, "Bar artist")
-	tag.InsertText(ItemKeyAlbumTitle, "Baz album")
-	tag.InsertText(ItemKeyComment, "Qux comment")
-	tag.InsertText(ItemKeyTrackNumber, "1")
-	tag.InsertText(ItemKeyGenre, "Classical")
+func createTagCommon(ty meta.TagType) *meta.Tag {
+	tag := meta.NewTag(ty)
+	tag.InsertText(meta.ItemKeyTrackTitle, "Foo title")
+	tag.InsertText(meta.ItemKeyTrackArtist, "Bar artist")
+	tag.InsertText(meta.ItemKeyAlbumTitle, "Baz album")
+	tag.InsertText(meta.ItemKeyComment, "Qux comment")
+	tag.InsertText(meta.ItemKeyTrackNumber, "1")
+	tag.InsertText(meta.ItemKeyGenre, "Classical")
 	return tag
 }
 
 func TestApeToTag(t *testing.T) {
 	reader := bytes.NewReader(readApev2Asset(t))
-	ape, header, err := ReadApeTag(reader, false, NewParseOptions())
+	ape, header, err := ReadApeTag(reader, false, meta.NewParseOptions())
 	if err != nil || header == nil || ape == nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -172,11 +174,11 @@ func TestApeToTag(t *testing.T) {
 }
 
 func TestTagToApe(t *testing.T) {
-	apeTag := ApeTagFromTag(createTagCommon(TagTypeApe))
+	apeTag := ApeTagFromTag(createTagCommon(meta.TagTypeApe))
 	verifyKey := func(key, expected string) {
 		t.Helper()
 		got, ok := apeTag.Item(key)
-		if !ok || !got.Value.Equal(ItemValueText(expected)) {
+		if !ok || !got.Value.Equal(meta.ItemValueText(expected)) {
 			t.Fatalf("%q = %v, want %q", key, got.Value, expected)
 		}
 	}
@@ -281,8 +283,8 @@ func TestApeSetDiskTotalAndDisk(t *testing.T) {
 }
 
 func TestApeTrackNumberTagToApe(t *testing.T) {
-	tag := NewTag(TagTypeApe)
-	tag.Push(NewTagItem(ItemKeyTrackNumber, ItemValueText("1")))
+	tag := meta.NewTag(meta.TagTypeApe)
+	tag.Push(meta.NewTagItem(meta.ItemKeyTrackNumber, meta.ItemValueText("1")))
 	ape := ApeTagFromTag(tag)
 	if n, _ := ape.Track(); n != 1 {
 		t.Fatalf("track = %d", n)
@@ -293,8 +295,8 @@ func TestApeTrackNumberTagToApe(t *testing.T) {
 }
 
 func TestApeTrackTotalTagToApe(t *testing.T) {
-	tag := NewTag(TagTypeApe)
-	tag.Push(NewTagItem(ItemKeyTrackTotal, ItemValueText("2")))
+	tag := meta.NewTag(meta.TagTypeApe)
+	tag.Push(meta.NewTagItem(meta.ItemKeyTrackTotal, meta.ItemValueText("2")))
 	ape := ApeTagFromTag(tag)
 	if n, _ := ape.Track(); n != 0 {
 		t.Fatalf("track = %d, want 0", n)
@@ -305,9 +307,9 @@ func TestApeTrackTotalTagToApe(t *testing.T) {
 }
 
 func TestApeTrackNumberAndTrackTotalTagToApe(t *testing.T) {
-	tag := NewTag(TagTypeApe)
-	tag.Push(NewTagItem(ItemKeyTrackNumber, ItemValueText("1")))
-	tag.Push(NewTagItem(ItemKeyTrackTotal, ItemValueText("2")))
+	tag := meta.NewTag(meta.TagTypeApe)
+	tag.Push(meta.NewTagItem(meta.ItemKeyTrackNumber, meta.ItemValueText("1")))
+	tag.Push(meta.NewTagItem(meta.ItemKeyTrackTotal, meta.ItemValueText("2")))
 	ape := ApeTagFromTag(tag)
 	if n, _ := ape.Track(); n != 1 {
 		t.Fatalf("track = %d", n)
@@ -318,8 +320,8 @@ func TestApeTrackNumberAndTrackTotalTagToApe(t *testing.T) {
 }
 
 func TestApeDiskNumberTagToApe(t *testing.T) {
-	tag := NewTag(TagTypeApe)
-	tag.Push(NewTagItem(ItemKeyDiscNumber, ItemValueText("1")))
+	tag := meta.NewTag(meta.TagTypeApe)
+	tag.Push(meta.NewTagItem(meta.ItemKeyDiscNumber, meta.ItemValueText("1")))
 	ape := ApeTagFromTag(tag)
 	if n, _ := ape.Disk(); n != 1 {
 		t.Fatalf("disk = %d", n)
@@ -330,8 +332,8 @@ func TestApeDiskNumberTagToApe(t *testing.T) {
 }
 
 func TestApeDiskTotalTagToApe(t *testing.T) {
-	tag := NewTag(TagTypeApe)
-	tag.Push(NewTagItem(ItemKeyDiscTotal, ItemValueText("2")))
+	tag := meta.NewTag(meta.TagTypeApe)
+	tag.Push(meta.NewTagItem(meta.ItemKeyDiscTotal, meta.ItemValueText("2")))
 	ape := ApeTagFromTag(tag)
 	if n, _ := ape.Disk(); n != 0 {
 		t.Fatalf("disk = %d, want 0", n)
@@ -342,9 +344,9 @@ func TestApeDiskTotalTagToApe(t *testing.T) {
 }
 
 func TestApeDiskNumberAndDiskTotalTagToApe(t *testing.T) {
-	tag := NewTag(TagTypeApe)
-	tag.Push(NewTagItem(ItemKeyDiscNumber, ItemValueText("1")))
-	tag.Push(NewTagItem(ItemKeyDiscTotal, ItemValueText("2")))
+	tag := meta.NewTag(meta.TagTypeApe)
+	tag.Push(meta.NewTagItem(meta.ItemKeyDiscNumber, meta.ItemValueText("1")))
+	tag.Push(meta.NewTagItem(meta.ItemKeyDiscTotal, meta.ItemValueText("2")))
 	ape := ApeTagFromTag(tag)
 	if n, _ := ape.Disk(); n != 1 {
 		t.Fatalf("disk = %d", n)
@@ -357,8 +359,8 @@ func TestApeDiskNumberAndDiskTotalTagToApe(t *testing.T) {
 // Ported from id3/v2/util/pairs.rs::whitespace_in_number (reached through the
 // ApeTag generic conversion — Rust `set_number` trims before parsing).
 func TestApeWhitespaceInNumber(t *testing.T) {
-	tag := NewTag(TagTypeApe)
-	tag.Push(NewTagItem(ItemKeyTrackNumber, ItemValueText("  12  ")))
+	tag := meta.NewTag(meta.TagTypeApe)
+	tag.Push(meta.NewTagItem(meta.ItemKeyTrackNumber, meta.ItemValueText("  12  ")))
 	ape := ApeTagFromTag(tag)
 	if n, _ := ape.Track(); n != 12 {
 		t.Fatalf("track = %d, want 12", n)
@@ -369,8 +371,8 @@ func TestApeWhitespaceInNumber(t *testing.T) {
 // whitespace-only number text is skipped entirely.
 func TestApeEmptyNumberString(t *testing.T) {
 	for _, text := range []string{"", "        "} {
-		tag := NewTag(TagTypeApe)
-		tag.Push(NewTagItem(ItemKeyTrackNumber, ItemValueText(text)))
+		tag := meta.NewTag(meta.TagTypeApe)
+		tag.Push(meta.NewTagItem(meta.ItemKeyTrackNumber, meta.ItemValueText(text)))
 		ape := ApeTagFromTag(tag)
 		if item, ok := ape.Item("Track"); ok {
 			t.Fatalf("Track item %v written for %q", item, text)
@@ -382,8 +384,8 @@ func TestApeEmptyNumberString(t *testing.T) {
 // with NUL on push, and the generic conversion splits them back out.
 func TestApeSplitTextValues(t *testing.T) {
 	ape := NewApeTag()
-	ape.Push(mustApeItem(t, "Artists", ItemValueText("Serial-ATA")))
-	ape.Push(mustApeItem(t, "Artists", ItemValueText("Lofty")))
+	ape.Push(mustApeItem(t, "Artists", meta.ItemValueText("Serial-ATA")))
+	ape.Push(mustApeItem(t, "Artists", meta.ItemValueText("Lofty")))
 
 	artists, ok := ape.Item("Artists")
 	if !ok {
@@ -396,7 +398,7 @@ func TestApeSplitTextValues(t *testing.T) {
 
 	tag := ape.Tag()
 	var values []string
-	for _, item := range tag.GetItems(ItemKeyTrackArtists) {
+	for _, item := range tag.GetItems(meta.ItemKeyTrackArtists) {
 		s, _ := item.Value().IntoString()
 		values = append(values, s)
 	}
@@ -408,9 +410,9 @@ func TestApeSplitTextValues(t *testing.T) {
 // Ported from ape/tag/mod.rs::merge_text_values — multiple same-key generic
 // items merge into one NUL-separated APE item.
 func TestApeMergeTextValues(t *testing.T) {
-	tag := NewTag(TagTypeApe)
-	tag.PushUnchecked(NewTagItem(ItemKeyTrackArtists, ItemValueText("Serial-ATA")))
-	tag.PushUnchecked(NewTagItem(ItemKeyTrackArtists, ItemValueText("Lofty")))
+	tag := meta.NewTag(meta.TagTypeApe)
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyTrackArtists, meta.ItemValueText("Serial-ATA")))
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyTrackArtists, meta.ItemValueText("Lofty")))
 
 	ape := ApeTagFromTag(tag)
 	if ape.Len() != 1 {
@@ -427,19 +429,19 @@ func TestApeMergeTextValues(t *testing.T) {
 }
 
 func TestApeSkipReadingCoverArt(t *testing.T) {
-	p := PictureUnchecked(make([]byte, 50)).
-		PicType(PictureTypeCoverFront).
-		MimeType(MimeTypeJpeg).
+	p := meta.PictureUnchecked(make([]byte, 50)).
+		PicType(meta.PictureTypeCoverFront).
+		MimeType(meta.MimeTypeJpeg).
 		Build()
-	tag := NewTag(TagTypeApe)
+	tag := meta.NewTag(meta.TagTypeApe)
 	tag.PushPicture(p)
 	tag.SetArtist("Foo artist")
 
 	var buf bytes.Buffer
-	if err := dumpTag(tag, &buf, NewWriteOptions()); err != nil {
+	if err := meta.DumpTag(tag, &buf, meta.NewWriteOptions()); err != nil {
 		t.Fatal(err)
 	}
-	po := NewParseOptions()
+	po := meta.NewParseOptions()
 	po.ReadCoverArt = false
 	ape, header, err := ReadApeTag(bytes.NewReader(buf.Bytes()), false, po)
 	if err != nil || header == nil || ape == nil {

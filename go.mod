@@ -1,6 +1,6 @@
 module github.com/subframe7536/lofty-go
 
-go 1.27.3
+go 1.27
 
 require (
 	github.com/bogem/id3v2/v2 v2.1.4
