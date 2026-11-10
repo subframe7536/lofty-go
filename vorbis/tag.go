@@ -78,17 +78,28 @@ func (t *VorbisCommentsTag) Remove(key ItemKey) {
 	t.items = kept
 }
 
-// RemoveKey deletes all items with the format-specific key.
-func (t *VorbisCommentsTag) RemoveKey(key string) {
+// RemoveKey deletes all items with the format-specific key, returning the
+// removed values, mirroring Rust `VorbisComments::remove`.
+func (t *VorbisCommentsTag) RemoveKey(key string) []string {
 	var kept []TagItem
+	var removed []string
 	for _, i := range t.items {
-		if k, ok := i.Key().MapKey(TagTypeVorbisComments); !ok || k != key {
-			if i.Key() != ItemKeyUnknown || i.Description != key {
-				kept = append(kept, i)
-			}
+		matched := false
+		if k, ok := i.Key().MapKey(TagTypeVorbisComments); ok && k == key {
+			matched = true
+		} else if i.Key() == ItemKeyUnknown && i.Description == key {
+			matched = true
 		}
+		if matched {
+			if s, ok2 := i.Value().IntoString(); ok2 {
+				removed = append(removed, s)
+			}
+			continue
+		}
+		kept = append(kept, i)
 	}
 	t.items = kept
+	return removed
 }
 
 // verifyVorbisKey validates a field name: ASCII 0x20 through 0x7D, '='
@@ -721,4 +732,109 @@ func VorbisCommentsTagForWritePics(input *Tag, vendor string, withPics bool) *Vo
 		}
 	}
 	return vc
+}
+
+// TakeItems removes and returns all items as (key, value) pairs, mirroring
+// Rust `VorbisComments::take_items`.
+func (t *VorbisCommentsTag) TakeItems() [][2]string {
+	out := make([][2]string, 0, len(t.items))
+	for _, i := range t.items {
+		key := i.Description
+		if i.Key() != ItemKeyUnknown {
+			if k, ok := i.Key().MapKey(TagTypeVorbisComments); ok {
+				key = k
+			}
+		}
+		v, _ := i.Value().IntoString()
+		out = append(out, [2]string{key, v})
+	}
+	t.items = nil
+	return out
+}
+
+// SetPicture replaces the picture at `index`, mirroring Rust
+// `OggPictureStorage::set_picture`.
+func (t *VorbisCommentsTag) SetPicture(index int, picture Picture, info PictureInformation) {
+	t.pictures[index] = PictureInfoPair{Picture: picture, Info: info}
+}
+
+// RemovePicture removes and returns the picture at `index`, mirroring Rust
+// `OggPictureStorage::remove_picture`.
+func (t *VorbisCommentsTag) RemovePicture(index int) PictureInfoPair {
+	pic := t.pictures[index]
+	t.pictures = append(t.pictures[:index], t.pictures[index+1:]...)
+	return pic
+}
+
+// RemovePictureType removes all pictures of `pictureType`, mirroring Rust
+// `OggPictureStorage::remove_picture_type`.
+func (t *VorbisCommentsTag) RemovePictureType(pictureType PictureType) {
+	var kept []PictureInfoPair
+	for _, p := range t.pictures {
+		if p.Picture.PicType() != pictureType {
+			kept = append(kept, p)
+		}
+	}
+	t.pictures = kept
+}
+
+// RemovePictures removes and returns all pictures, mirroring Rust
+// `OggPictureStorage::remove_pictures`.
+func (t *VorbisCommentsTag) RemovePictures() []PictureInfoPair {
+	pics := t.pictures
+	t.pictures = nil
+	return pics
+}
+
+// DumpTo writes the tag's metadata packet to a writer, mirroring Rust
+// `VorbisComments::dump_to` — this is only the tag data, not a usable file.
+func (t *VorbisCommentsTag) DumpTo(writer io.Writer, writeOptions WriteOptions) error {
+	data, err := EncodeVorbisComments(t)
+	if err != nil {
+		return &TagEncodingError{TagType: TagTypeVorbisComments, HasTagType: true, Source: err}
+	}
+	_, err = writer.Write(data)
+	return err
+}
+
+// SaveTo writes the tag into a Vorbis/Opus/Speex/FLAC file, mirroring Rust
+// `VorbisComments::save_to`.
+func (t *VorbisCommentsTag) SaveTo(file FileLike, writeOptions WriteOptions) error {
+	vf, err := NewVerifiedFile(file, writeOptions.ParseOptions)
+	if err != nil {
+		return &FileEncodingError{Source: err}
+	}
+	return t.saveToVerified(vf, writeOptions)
+}
+
+// SaveToPath writes the tag to a path.
+func (t *VorbisCommentsTag) SaveToPath(path string, writeOptions WriteOptions) error {
+	vf, f, err := VerifiedFileFromPath(path, writeOptions.ParseOptions)
+	if err != nil {
+		return &FileEncodingError{Source: err}
+	}
+	defer f.Close()
+	return t.saveToVerified(vf, writeOptions)
+}
+
+func (t *VorbisCommentsTag) saveToVerified(vf *VerifiedFile, writeOptions WriteOptions) error {
+	format := vf.Format()
+	support := format.TagSupport(TagTypeVorbisComments)
+	if support == TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
+		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	}
+	if handled, err := WriteConcreteTag(vf, TagTypeVorbisComments, t, writeOptions); handled {
+		return err
+	}
+	return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+}
+
+// RemoveFrom removes a Vorbis comment block from a [FileLike].
+func (t *VorbisCommentsTag) RemoveFrom(file FileLike, writeOptions WriteOptions) error {
+	return TagTypeVorbisComments.RemoveFrom(file, writeOptions)
+}
+
+// RemoveFromPath removes a Vorbis comment block from a path.
+func (t *VorbisCommentsTag) RemoveFromPath(path string, writeOptions WriteOptions) error {
+	return TagTypeVorbisComments.RemoveFromPath(path, writeOptions)
 }

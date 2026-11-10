@@ -40,8 +40,8 @@ func (p AacProperties) FileProperties() FileProperties {
 // AacFile is an ADTS AAC file.
 type AacFile struct {
 	Properties AacProperties
-	ID3v1      Option[*Tag]
-	ID3v2      Option[*Tag]
+	ID3v1      Option[*Id3v1Tag]
+	ID3v2      Option[*Id3v2Tag]
 }
 
 var aacSampleRates = [16]uint32{
@@ -65,7 +65,7 @@ func AacFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*AacFile,
 		return nil, &FileParseError{Source: err}
 	}
 
-	var id3v2Tag *Tag
+	var id3v2Tag *Id3v2Tag
 	pos, _ := reader.Seek(0, io.SeekCurrent)
 	header, _, found2, err := findId3v2(reader, false, parseOptions)
 	if err == nil && found2 {
@@ -76,7 +76,7 @@ func AacFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*AacFile,
 			if _, err := reader.Seek(pos+int64(header.FullTagSize()-header.Size), io.SeekStart); err != nil {
 				return nil, &FileParseError{Source: err}
 			}
-			if t, err := parseId3v2(reader, header, parseOptions); err == nil {
+			if t, err := parseId3v2Tag(reader, header, parseOptions); err == nil {
 				id3v2Tag = t
 			}
 		}
@@ -164,7 +164,7 @@ func AacFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*AacFile,
 	if parseOptions.ReadTags {
 		file.ID3v2 = optionFromPtr(id3v2Tag)
 		if id3v1Tag != nil {
-			file.ID3v1 = Some(id3v1Tag.Tag())
+			file.ID3v1 = Some(id3v1Tag)
 		}
 	}
 	return &file, nil
@@ -216,10 +216,10 @@ func (f *AacFile) ContainsTagType(t TagType) bool {
 func (f *AacFile) TaggedFile() *TaggedFile {
 	var tags []*Tag
 	if t, ok := f.ID3v2.Get(); ok {
-		tags = append(tags, t)
+		tags = append(tags, t.Tag())
 	}
 	if t, ok := f.ID3v1.Get(); ok {
-		tags = append(tags, t)
+		tags = append(tags, t.Tag())
 	}
 	return NewTaggedFile(FileTypeAac, tags, *f.GetProperties())
 }

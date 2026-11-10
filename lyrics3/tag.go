@@ -776,3 +776,81 @@ func init() {
 		return err
 	})
 }
+
+// SaveTo writes the tag into an MPEG file, mirroring Rust `TagExt::save_to`.
+func (t *Lyrics3Tag) SaveTo(file FileLike, writeOptions WriteOptions) error {
+	vf, err := NewVerifiedFile(file, writeOptions.ParseOptions)
+	if err != nil {
+		return &FileEncodingError{Source: err}
+	}
+	format := vf.Format()
+	support := format.TagSupport(TagTypeLyrics3)
+	if support == TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
+		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	}
+	return Lyrics3v1WriteTo(file, t, writeOptions)
+}
+
+// SaveToPath writes the tag to a path.
+func (t *Lyrics3Tag) SaveToPath(path string, writeOptions WriteOptions) error {
+	vf, f, err := VerifiedFileFromPath(path, writeOptions.ParseOptions)
+	if err != nil {
+		return &FileEncodingError{Source: err}
+	}
+	defer f.Close()
+	format := vf.Format()
+	support := format.TagSupport(TagTypeLyrics3)
+	if support == TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
+		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	}
+	return Lyrics3v1WriteTo(vf.File(), t, writeOptions)
+}
+
+// RemoveFrom removes a Lyrics3v1 tag from a [FileLike].
+func (t *Lyrics3Tag) RemoveFrom(file FileLike, writeOptions WriteOptions) error {
+	return TagTypeLyrics3.RemoveFrom(file, writeOptions)
+}
+
+// RemoveFromPath removes a Lyrics3v1 tag from a path.
+func (t *Lyrics3Tag) RemoveFromPath(path string, writeOptions WriteOptions) error {
+	return TagTypeLyrics3.RemoveFromPath(path, writeOptions)
+}
+
+// SaveTo writes the tag into an MPEG file, mirroring Rust `TagExt::save_to`.
+func (t *Lyrics3v2Tag) SaveTo(file FileLike, writeOptions WriteOptions) error {
+	vf, err := NewVerifiedFile(file, writeOptions.ParseOptions)
+	if err != nil {
+		return &FileEncodingError{Source: err}
+	}
+	format := vf.Format()
+	support := format.TagSupport(TagTypeLyrics3v2)
+	if support == TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
+		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	}
+	return Lyrics3v2WriteTo(file, t, writeOptions)
+}
+
+// SaveToPath writes the tag to a path.
+func (t *Lyrics3v2Tag) SaveToPath(path string, writeOptions WriteOptions) error {
+	vf, f, err := VerifiedFileFromPath(path, writeOptions.ParseOptions)
+	if err != nil {
+		return &FileEncodingError{Source: err}
+	}
+	defer f.Close()
+	format := vf.Format()
+	support := format.TagSupport(TagTypeLyrics3v2)
+	if support == TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
+		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	}
+	return Lyrics3v2WriteTo(vf.File(), t, writeOptions)
+}
+
+// RemoveFrom removes a Lyrics3v2 tag from a [FileLike].
+func (t *Lyrics3v2Tag) RemoveFrom(file FileLike, writeOptions WriteOptions) error {
+	return TagTypeLyrics3v2.RemoveFrom(file, writeOptions)
+}
+
+// RemoveFromPath removes a Lyrics3v2 tag from a path.
+func (t *Lyrics3v2Tag) RemoveFromPath(path string, writeOptions WriteOptions) error {
+	return TagTypeLyrics3v2.RemoveFromPath(path, writeOptions)
+}

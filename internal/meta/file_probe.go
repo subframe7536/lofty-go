@@ -19,6 +19,15 @@ func NewProbe(reader io.ReadSeeker) *Probe {
 }
 
 // ProbeWithFileType creates a new [Probe] with the [FileType] already known.
+// NewProbeFromPath creates a [Probe] from a path, mirroring Rust's `Probe::open`.
+func NewProbeFromPath(path string) (*Probe, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, &FileParseError{Source: err}
+	}
+	return &Probe{inner: f, fTy: None[FileType]()}, nil
+}
+
 func ProbeWithFileType(reader io.ReadSeeker, fileType FileType) *Probe {
 	return &Probe{inner: reader, fTy: Some(fileType)}
 }

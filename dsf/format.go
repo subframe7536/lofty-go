@@ -54,7 +54,7 @@ func (p DsfProperties) FileProperties() FileProperties {
 // DsfFile is a DSD Storage Facility file.
 type DsfFile struct {
 	Properties DsfProperties
-	ID3v2      Option[*Tag]
+	ID3v2      Option[*Id3v2Tag]
 }
 
 // DsfFileReadFrom reads a [DsfFile] from a reader.
@@ -141,7 +141,7 @@ func DsfFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*DsfFile,
 	if parseOptions.ReadTags && metadataPtr > 0 && metadataPtr < streamLen {
 		if _, err := reader.Seek(start+int64(metadataPtr), io.SeekStart); err == nil {
 			if header, err := ParseId3v2HeaderRaw(reader); err == nil {
-				if t, err := parseId3v2(reader, header, parseOptions); err == nil {
+				if t, err := parseId3v2Tag(reader, header, parseOptions); err == nil {
 					file.ID3v2 = Some(t)
 				}
 			}
@@ -171,7 +171,7 @@ func (f *DsfFile) ContainsTagType(t TagType) bool {
 func (f *DsfFile) TaggedFile() *TaggedFile {
 	var tags []*Tag
 	if t, ok := f.ID3v2.Get(); ok {
-		tags = append(tags, t)
+		tags = append(tags, t.Tag())
 	}
 	return NewTaggedFile(FileTypeDsf, tags, *f.GetProperties())
 }
@@ -185,7 +185,7 @@ func (f *DsfFile) SavePath(path string, wo WriteOptions) error {
 func (f *DsfFile) SaveFile(file FileLike, wo WriteOptions) error {
 	var tags []*Tag
 	if t, ok := f.ID3v2.Get(); ok {
-		tags = append(tags, t)
+		tags = append(tags, t.Tag())
 	}
 	return SaveTagFields(file, FileTypeDsf, tags, wo)
 }
@@ -197,6 +197,20 @@ func (f *DsfFile) RemoveFromPath(path string, t TagType) error {
 
 // dsfWriteId3v2 writes an ID3v2 tag at the DSF metadata offset (EOF).
 func dsfWriteId3v2(file FileLike, tag *Tag, writeOptions WriteOptions) error {
+	var encoded []byte
+	if !tag.IsEmpty() {
+		var err error
+		encoded, err = Id3v2Serialize(tag, writeOptions)
+		if err != nil {
+			return &FileEncodingError{Source: &TagEncodingError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
+		}
+	}
+	return dsfWriteId3v2Chunk(file, encoded)
+}
+
+// dsfWriteId3v2Chunk writes serialized ID3v2 bytes at the DSF metadata
+// pointer, mirroring Rust `chunk_file::write_to_dsf` (empty removes the tag).
+func dsfWriteId3v2Chunk(file FileLike, encoded []byte) error {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return &FileEncodingError{Source: err}
 	}
@@ -208,14 +222,6 @@ func dsfWriteId3v2(file FileLike, tag *Tag, writeOptions WriteOptions) error {
 		return &FileEncodingError{Source: &FakeTagError{}}
 	}
 	metadataPtr := binary.LittleEndian.Uint64(dsd[20:])
-	var encoded []byte
-	if !tag.IsEmpty() {
-		var err error
-		encoded, err = Id3v2Serialize(tag, writeOptions)
-		if err != nil {
-			return &FileEncodingError{Source: &TagEncodingError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
-		}
-	}
 	if metadataPtr > 0 {
 		end, err := file.Seek(0, io.SeekEnd)
 		if err != nil {
@@ -306,5 +312,8 @@ func init() {
 			return &FileEncodingError{Source: &UnsupportedTagError{}}
 		}
 		return dsfWriteId3v2(file.File(), tag, writeOptions)
+	})
+	RegisterConcreteTagWriter(FileTypeDsf, TagTypeID3v2, func(file *VerifiedFile, tag any, writeOptions WriteOptions) error {
+		return dsfWriteId3v2Chunk(file.File(), tag.([]byte))
 	})
 }

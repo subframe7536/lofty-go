@@ -54,8 +54,12 @@ func (t *TaggedFile) PrimaryTag() *Tag {
 	return nil
 }
 
-// PrimaryTagMut returns the file's primary tag, creating it if missing.
-func (t *TaggedFile) PrimaryTagMut() *Tag {
+// PrimaryTagMut returns the file's primary tag, or nil if it doesn't exist.
+func (t *TaggedFile) PrimaryTagMut() *Tag { return t.PrimaryTag() }
+
+// PrimaryTagMutOrInsert inserts a new tag of the file's primary tag type if it
+// doesn't exist, otherwise returns the existing tag.
+func (t *TaggedFile) PrimaryTagMutOrInsert() *Tag {
 	if tag := t.PrimaryTag(); tag != nil {
 		return tag
 	}
@@ -63,12 +67,6 @@ func (t *TaggedFile) PrimaryTagMut() *Tag {
 	t.tags = append(t.tags, tag)
 	return tag
 }
-
-// PrimaryTagMutOrInsert inserts a new tag of the file's primary tag type if it
-// doesn't exist, otherwise returns the existing tag.
-//
-// This is equivalent to [TaggedFile.PrimaryTagMut].
-func (t *TaggedFile) PrimaryTagMutOrInsert() *Tag { return t.PrimaryTagMut() }
 
 // FirstTag returns the first tag in the file.
 func (t *TaggedFile) FirstTag() *Tag {

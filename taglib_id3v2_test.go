@@ -58,7 +58,7 @@ func TestTaglibId3v2UnsynchDecode(t *testing.T) {
 	if !ok {
 		t.Fatal("no id3v2")
 	}
-	if s, _ := tag.Title(); s != "My babe just cares for me" {
+	if s := tag.Title(); s != "My babe just cares for me" {
 		t.Fatalf("title = %q", s)
 	}
 }
@@ -91,7 +91,7 @@ func TestTaglibId3v2PopmFromFile(t *testing.T) {
 	if !ok {
 		t.Fatal("no id3v2")
 	}
-	item := tag.Get(ItemKeyPopularimeter)
+	item := tag.Tag().Get(ItemKeyPopularimeter)
 	if item == nil {
 		t.Fatal("no POPM")
 	}
@@ -118,7 +118,7 @@ func TestTaglibId3v2CompressedFrameBrokenLength(t *testing.T) {
 	if !ok {
 		t.Fatal("no id3v2")
 	}
-	pics := tag.Pictures()
+	pics := tag.Tag().Pictures()
 	if len(pics) != 1 {
 		t.Fatalf("pictures = %d", len(pics))
 	}
@@ -151,7 +151,7 @@ func TestTaglibId3v2W000(t *testing.T) {
 		t.Fatal("no id3v2")
 	}
 	var found bool
-	if companion, ok := tag.CompanionTag().(*id3v2.Id3v2Tag); ok {
+	if companion, ok := tag.Tag().CompanionTag().(*id3v2.Id3v2Tag); ok {
 		for _, f := range companion.Frames.Frames() {
 			if wf, ok := f.(*id3v2.UrlLinkFrame); ok && wf.ID().String() == "W000" {
 				if wf.Content != "lukas.lalinsky@example.com____" {
@@ -176,7 +176,7 @@ func TestTaglibId3v2SaveUtf16Comment(t *testing.T) {
 		}
 		tag := NewTag(TagTypeID3v2)
 		tag.SetComment("Test comment!")
-		mf.ID3v2 = Some(tag)
+		mf.ID3v2 = Some(Id3v2TagFromTag(tag))
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
 			t.Fatal(err)
 		}
@@ -192,7 +192,7 @@ func TestTaglibId3v2SaveUtf16Comment(t *testing.T) {
 		t.Fatal(err)
 	}
 	tag, _ := mf.ID3v2.Get()
-	if s, _ := tag.Comment(); s != "Test comment!" {
+	if s := tag.Comment(); s != "Test comment!" {
 		t.Fatalf("comment = %q", s)
 	}
 }
@@ -232,7 +232,7 @@ func TestTaglibId3v2UpdateDate22(t *testing.T) {
 	if !ok {
 		t.Fatal("no id3v2")
 	}
-	if d, ok := tag.Date().Get(); !ok || d.Year != 2010 {
+	if d, ok := tag.Tag().Date().Get(); !ok || d.Year != 2010 {
 		t.Fatalf("date = %v", tag.Date())
 	}
 }
@@ -278,18 +278,18 @@ func TestTaglibId3v2DowngradeTo23(t *testing.T) {
 	if !ok {
 		t.Fatal("no id3v2")
 	}
-	if tag.OriginalVersion != 3 {
-		t.Fatalf("version = %d", tag.OriginalVersion)
+	if tag.OriginalVersion() != 3 {
+		t.Fatalf("version = %d", tag.OriginalVersion())
 	}
 	// TORY from TDOR (year only)
-	if s, _ := tag.GetString(ItemKeyOriginalReleaseDate); s != "2011" {
+	if s, _ := tag.Tag().GetString(ItemKeyOriginalReleaseDate); s != "2011" {
 		t.Fatalf("original date = %q", s)
 	}
 	// TYER+TDAT+TIME recombined by the upgrade path
-	if d, ok := tag.Date().Get(); !ok || d.Year != 2012 {
+	if d, ok := tag.Tag().Date().Get(); !ok || d.Year != 2012 {
 		t.Fatalf("date = %v", tag.Date())
 	}
-	genres := tag.GetStrings(ItemKeyGenre)
+	genres := tag.Tag().GetStrings(ItemKeyGenre)
 	if len(genres) != 3 || genres[0] != "Techno-Industrial" || genres[1] != "Noise" || genres[2] != "Power Noise" {
 		t.Fatalf("genres = %v", genres)
 	}
@@ -299,15 +299,15 @@ func TestTaglibId3v2DowngradeTo23(t *testing.T) {
 		ItemKeyAlbumTitleSortOrder, ItemKeyTrackTitleSortOrder,
 		ItemKeyTrackArtistSortOrder, ItemKeySetSubtitle,
 	} {
-		if item := tag.Get(k); item != nil {
+		if item := tag.Tag().Get(k); item != nil {
 			t.Fatalf("%v not dropped", k)
 		}
 	}
 	// TIPL/TMCL merged into IPLS — re-reads as involved-people items
-	if s, _ := tag.GetString(ItemKeyProducer); s != "Artist 3" {
+	if s, _ := tag.Tag().GetString(ItemKeyProducer); s != "Artist 3" {
 		t.Fatalf("producer = %q", s)
 	}
-	if s, _ := tag.GetString(ItemKeyEngineer); s != "Artist 2" {
+	if s, _ := tag.Tag().GetString(ItemKeyEngineer); s != "Artist 2" {
 		t.Fatalf("engineer = %q", s)
 	}
 	// Byte-level check on the written header
@@ -380,7 +380,7 @@ func TestTaglibId3v2DeleteFrame(t *testing.T) {
 		t.Fatal(err)
 	}
 	tag, _ := mf.ID3v2.Get()
-	if _, ok := tag.Genre(); ok {
+	if _, ok := tag.Tag().Genre(); ok {
 		t.Fatal("TCON not removed")
 	}
 }
@@ -395,7 +395,7 @@ func TestTaglibId3v2SaveAndStripId3v1(t *testing.T) {
 		}
 		tag := NewTag(TagTypeID3v2)
 		tag.SetArtist("Artist")
-		mf.ID3v2 = Some(tag)
+		mf.ID3v2 = Some(Id3v2TagFromTag(tag))
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
 			t.Fatal(err)
 		}
@@ -450,7 +450,7 @@ func TestTaglibId3v2TocManyChildren(t *testing.T) {
 	}
 	// Rust sees 130 frames: 1 CTOC + 129 CHAP — all retained in the companion
 	// tag (chapters have no generic-ItemKey mapping).
-	companion, ok := tag.CompanionTag().(*id3v2.Id3v2Tag)
+	companion, ok := tag.Tag().CompanionTag().(*id3v2.Id3v2Tag)
 	if !ok || companion == nil {
 		t.Fatal("no companion Id3v2Tag")
 	}
@@ -617,7 +617,7 @@ func TestTaglibId3v2SaveStripNoId3v1Migration(t *testing.T) {
 	}
 	tag := NewTag(TagTypeID3v2)
 	tag.SetArtist("Artist")
-	mf.ID3v2 = Some(tag)
+	mf.ID3v2 = Some(Id3v2TagFromTag(tag))
 	if err := mf.SaveFile(NewOSFile(f), NewWriteOptions()); err != nil {
 		t.Fatal(err)
 	}

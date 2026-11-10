@@ -9,6 +9,8 @@ import (
 type Id3v2Version = byte
 
 const (
+	// Id3v2Version2 is ID3v2.2.
+	Id3v2Version2 Id3v2Version = 2
 	// Id3v2Version3 is ID3v2.3.
 	Id3v2Version3 Id3v2Version = 3
 	// Id3v2Version4 is ID3v2.4.
@@ -362,6 +364,16 @@ func (t *Tag) Clear() {
 // and is meant for use on a file by itself.
 func (t *Tag) DumpTo(writer io.Writer, writeOptions WriteOptions) error {
 	return DumpTag(t, writer, writeOptions)
+}
+
+// RemoveFrom removes a tag of this type from a [FileLike].
+func (t *Tag) RemoveFrom(file FileLike, writeOptions WriteOptions) error {
+	return t.tagType.RemoveFrom(file, writeOptions)
+}
+
+// RemoveFromPath removes a tag of this type from a path.
+func (t *Tag) RemoveFromPath(path string, writeOptions WriteOptions) error {
+	return t.tagType.RemoveFromPath(path, writeOptions)
 }
 
 // SaveTo writes the tag to a [FileLike].

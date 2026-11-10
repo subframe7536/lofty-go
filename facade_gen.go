@@ -104,6 +104,7 @@ type (
 	FormatReader               = meta.FormatReader
 	FormatWriter               = meta.FormatWriter
 	TagDumper                  = meta.TagDumper
+	ConcreteTagWriter          = meta.ConcreteTagWriter
 	VerifiedFile               = meta.VerifiedFile
 )
 
@@ -226,9 +227,11 @@ type (
 	Mp4File         = mp4.Mp4File
 	AtomDataKind    = mp4.AtomDataKind
 	AtomData        = mp4.AtomData
+	DataType        = mp4.DataType
 	AtomIdent       = mp4.AtomIdent
 	Atom            = mp4.Atom
 	Ilst            = mp4.Ilst
+	AdvisoryRating  = mp4.AdvisoryRating
 )
 
 // from iff
@@ -238,6 +241,7 @@ type (
 	RiffInfoTag              = iff.RiffInfoTag
 	AiffComment              = iff.AiffComment
 	AiffTextTag              = iff.AiffTextTag
+	WavFormat                = iff.WavFormat
 	WavProperties            = iff.WavProperties
 	WavFile                  = iff.WavFile
 	AiffCompressionType      = iff.AiffCompressionType
@@ -252,6 +256,7 @@ type (
 	MpegLayer       = mpeg.MpegLayer
 	ChannelMode     = mpeg.ChannelMode
 	MpegChannelMode = mpeg.MpegChannelMode
+	Emphasis        = mpeg.Emphasis
 	MpegProperties  = mpeg.MpegProperties
 	MpegFile        = mpeg.MpegFile
 )
@@ -366,6 +371,7 @@ const (
 	TimestampParseErrorUnexpectedChar   = meta.TimestampParseErrorUnexpectedChar
 	TimestampParseErrorFieldTooLarge    = meta.TimestampParseErrorFieldTooLarge
 	TimestampParseErrorIo               = meta.TimestampParseErrorIo
+	Id3v2Version2                       = meta.Id3v2Version2
 	Id3v2Version3                       = meta.Id3v2Version3
 	Id3v2Version4                       = meta.Id3v2Version4
 	ItemValueKindText                   = meta.ItemValueKindText
@@ -600,6 +606,42 @@ const (
 	AtomDataSignedInt                    = mp4.AtomDataSignedInt
 	AtomDataUnsignedInt                  = mp4.AtomDataUnsignedInt
 	AtomDataUnknown                      = mp4.AtomDataUnknown
+	DataTypeReserved                     = mp4.DataTypeReserved
+	DataTypeUtf8                         = mp4.DataTypeUtf8
+	DataTypeUtf16                        = mp4.DataTypeUtf16
+	DataTypeSJis                         = mp4.DataTypeSJis
+	DataTypeUtf8Sort                     = mp4.DataTypeUtf8Sort
+	DataTypeUtf16Sort                    = mp4.DataTypeUtf16Sort
+	DataTypeGif                          = mp4.DataTypeGif
+	DataTypeJpeg                         = mp4.DataTypeJpeg
+	DataTypePng                          = mp4.DataTypePng
+	DataTypeBeSignedInteger              = mp4.DataTypeBeSignedInteger
+	DataTypeBeUnsignedInteger            = mp4.DataTypeBeUnsignedInteger
+	DataTypeBeFloat32                    = mp4.DataTypeBeFloat32
+	DataTypeBeFloat64                    = mp4.DataTypeBeFloat64
+	DataTypeBmp                          = mp4.DataTypeBmp
+	DataTypeQuicktimeMetadata            = mp4.DataTypeQuicktimeMetadata
+	DataTypeSigned8BitInteger            = mp4.DataTypeSigned8BitInteger
+	DataTypeBe16BitSignedInteger         = mp4.DataTypeBe16BitSignedInteger
+	DataTypeBe32BitSignedInteger         = mp4.DataTypeBe32BitSignedInteger
+	DataTypeBePointF32                   = mp4.DataTypeBePointF32
+	DataTypeBeDimensionsF32              = mp4.DataTypeBeDimensionsF32
+	DataTypeBeRectF32                    = mp4.DataTypeBeRectF32
+	DataTypeBe64BitSignedInteger         = mp4.DataTypeBe64BitSignedInteger
+	DataTypeUnsigned8BitInteger          = mp4.DataTypeUnsigned8BitInteger
+	DataTypeBe16BitUnsignedInteger       = mp4.DataTypeBe16BitUnsignedInteger
+	DataTypeBe32BitUnsignedInteger       = mp4.DataTypeBe32BitUnsignedInteger
+	DataTypeBe64BitUnsignedInteger       = mp4.DataTypeBe64BitUnsignedInteger
+	DataTypeAffineTransformF64           = mp4.DataTypeAffineTransformF64
+	AdvisoryRatingInoffensive            = mp4.AdvisoryRatingInoffensive
+	AdvisoryRatingExplicit               = mp4.AdvisoryRatingExplicit
+	AdvisoryRatingClean                  = mp4.AdvisoryRatingClean
+)
+
+// from iff
+const (
+	WavFormatPCM       = iff.WavFormatPCM
+	WavFormatIeeeFloat = iff.WavFormatIeeeFloat
 )
 
 // from mpeg
@@ -616,6 +658,9 @@ const (
 	ChannelModeJointStereo = mpeg.ChannelModeJointStereo
 	ChannelModeDualChannel = mpeg.ChannelModeDualChannel
 	ChannelModeMono        = mpeg.ChannelModeMono
+	EmphasisMS5015         = mpeg.EmphasisMS5015
+	EmphasisReserved       = mpeg.EmphasisReserved
+	EmphasisCCITJ17        = mpeg.EmphasisCCITJ17
 )
 
 // from dsf
@@ -723,6 +768,9 @@ func RemoveTagFromPath(path string, tagType TagType) error {
 }
 func NewProbe(reader io.ReadSeeker) *Probe {
 	return meta.NewProbe(reader)
+}
+func NewProbeFromPath(path string) (*Probe, error) {
+	return meta.NewProbeFromPath(path)
 }
 func ProbeWithFileType(reader io.ReadSeeker, fileType FileType) *Probe {
 	return meta.ProbeWithFileType(reader, fileType)
@@ -879,6 +927,12 @@ func RegisterFormatWriter(fileType FileType, writer FormatFileWriter) {
 }
 func RegisterTagDumper(tagType TagType, dumper TagDumper) {
 	meta.RegisterTagDumper(tagType, dumper)
+}
+func RegisterConcreteTagWriter(fileType FileType, tagType TagType, writer ConcreteTagWriter) {
+	meta.RegisterConcreteTagWriter(fileType, tagType, writer)
+}
+func WriteConcreteTag(file *VerifiedFile, tagType TagType, tag any, writeOptions WriteOptions) (bool, error) {
+	return meta.WriteConcreteTag(file, tagType, tag, writeOptions)
 }
 func WriteTag(tag *Tag, file *VerifiedFile, writeOptions WriteOptions) error {
 	return meta.WriteTag(tag, file, writeOptions)
@@ -1281,6 +1335,12 @@ func FindId3v2InJunk(reader io.Reader) (int64, bool) {
 func Id3v2Deunsync(data []byte) []byte {
 	return id3v2.Id3v2Deunsync(data)
 }
+func UpgradeV2(id string) (string, bool) {
+	return id3v2.UpgradeV2(id)
+}
+func UpgradeV3(id string) (string, bool) {
+	return id3v2.UpgradeV3(id)
+}
 
 // from vorbis
 func NewVorbisCommentsTag() *VorbisCommentsTag {
@@ -1360,6 +1420,9 @@ func Mp4FileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*Mp4File,
 func EncodeMp4Ilst(tag *Tag) ([]byte, error) {
 	return mp4.EncodeMp4Ilst(tag)
 }
+func DataTypeOther(code uint32) DataType {
+	return mp4.DataTypeOther(code)
+}
 func FourccIdent(name string) AtomIdent {
 	return mp4.FourccIdent(name)
 }
@@ -1382,6 +1445,9 @@ func RiffInfoTagFromTag(input *Tag) *RiffInfoTag {
 }
 func AiffTextTagFromTag(input *Tag) *AiffTextTag {
 	return iff.AiffTextTagFromTag(input)
+}
+func WavFormatOther(tag uint16) WavFormat {
+	return iff.WavFormatOther(tag)
 }
 func WavFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*WavFile, error) {
 	return iff.WavFileReadFrom(reader, parseOptions)

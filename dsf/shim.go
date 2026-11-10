@@ -68,7 +68,6 @@ var (
 	FindId3v2            = id3v2.FindId3v2
 	ParseId3v2           = id3v2.ParseId3v2
 	ParseId3v2HeaderRaw  = id3v2.ParseId3v2HeaderRaw
-	parseId3v2           = id3v2.ParseId3v2
 	WriteId3v1           = id3v1.WriteId3v1
 	WriteId3v2           = id3v2.WriteId3v2
 	Id3v1TagFromTag      = id3v1.Id3v1TagFromTag
@@ -104,3 +103,22 @@ const (
 	ChannelMaskMono           = meta.ChannelMaskMono
 	ChannelMaskStereo         = meta.ChannelMaskStereo
 )
+
+// Aliases for concrete-tag writes (Rust `TagExt` parity).
+type (
+	Id3v2Tag   = id3v2.Id3v2Tag
+	TagSupport = meta.TagSupport
+)
+
+const (
+	TagSupportUnsupported = meta.TagSupportUnsupported
+)
+
+var (
+	NewVerifiedFile           = meta.NewVerifiedFile
+	VerifiedFileFromPath      = meta.VerifiedFileFromPath
+	WriteConcreteTag          = meta.WriteConcreteTag
+	RegisterConcreteTagWriter = meta.RegisterConcreteTagWriter
+)
+
+var parseId3v2Tag = id3v2.ParseId3v2Tag

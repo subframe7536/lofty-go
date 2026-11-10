@@ -90,3 +90,5 @@ var (
 var divRound = util.DivRound
 
 func optionFromPtr[T any](p *T) Option[*T] { return util.OptionFromPtr(p) }
+
+var RegisterConcreteTagWriter = meta.RegisterConcreteTagWriter

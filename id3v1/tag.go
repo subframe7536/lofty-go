@@ -394,3 +394,42 @@ var Id3v1Genres = []string{
 	"Neue Deutsche Welle", "Podcast", "Indie-Rock", "G-Funk", "Dubstep", "Garage Rock",
 	"Psybient",
 }
+
+// SaveTo writes the tag to a [FileLike], mirroring Rust `TagExt::save_to`.
+func (t *Id3v1Tag) SaveTo(file FileLike, writeOptions WriteOptions) error {
+	vf, err := NewVerifiedFile(file, writeOptions.ParseOptions)
+	if err != nil {
+		return &FileEncodingError{Source: err}
+	}
+	format := vf.Format()
+	support := format.TagSupport(TagTypeID3v1)
+	if support == TagSupportUnsupported || (!support.IsWritable() && !t.isEmpty()) {
+		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	}
+	return WriteId3v1(file, t, writeOptions)
+}
+
+// SaveToPath writes the tag to a path.
+func (t *Id3v1Tag) SaveToPath(path string, writeOptions WriteOptions) error {
+	vf, f, err := VerifiedFileFromPath(path, writeOptions.ParseOptions)
+	if err != nil {
+		return &FileEncodingError{Source: err}
+	}
+	defer f.Close()
+	format := vf.Format()
+	support := format.TagSupport(TagTypeID3v1)
+	if support == TagSupportUnsupported || (!support.IsWritable() && !t.isEmpty()) {
+		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	}
+	return WriteId3v1(vf.File(), t, writeOptions)
+}
+
+// RemoveFrom removes an ID3v1 tag from a [FileLike].
+func (t *Id3v1Tag) RemoveFrom(file FileLike, writeOptions WriteOptions) error {
+	return TagTypeID3v1.RemoveFrom(file, writeOptions)
+}
+
+// RemoveFromPath removes an ID3v1 tag from a path.
+func (t *Id3v1Tag) RemoveFromPath(path string, writeOptions WriteOptions) error {
+	return TagTypeID3v1.RemoveFromPath(path, writeOptions)
+}

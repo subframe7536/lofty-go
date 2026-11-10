@@ -62,19 +62,32 @@ const (
 type MpegChannelMode = ChannelMode
 
 // mpegHeader is a parsed 4-byte MPEG frame header.
+// Emphasis is the MPEG emphasis field, mirroring Rust's `Emphasis`.
+type Emphasis uint8
+
+const (
+	// EmphasisMS5015 is 50/15 ms de-emphasis.
+	EmphasisMS5015 Emphasis = 1
+	// EmphasisReserved is a reserved value.
+	EmphasisReserved Emphasis = 2
+	// EmphasisCCITJ17 is CCIT J.17 de-emphasis.
+	EmphasisCCITJ17 Emphasis = 3
+)
+
 type mpegHeader struct {
-	version     MpegVersion
-	layer       MpegLayer
-	bitrate     uint32 // kbps
-	sampleRate  uint32 // Hz
-	channels    uint8
-	channelMode ChannelMode
-	frameLen    uint32
-	samples     uint32
-	copyrighted bool
-	original    bool
-	crc         bool
-	emphasis    uint8
+	version       MpegVersion
+	layer         MpegLayer
+	bitrate       uint32 // kbps
+	sampleRate    uint32 // Hz
+	channels      uint8
+	channelMode   ChannelMode
+	modeExtension Option[uint8]
+	frameLen      uint32
+	samples       uint32
+	copyrighted   bool
+	original      bool
+	crc           bool
+	emphasis      Option[Emphasis]
 }
 
 // Bitrate lookup tables [version!=1][layer][index].
@@ -111,7 +124,10 @@ func parseMpegHeader(b []byte, firstHeader *mpegHeader) (*mpegHeader, error) {
 	if (h>>21)&0x7FF != 0x7FF {
 		return nil, errBadHeader
 	}
-	h2 := &mpegHeader{emphasis: uint8(h & 3)}
+	h2 := &mpegHeader{}
+	if e := Emphasis(h & 3); e != 0 {
+		h2.emphasis = Some(e)
+	}
 	ver := (h >> 19) & 3
 	switch ver {
 	case 0:
@@ -168,6 +184,9 @@ func parseMpegHeader(b []byte, firstHeader *mpegHeader) (*mpegHeader, error) {
 
 	padding := (h >> 9) & 1
 	h2.channelMode = ChannelMode((h >> 6) & 3)
+	if h2.channelMode == ChannelModeJointStereo {
+		h2.modeExtension = Some(uint8((h >> 4) & 3))
+	}
 	if h2.channelMode == ChannelModeMono {
 		h2.channels = 1
 	} else {
@@ -333,7 +352,8 @@ type MpegProperties struct {
 	Copyrighted     bool
 	Original        bool
 	CRC             bool
-	Emphasis        uint8
+	Emphasis        Option[Emphasis]
+	ModeExtension   Option[uint8]
 	VBR             bool
 	Encoder         Option[string]
 	EncoderSettings Option[string]
@@ -361,15 +381,16 @@ func mpegReadProperties(
 	fileLength uint64,
 ) *MpegProperties {
 	p := &MpegProperties{
-		Version:     firstHeader.version,
-		Layer:       firstHeader.layer,
-		SampleRate:  firstHeader.sampleRate,
-		Channels:    firstHeader.channels,
-		ChannelMode: firstHeader.channelMode,
-		Copyrighted: firstHeader.copyrighted,
-		Original:    firstHeader.original,
-		CRC:         firstHeader.crc,
-		Emphasis:    firstHeader.emphasis,
+		Version:       firstHeader.version,
+		Layer:         firstHeader.layer,
+		SampleRate:    firstHeader.sampleRate,
+		Channels:      firstHeader.channels,
+		ChannelMode:   firstHeader.channelMode,
+		Copyrighted:   firstHeader.copyrighted,
+		Original:      firstHeader.original,
+		CRC:           firstHeader.crc,
+		Emphasis:      firstHeader.emphasis,
+		ModeExtension: firstHeader.modeExtension,
 	}
 
 	// Check for VBR headers
@@ -499,7 +520,7 @@ func (h *mpegHeader) cmp(other *mpegHeader) bool {
 type MpegFile struct {
 	Properties MpegProperties
 	ID3v1      Option[*Id3v1Tag]
-	ID3v2      Option[*Tag]
+	ID3v2      Option[*Id3v2Tag]
 	APE        Option[*ApeTag]
 	Lyrics3    Option[*Lyrics3Tag]
 	Lyrics3v2  Option[*Lyrics3v2Tag]
@@ -540,17 +561,14 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*MpegFil
 				return nil, &FileParseError{Source: &TagParseError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
 			}
 			if parseOptions.ReadTags {
-				tag, err := parseId3v2(reader, header, parseOptions)
+				tag, err := parseId3v2Tag(reader, header, parseOptions)
 				if err != nil {
 					return nil, &FileParseError{Source: &TagParseError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
 				}
 				if existing, ok := file.ID3v2.Get(); ok {
 					// Merge duplicate tags; frames in later tags replace earlier ones
-					for _, item := range tag.Items() {
-						existing.InsertUnchecked(item)
-					}
-					for _, pic := range tag.Pictures() {
-						existing.PushPicture(pic)
+					for _, fr := range tag.Frames.Frames() {
+						existing.Frames.Insert(fr)
 					}
 					continue
 				}
@@ -641,7 +659,7 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*MpegFil
 					contentStart -= 10
 				}
 				if _, err := reader.Seek(contentStart, io.SeekStart); err == nil {
-					tag, err := parseId3v2(reader, header, parseOptions)
+					tag, err := parseId3v2Tag(reader, header, parseOptions)
 					if err == nil {
 						file.ID3v2 = Some(tag)
 					}
@@ -754,7 +772,7 @@ func (f *MpegFile) ContainsTagType(tagType TagType) bool {
 func (f *MpegFile) TaggedFile() *TaggedFile {
 	var tags []*Tag
 	if t, ok := f.ID3v2.Get(); ok {
-		tags = append(tags, t)
+		tags = append(tags, t.Tag())
 	}
 	if t, ok := f.ID3v1.Get(); ok {
 		tags = append(tags, t.Tag())
@@ -794,7 +812,7 @@ func (f *MpegFile) primaryTagType() TagType {
 func (f *MpegFile) SaveFile(file FileLike, writeOptions WriteOptions) error {
 	// Write ID3v2 at the start, ID3v1 at the end
 	if t, ok := f.ID3v2.Get(); ok {
-		if err := WriteId3v2(file, t, writeOptions); err != nil {
+		if err := t.SaveToVerified(NewVerifiedFileOf(FileTypeMpeg, file), writeOptions); err != nil {
 			return err
 		}
 	}

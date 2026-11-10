@@ -384,9 +384,25 @@ func aiffParseComt(reader io.ReadSeeker, size int64, text *AiffTextTag, parseOpt
 
 // --- WAV ---
 
+// WavFormat is the WAV format tag, mirroring Rust's `WavFormat`.
+type WavFormat uint16
+
+const (
+	// WavFormatPCM is pulse-code modulation (uncompressed).
+	WavFormatPCM WavFormat = 0x0001
+	// WavFormatIeeeFloat is IEEE 754 floating-point.
+	WavFormatIeeeFloat WavFormat = 0x0003
+)
+
+// WavFormatOther wraps a non-PCM format tag, mirroring `WavFormat::Other`.
+func WavFormatOther(tag uint16) WavFormat { return WavFormat(tag) }
+
+// IsOther reports whether the format is neither PCM nor IEEE float.
+func (f WavFormat) IsOther() bool { return f != WavFormatPCM && f != WavFormatIeeeFloat }
+
 // WavProperties are the audio properties of a WAV file.
 type WavProperties struct {
-	Format         uint16
+	Format         WavFormat
 	Duration       time.Duration
 	OverallBitrate uint32
 	AudioBitrate   uint32
@@ -413,7 +429,7 @@ func (p WavProperties) FileProperties() FileProperties {
 type WavFile struct {
 	Properties WavProperties
 	RiffInfo   Option[*RiffInfoTag]
-	ID3v2      Option[*Tag]
+	ID3v2      Option[*Id3v2Tag]
 }
 
 // WavFileReadFrom reads a [WavFile] from a reader.
@@ -441,7 +457,7 @@ func WavFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*WavFile,
 	}
 
 	var info *RiffInfoTag
-	var id3v2Tag *Tag
+	var id3v2Tag *Id3v2Tag
 	var fmtData []byte
 	var totalSamples, streamLen uint32
 
@@ -479,7 +495,7 @@ func WavFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*WavFile,
 			if parseOptions.ReadTags {
 				header, err := ParseId3v2HeaderRaw(reader)
 				if err == nil {
-					t, err := parseId3v2(reader, header, parseOptions)
+					t, err := parseId3v2Tag(reader, header, parseOptions)
 					if err == nil {
 						id3v2Tag = t
 					}
@@ -608,7 +624,7 @@ func wavReadProperties(fmt []byte, totalSamples, streamLen uint32, fileLength ui
 		totalSamples = streamLen / (uint32(channels) * uint32(bitsPerSample/8))
 	}
 
-	p.Format = formatTag
+	p.Format = WavFormat(formatTag)
 	p.Channels = uint8(channels)
 	p.SampleRate = sampleRate
 	p.BitDepth = bitDepth
@@ -698,7 +714,7 @@ func (f *WavFile) TaggedFile() *TaggedFile {
 		tags = append(tags, t.Tag())
 	}
 	if t, ok := f.ID3v2.Get(); ok {
-		tags = append(tags, t)
+		tags = append(tags, t.Tag())
 	}
 	return NewTaggedFile(FileTypeWav, tags, *f.GetProperties())
 }
@@ -715,7 +731,7 @@ func (f *WavFile) SaveFile(file FileLike, wo WriteOptions) error {
 		tags = append(tags, t.Tag())
 	}
 	if t, ok := f.ID3v2.Get(); ok {
-		tags = append(tags, t)
+		tags = append(tags, t.Tag())
 	}
 	return SaveTagFields(file, FileTypeWav, tags, wo)
 }
@@ -733,7 +749,12 @@ func wavWriteTag(file FileLike, tag *Tag, writeOptions WriteOptions) error {
 	return wavWriteRiffInfo(file, tag, writeOptions)
 }
 
-func wavWriteRiffInfo(file FileLike, tag *Tag, _ WriteOptions) error {
+func wavWriteRiffInfo(file FileLike, tag *Tag, writeOptions WriteOptions) error {
+	return wavWriteRiffInfoTag(file, RiffInfoTagFromTag(tag), writeOptions)
+}
+
+// wavWriteRiffInfoTag replaces or adds a LIST/INFO chunk from a concrete tag.
+func wavWriteRiffInfoTag(file FileLike, tag *RiffInfoTag, _ WriteOptions) error {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return &FileEncodingError{Source: err}
 	}
@@ -776,8 +797,7 @@ func wavWriteRiffInfo(file FileLike, tag *Tag, _ WriteOptions) error {
 	// Encode the INFO list
 	var encoded []byte
 	if !tag.IsEmpty() {
-		info := RiffInfoTagFromTag(tag)
-		encoded = riffInfoListBytes(info)
+		encoded = riffInfoListBytes(tag)
 	}
 
 	if err := wavInsertChunk(file, listStart, listEnd, encoded); err != nil {
@@ -869,6 +889,20 @@ func wavInsertChunk(file FileLike, chunkStart, chunkEnd int64, encoded []byte) e
 
 // wavWriteId3v2 replaces or adds an "ID3 "/id3 chunk.
 func wavWriteId3v2(file FileLike, tag *Tag, writeOptions WriteOptions) error {
+	var body []byte
+	if !tag.IsEmpty() {
+		var err error
+		body, err = Id3v2Serialize(tag, writeOptions)
+		if err != nil {
+			return &FileEncodingError{Source: &TagEncodingError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
+		}
+	}
+	return wavWriteId3v2Chunk(file, body, writeOptions)
+}
+
+// wavWriteId3v2Chunk replaces or adds an "ID3 "/id3 chunk from serialized
+// ID3v2 bytes (empty removes the chunk).
+func wavWriteId3v2Chunk(file FileLike, body []byte, writeOptions WriteOptions) error {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return &FileEncodingError{Source: err}
 	}
@@ -897,13 +931,13 @@ func wavWriteId3v2(file FileLike, tag *Tag, writeOptions WriteOptions) error {
 		}
 	}
 	var encoded bytes.Buffer
-	if !tag.IsEmpty() {
-		body, err := Id3v2Serialize(tag, writeOptions)
-		if err != nil {
-			return &FileEncodingError{Source: &TagEncodingError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
+	if len(body) > 0 {
+		name := "id3 "
+		if writeOptions.UppercaseId3v2Chunk {
+			name = "ID3 "
 		}
 		size := uint32(len(body))
-		encoded.WriteString("id3 ")
+		encoded.WriteString(name)
 		var szb [4]byte
 		binary.LittleEndian.PutUint32(szb[:], size)
 		encoded.Write(szb[:])
@@ -1003,7 +1037,7 @@ func (p AiffProperties) FileProperties() FileProperties {
 type AiffFile struct {
 	Properties AiffProperties
 	TextChunks Option[*AiffTextTag]
-	ID3v2      Option[*Tag]
+	ID3v2      Option[*Id3v2Tag]
 }
 
 // AiffFileReadFrom reads an [AiffFile] from a reader.
@@ -1037,7 +1071,7 @@ func AiffFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*AiffFil
 	_ = isAifc
 
 	var text *AiffTextTag
-	var id3v2Tag *Tag
+	var id3v2Tag *Id3v2Tag
 	var sawComm bool
 	var comm struct {
 		frames      uint32
@@ -1116,7 +1150,7 @@ func AiffFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*AiffFil
 			if parseOptions.ReadTags {
 				header, err := ParseId3v2HeaderRaw(reader)
 				if err == nil {
-					t, err := parseId3v2(reader, header, parseOptions)
+					t, err := parseId3v2Tag(reader, header, parseOptions)
 					if err == nil {
 						id3v2Tag = t
 					}
@@ -1182,7 +1216,7 @@ func (f *AiffFile) TaggedFile() *TaggedFile {
 		tags = append(tags, t.Tag())
 	}
 	if t, ok := f.ID3v2.Get(); ok {
-		tags = append(tags, t)
+		tags = append(tags, t.Tag())
 	}
 	return NewTaggedFile(FileTypeAiff, tags, *f.GetProperties())
 }
@@ -1199,7 +1233,7 @@ func (f *AiffFile) SaveFile(file FileLike, wo WriteOptions) error {
 		tags = append(tags, t.Tag())
 	}
 	if t, ok := f.ID3v2.Get(); ok {
-		tags = append(tags, t)
+		tags = append(tags, t.Tag())
 	}
 	return SaveTagFields(file, FileTypeAiff, tags, wo)
 }
@@ -1305,7 +1339,12 @@ func (t *AiffTextTag) DumpTo(writer io.Writer, writeOptions WriteOptions) error 
 	return err
 }
 
-func aiffWriteText(file FileLike, tag *Tag, _ WriteOptions) error {
+func aiffWriteText(file FileLike, tag *Tag, wo WriteOptions) error {
+	return aiffWriteTextChunks(file, AiffTextTagFromTag(tag), wo)
+}
+
+// aiffWriteTextChunks replaces the AIFF text chunks from a concrete tag.
+func aiffWriteTextChunks(file FileLike, tag *AiffTextTag, _ WriteOptions) error {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return &FileEncodingError{Source: err}
 	}
@@ -1348,8 +1387,7 @@ func aiffWriteText(file FileLike, tag *Tag, _ WriteOptions) error {
 		}
 	}
 	// Append new chunks
-	text := AiffTextTagFromTag(tag)
-	encoded, err := aiffTextChunkBytes(text)
+	encoded, err := aiffTextChunkBytes(tag)
 	if err != nil {
 		return &FileEncodingError{Source: err}
 	}
@@ -1365,6 +1403,20 @@ func aiffWriteText(file FileLike, tag *Tag, _ WriteOptions) error {
 }
 
 func aiffWriteId3v2(file FileLike, tag *Tag, writeOptions WriteOptions) error {
+	var body []byte
+	if !tag.IsEmpty() {
+		var err error
+		body, err = Id3v2Serialize(tag, writeOptions)
+		if err != nil {
+			return &FileEncodingError{Source: &TagEncodingError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
+		}
+	}
+	return aiffWriteId3v2Chunk(file, body, writeOptions)
+}
+
+// aiffWriteId3v2Chunk replaces or adds an "ID3 " chunk from serialized ID3v2
+// bytes (empty removes the chunk).
+func aiffWriteId3v2Chunk(file FileLike, body []byte, writeOptions WriteOptions) error {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return &FileEncodingError{Source: err}
 	}
@@ -1393,13 +1445,13 @@ func aiffWriteId3v2(file FileLike, tag *Tag, writeOptions WriteOptions) error {
 		}
 	}
 	var encoded bytes.Buffer
-	if !tag.IsEmpty() {
-		body, err := Id3v2Serialize(tag, writeOptions)
-		if err != nil {
-			return &FileEncodingError{Source: &TagEncodingError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
+	if len(body) > 0 {
+		name := "ID3 "
+		if !writeOptions.UppercaseId3v2Chunk {
+			name = "id3 "
 		}
 		size := uint32(len(body))
-		encoded.WriteString("ID3 ")
+		encoded.WriteString(name)
 		var szb [4]byte
 		binary.BigEndian.PutUint32(szb[:], size)
 		encoded.Write(szb[:])
@@ -1452,6 +1504,12 @@ func init() {
 			return nil, err
 		}
 		return f.TaggedFile(), nil
+	})
+	RegisterConcreteTagWriter(FileTypeWav, TagTypeID3v2, func(file *VerifiedFile, tag any, writeOptions WriteOptions) error {
+		return wavWriteId3v2Chunk(file.File(), tag.([]byte), writeOptions)
+	})
+	RegisterConcreteTagWriter(FileTypeAiff, TagTypeID3v2, func(file *VerifiedFile, tag any, writeOptions WriteOptions) error {
+		return aiffWriteId3v2Chunk(file.File(), tag.([]byte), writeOptions)
 	})
 	RegisterFormatWriter(FileTypeWav, func(file *VerifiedFile, tag *Tag, writeOptions WriteOptions) error {
 		switch tag.TagType() {
@@ -1540,4 +1598,82 @@ func init() {
 		}
 		return nil
 	})
+}
+
+// SaveTo writes the tag into a WAV file, mirroring Rust `TagExt::save_to`.
+func (t *RiffInfoTag) SaveTo(file FileLike, writeOptions WriteOptions) error {
+	vf, err := NewVerifiedFile(file, writeOptions.ParseOptions)
+	if err != nil {
+		return &FileEncodingError{Source: err}
+	}
+	format := vf.Format()
+	support := format.TagSupport(TagTypeRiffInfo)
+	if support == TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
+		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	}
+	return wavWriteRiffInfoTag(vf.File(), t, writeOptions)
+}
+
+// SaveToPath writes the tag to a path.
+func (t *RiffInfoTag) SaveToPath(path string, writeOptions WriteOptions) error {
+	vf, f, err := VerifiedFileFromPath(path, writeOptions.ParseOptions)
+	if err != nil {
+		return &FileEncodingError{Source: err}
+	}
+	defer f.Close()
+	format := vf.Format()
+	support := format.TagSupport(TagTypeRiffInfo)
+	if support == TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
+		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	}
+	return wavWriteRiffInfoTag(vf.File(), t, writeOptions)
+}
+
+// RemoveFrom removes a RIFF INFO list from a [FileLike].
+func (t *RiffInfoTag) RemoveFrom(file FileLike, writeOptions WriteOptions) error {
+	return TagTypeRiffInfo.RemoveFrom(file, writeOptions)
+}
+
+// RemoveFromPath removes a RIFF INFO list from a path.
+func (t *RiffInfoTag) RemoveFromPath(path string, writeOptions WriteOptions) error {
+	return TagTypeRiffInfo.RemoveFromPath(path, writeOptions)
+}
+
+// SaveTo writes the tag into an AIFF file, mirroring Rust `TagExt::save_to`.
+func (t *AiffTextTag) SaveTo(file FileLike, writeOptions WriteOptions) error {
+	vf, err := NewVerifiedFile(file, writeOptions.ParseOptions)
+	if err != nil {
+		return &FileEncodingError{Source: err}
+	}
+	format := vf.Format()
+	support := format.TagSupport(TagTypeAiffText)
+	if support == TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
+		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	}
+	return aiffWriteTextChunks(vf.File(), t, writeOptions)
+}
+
+// SaveToPath writes the tag to a path.
+func (t *AiffTextTag) SaveToPath(path string, writeOptions WriteOptions) error {
+	vf, f, err := VerifiedFileFromPath(path, writeOptions.ParseOptions)
+	if err != nil {
+		return &FileEncodingError{Source: err}
+	}
+	defer f.Close()
+	format := vf.Format()
+	support := format.TagSupport(TagTypeAiffText)
+	if support == TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
+		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	}
+	return aiffWriteTextChunks(vf.File(), t, writeOptions)
+}
+
+// RemoveFrom removes the AIFF text chunks from a [FileLike].
+func (t *AiffTextTag) RemoveFrom(file FileLike, writeOptions WriteOptions) error {
+	return TagTypeAiffText.RemoveFrom(file, writeOptions)
+}
+
+// RemoveFromPath removes the AIFF text chunks from a path.
+func (t *AiffTextTag) RemoveFromPath(path string, writeOptions WriteOptions) error {
+	return TagTypeAiffText.RemoveFromPath(path, writeOptions)
 }

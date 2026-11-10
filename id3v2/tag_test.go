@@ -589,8 +589,10 @@ func TestUfidFrameWithMusicBrainzRecordId(t *testing.T) {
 		return append(out, body...)
 	}
 	frames := v4frame("UFID", append([]byte("other\x00"), "0123456789"...))
-	tagBytes := []byte{'I', 'D', '3', 4, 0, 0,
-		byte(len(frames) >> 21), byte(len(frames) >> 14), byte(len(frames) >> 7), byte(len(frames))}
+	tagBytes := []byte{
+		'I', 'D', '3', 4, 0, 0,
+		byte(len(frames) >> 21), byte(len(frames) >> 14), byte(len(frames) >> 7), byte(len(frames)),
+	}
 	tagBytes = append(tagBytes, frames...)
 
 	r := bytes.NewReader(tagBytes)

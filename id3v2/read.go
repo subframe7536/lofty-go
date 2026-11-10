@@ -195,7 +195,7 @@ func parseV2Header(reader io.Reader) (FrameId, uint32, bool, error) {
 	}
 	size := uint32(header[3])<<16 | uint32(header[4])<<8 | uint32(header[5])
 	idStr := string(header[:3])
-	if upgraded, ok := upgradeV2(idStr); ok {
+	if upgraded, ok := UpgradeV2(idStr); ok {
 		idStr = upgraded
 	}
 	id, err := ParseFrameId(idStr)
@@ -237,13 +237,13 @@ func parseFrameHeader(reader io.Reader, synchsafe bool, parseOptions ParseOption
 	var id string
 	switch {
 	case invalidV2Frame:
-		if upgraded, ok := upgradeV2(idStr); ok {
+		if upgraded, ok := UpgradeV2(idStr); ok {
 			id = upgraded
 		} else {
 			id = idStr
 		}
 	case !synchsafe && parseOptions.ImplicitConversions:
-		if upgraded, ok := upgradeV3(idStr); ok {
+		if upgraded, ok := UpgradeV3(idStr); ok {
 			id = upgraded
 		} else {
 			id = idStr

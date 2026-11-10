@@ -41,7 +41,14 @@ func tiplRoleForItemKey(key ItemKey) (string, bool) {
 // for Tag`). Unconvertible frames remain in the tag's companion when
 // [GlobalOptions.PreserveFormatSpecificItems] is enabled.
 func Id3v2TagToTag(input *Id3v2Tag) *Tag {
-	remainder, tag := input.SplitTag()
+	// SplitTag consumes convertible frames from the list it runs on; clone so
+	// that Tag() is non-destructive for callers holding the Id3v2Tag.
+	clone := &Id3v2Tag{
+		flags:           input.flags,
+		originalVersion: input.originalVersion,
+		Frames:          input.Frames.Clone(),
+	}
+	remainder, tag := clone.SplitTag()
 	if util.GetGlobalOptions().PreserveFormatSpecificItems && !remainder.IsEmpty() {
 		tag.SetCompanionTag(remainder)
 	}

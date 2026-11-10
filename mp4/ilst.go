@@ -28,14 +28,50 @@ const (
 // AtomData is a single `data` atom payload inside an [Atom].
 type AtomData struct {
 	Kind AtomDataKind
-	Text string  // UTF8/UTF16
-	Bool bool    // Bool
-	Pic  Picture // Picture
-	Int  int64   // SignedInt
-	Uint uint64  // UnsignedInt
-	Code uint8   // Unknown — the original data-type code
-	Data []byte  // Unknown — raw payload
+	Text string   // UTF8/UTF16
+	Bool bool     // Bool
+	Pic  Picture  // Picture
+	Int  int64    // SignedInt
+	Uint uint64   // UnsignedInt
+	Code DataType // Unknown — the original data-type code
+	Data []byte   // Unknown — raw payload
 }
+
+// DataType is the `data` atom's type code, mirroring Rust's `DataType`.
+type DataType uint32
+
+const (
+	DataTypeReserved               DataType = 0
+	DataTypeUtf8                   DataType = 1
+	DataTypeUtf16                  DataType = 2
+	DataTypeSJis                   DataType = 3
+	DataTypeUtf8Sort               DataType = 4
+	DataTypeUtf16Sort              DataType = 5
+	DataTypeGif                    DataType = 12
+	DataTypeJpeg                   DataType = 13
+	DataTypePng                    DataType = 14
+	DataTypeBeSignedInteger        DataType = 21
+	DataTypeBeUnsignedInteger      DataType = 22
+	DataTypeBeFloat32              DataType = 23
+	DataTypeBeFloat64              DataType = 24
+	DataTypeBmp                    DataType = 27
+	DataTypeQuicktimeMetadata      DataType = 28
+	DataTypeSigned8BitInteger      DataType = 65
+	DataTypeBe16BitSignedInteger   DataType = 66
+	DataTypeBe32BitSignedInteger   DataType = 67
+	DataTypeBePointF32             DataType = 70
+	DataTypeBeDimensionsF32        DataType = 71
+	DataTypeBeRectF32              DataType = 72
+	DataTypeBe64BitSignedInteger   DataType = 74
+	DataTypeUnsigned8BitInteger    DataType = 75
+	DataTypeBe16BitUnsignedInteger DataType = 76
+	DataTypeBe32BitUnsignedInteger DataType = 77
+	DataTypeBe64BitUnsignedInteger DataType = 78
+	DataTypeAffineTransformF64     DataType = 79
+)
+
+// DataTypeOther wraps an unrecognized type code, mirroring `DataType::Other`.
+func DataTypeOther(code uint32) DataType { return DataType(code) }
 
 // AtomIdent is an atom identifier: either a four-byte code or a freeform
 // `----` atom with mean/name sub-boxes.
@@ -428,7 +464,7 @@ func encodeIlst(ilst *Ilst) ([]byte, error) {
 		case AtomDataUnsignedInt:
 			return intPayload(int64(d.Uint), false)
 		default:
-			return d.Code, d.Data
+			return uint8(d.Code), d.Data
 		}
 	}
 
@@ -522,14 +558,27 @@ func u8FromString(s string) (uint8, bool) {
 
 // advisoryRatingFromU8 normalizes a raw rtng byte per Rust's
 // `AdvisoryRating::try_from(u8)` + `as_u8` (0→0, 1|4→1, 2→2; invalid → !ok).
-func advisoryRatingFromU8(v uint8) (uint8, bool) {
+// AdvisoryRating is the normalized `rtng` value, mirroring Rust's
+// `AdvisoryRating` (Explicit covers both the 1 and legacy 4 forms).
+type AdvisoryRating uint8
+
+const (
+	AdvisoryRatingInoffensive AdvisoryRating = 0
+	AdvisoryRatingExplicit    AdvisoryRating = 1
+	AdvisoryRatingClean       AdvisoryRating = 2
+)
+
+// AsU8 returns the rating as it appears in the `rtng` atom.
+func (r AdvisoryRating) AsU8() uint8 { return uint8(r) }
+
+func advisoryRatingFromU8(v uint8) (AdvisoryRating, bool) {
 	switch v {
 	case 0:
-		return 0, true
+		return AdvisoryRatingInoffensive, true
 	case 1, 4:
-		return 1, true
+		return AdvisoryRatingExplicit, true
 	case 2:
-		return 2, true
+		return AdvisoryRatingClean, true
 	default:
 		return 0, false
 	}
@@ -763,11 +812,11 @@ func ilstInterpretAtomContent(code uint8, payload []byte, fourcc [4]byte, parseO
 				return AtomData{Kind: AtomDataUTF8, Text: mp4Genres[idx]}, nil
 			}
 		}
-		return AtomData{Kind: AtomDataUnknown, Code: code, Data: payload}, nil
+		return AtomData{Kind: AtomDataUnknown, Code: DataType(code), Data: payload}, nil
 	}
 	// plID: always Unknown (64-bit), preserve raw
 	if fourcc == [4]byte{'p', 'l', 'I', 'D'} {
-		return AtomData{Kind: AtomDataUnknown, Code: code, Data: payload}, nil
+		return AtomData{Kind: AtomDataUnknown, Code: DataType(code), Data: payload}, nil
 	}
 	switch code {
 	case 1:
@@ -786,7 +835,7 @@ func ilstInterpretAtomContent(code uint8, payload []byte, fourcc [4]byte, parseO
 	case 22:
 		return AtomData{Kind: AtomDataUnsignedInt, Uint: uint64(parseBEInt(payload, false))}, nil
 	default:
-		return AtomData{Kind: AtomDataUnknown, Code: code, Data: payload}, nil
+		return AtomData{Kind: AtomDataUnknown, Code: DataType(code), Data: payload}, nil
 	}
 }
 
@@ -986,8 +1035,8 @@ func (l *Ilst) SetFlag(ident AtomIdent, value bool) {
 	l.ReplaceAtom(Atom{ident, []AtomData{{Kind: AtomDataBool, Bool: value}}})
 }
 
-// AdvisoryRating returns the normalized parental advisory rating (0/1/2).
-func (l *Ilst) AdvisoryRating() (uint8, bool) {
+// AdvisoryRating returns the normalized parental advisory rating.
+func (l *Ilst) AdvisoryRating() (AdvisoryRating, bool) {
 	if a := l.Get(FourccIdent("rtng")); a != nil {
 		for _, d := range a.Data {
 			var raw byte
@@ -1010,8 +1059,8 @@ func (l *Ilst) AdvisoryRating() (uint8, bool) {
 	return 0, false
 }
 
-// SetAdvisoryRating writes the `rtng` atom (normalized 0/1/2).
-func (l *Ilst) SetAdvisoryRating(rating uint8) {
+// SetAdvisoryRating writes the `rtng` atom.
+func (l *Ilst) SetAdvisoryRating(rating AdvisoryRating) {
 	l.ReplaceAtom(Atom{
 		FourccIdent("rtng"),
 		[]AtomData{{Kind: AtomDataSignedInt, Int: int64(rating)}},
@@ -1020,3 +1069,43 @@ func (l *Ilst) SetAdvisoryRating(rating uint8) {
 
 // RemovePictures removes the `covr` atom.
 func (l *Ilst) RemovePictures() { l.Remove(FourccIdent("covr")) }
+
+// SaveTo writes the ilst atom into an MP4 file, mirroring Rust
+// `TagExt::save_to`.
+func (l *Ilst) SaveTo(file FileLike, writeOptions WriteOptions) error {
+	vf, err := NewVerifiedFile(file, writeOptions.ParseOptions)
+	if err != nil {
+		return &FileEncodingError{Source: err}
+	}
+	format := vf.Format()
+	support := format.TagSupport(TagTypeMp4Ilst)
+	if support == TagSupportUnsupported || (!support.IsWritable() && !l.IsEmpty()) {
+		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	}
+	return mp4WriteIlstData(vf.File(), l, writeOptions)
+}
+
+// SaveToPath writes the ilst atom to a path.
+func (l *Ilst) SaveToPath(path string, writeOptions WriteOptions) error {
+	vf, f, err := VerifiedFileFromPath(path, writeOptions.ParseOptions)
+	if err != nil {
+		return &FileEncodingError{Source: err}
+	}
+	defer f.Close()
+	format := vf.Format()
+	support := format.TagSupport(TagTypeMp4Ilst)
+	if support == TagSupportUnsupported || (!support.IsWritable() && !l.IsEmpty()) {
+		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	}
+	return mp4WriteIlstData(vf.File(), l, writeOptions)
+}
+
+// RemoveFrom removes the ilst atom from a [FileLike].
+func (l *Ilst) RemoveFrom(file FileLike, writeOptions WriteOptions) error {
+	return TagTypeMp4Ilst.RemoveFrom(file, writeOptions)
+}
+
+// RemoveFromPath removes the ilst atom from a path.
+func (l *Ilst) RemoveFromPath(path string, writeOptions WriteOptions) error {
+	return TagTypeMp4Ilst.RemoveFromPath(path, writeOptions)
+}

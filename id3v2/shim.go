@@ -254,3 +254,37 @@ const (
 	ItemKeyMood            = meta.ItemKeyMood
 	ItemKeyTaggingTime     = meta.ItemKeyTaggingTime
 )
+
+// Aliases for concrete-tag file writes (Rust `TagExt::save_to` parity).
+type (
+	FileType = meta.FileType
+)
+
+const (
+	TagTypeID3v1          = meta.TagTypeID3v1
+	TagSupportUnsupported = meta.TagSupportUnsupported
+)
+
+var (
+	NewVerifiedFile      = meta.NewVerifiedFile
+	VerifiedFileFromPath = meta.VerifiedFileFromPath
+	WriteConcreteTag     = meta.WriteConcreteTag
+	NewOSFile            = meta.NewOSFile
+)
+
+const (
+	TagTypeApe            = meta.TagTypeApe
+	TagTypeLyrics3        = meta.TagTypeLyrics3
+	TagTypeLyrics3v2      = meta.TagTypeLyrics3v2
+	TagTypeVorbisComments = meta.TagTypeVorbisComments
+	TagTypeRiffInfo       = meta.TagTypeRiffInfo
+	TagTypeAiffText       = meta.TagTypeAiffText
+	TagTypeMp4Ilst        = meta.TagTypeMp4Ilst
+)
+
+type (
+	UnsupportedTagError = meta.UnsupportedTagError
+	FileParseError      = meta.FileParseError
+	TagSupport          = meta.TagSupport
+	VerifiedFile        = meta.VerifiedFile
+)

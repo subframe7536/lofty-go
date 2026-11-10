@@ -91,3 +91,25 @@ func tryCapSlice[T any](capacity int) ([]T, error) { return util.TryCapSlice[T](
 var PictureFromFlacBytes = meta.PictureFromFlacBytes
 
 var flagItem = util.FlagItem
+
+// Aliases for concrete-tag writes (Rust `TagExt` parity).
+type (
+	TagSupport   = meta.TagSupport
+	VerifiedFile = meta.VerifiedFile
+)
+
+const (
+	TagSupportUnsupported = meta.TagSupportUnsupported
+)
+
+var (
+	NewVerifiedFile      = meta.NewVerifiedFile
+	VerifiedFileFromPath = meta.VerifiedFileFromPath
+	WriteConcreteTag     = meta.WriteConcreteTag
+)
+
+type (
+	FileEncodingError   = meta.FileEncodingError
+	UnsupportedTagError = meta.UnsupportedTagError
+	FileParseError      = meta.FileParseError
+)

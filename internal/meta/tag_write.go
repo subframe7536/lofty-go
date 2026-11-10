@@ -60,6 +60,45 @@ type tagDumper = TagDumper
 
 var tagDumpers = map[TagType]tagDumper{}
 
+// ConcreteTagWriter writes a format-specific (native) tag into a verified
+// file, mirroring the per-format dispatch Rust's `TagWriteExt::save_to`
+// implementations perform (e.g. ID3v2 inside a WAV/AIFF chunk or at the end
+// of a DSF file, VorbisComments inside an Ogg stream or FLAC metadata).
+//
+// `tag` is the concrete tag type owned by `tagType` (`*Id3v2Tag` byte payload,
+// `*VorbisCommentsTag`, ...); the meaning is defined per tag type by the
+// registering format package.
+type ConcreteTagWriter func(file *VerifiedFile, tag any, writeOptions WriteOptions) error
+
+var concreteTagWriters = map[fileTypeKind]map[TagType]ConcreteTagWriter{}
+
+// RegisterConcreteTagWriter registers a [ConcreteTagWriter] for `tagType` on
+// `fileType`. Format packages call this from init() for tag types whose
+// on-disk placement is format-specific.
+func RegisterConcreteTagWriter(fileType FileType, tagType TagType, writer ConcreteTagWriter) {
+	if fileType.kind == fileTypeCustom {
+		panic("lofty: RegisterConcreteTagWriter cannot be used for custom file types")
+	}
+	inner := concreteTagWriters[fileType.kind]
+	if inner == nil {
+		inner = map[TagType]ConcreteTagWriter{}
+		concreteTagWriters[fileType.kind] = inner
+	}
+	if _, exists := inner[tagType]; exists {
+		panic("lofty: concrete tag writer for `" + tagType.String() + "` on `" + fileType.String() + "` already registered!")
+	}
+	inner[tagType] = writer
+}
+
+// WriteConcreteTag invokes the registered [ConcreteTagWriter] for the
+// verified file's format and `tagType`, reporting whether one exists.
+func WriteConcreteTag(file *VerifiedFile, tagType TagType, tag any, writeOptions WriteOptions) (bool, error) {
+	if w, ok := concreteTagWriters[file.Format().kind][tagType]; ok {
+		return true, w(file, tag, writeOptions)
+	}
+	return false, nil
+}
+
 // WriteTag writes a tag to a file of the verified format.
 func WriteTag(tag *Tag, file *VerifiedFile, writeOptions WriteOptions) error {
 	format := file.Format()

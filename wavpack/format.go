@@ -45,8 +45,8 @@ var wvSampleRates = [16]uint32{
 // WavPackFile is a WavPack file.
 type WavPackFile struct {
 	Properties WavPackProperties
-	ID3v1      Option[*Tag]
-	Ape        Option[*Tag]
+	ID3v1      Option[*Id3v1Tag]
+	Ape        Option[*ApeTag]
 }
 
 // WavPackFileReadFrom reads a [WavPackFile] from a reader.
@@ -90,10 +90,10 @@ func WavPackFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*WavP
 
 	if parseOptions.ReadTags {
 		if apeTag != nil {
-			file.Ape = Some(apeTag.Tag())
+			file.Ape = Some(apeTag)
 		}
 		if id3v1Tag != nil {
-			file.ID3v1 = Some(id3v1Tag.Tag())
+			file.ID3v1 = Some(id3v1Tag)
 		}
 	}
 	return &file, nil
@@ -126,10 +126,10 @@ func (f *WavPackFile) ContainsTagType(t TagType) bool {
 func (f *WavPackFile) TaggedFile() *TaggedFile {
 	var tags []*Tag
 	if t, ok := f.ID3v1.Get(); ok {
-		tags = append(tags, t)
+		tags = append(tags, t.Tag())
 	}
 	if t, ok := f.Ape.Get(); ok {
-		tags = append(tags, t)
+		tags = append(tags, t.Tag())
 	}
 	return NewTaggedFile(FileTypeWavPack, tags, *f.GetProperties())
 }
@@ -143,10 +143,10 @@ func (f *WavPackFile) SavePath(path string, wo WriteOptions) error {
 func (f *WavPackFile) SaveFile(file FileLike, wo WriteOptions) error {
 	var tags []*Tag
 	if t, ok := f.ID3v1.Get(); ok {
-		tags = append(tags, t)
+		tags = append(tags, t.Tag())
 	}
 	if t, ok := f.Ape.Get(); ok {
-		tags = append(tags, t)
+		tags = append(tags, t.Tag())
 	}
 	return SaveTagFields(file, FileTypeWavPack, tags, wo)
 }

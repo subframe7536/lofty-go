@@ -354,7 +354,7 @@ func TestPropertiesWav(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := f.Properties
-	eq(t, "format", p.Format, uint16(1))
+	eq(t, "format", p.Format, WavFormatPCM)
 	eqMs(t, p.Duration, 1428)
 	eq(t, "overall_bitrate", p.OverallBitrate, 1542)
 	eq(t, "audio_bitrate", p.AudioBitrate, 1536)

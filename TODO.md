@@ -185,6 +185,40 @@ parse tests, `TestSpecialItemsRoundtrip` (RVA2), `TestReadSv5`
 - `TestTrimEndNullsWhenReadingFrameContent`: trailing-NUL trim applies and
   the TXXX `"Writer"` description maps to `ItemKeyWriter`.
 
+## API-parity fixes (audit round 3)
+
+- **Concrete-tag `TagExt` parity**: all nine concrete tags now expose
+  `DumpTo`/`SaveTo`/`SaveToPath`/`RemoveFrom`/`RemoveFromPath`
+  (`VorbisCommentsTag`, `ApeTag`, `Id3v1Tag`, `Id3v2Tag`, `Lyrics3Tag`,
+  `Lyrics3v2Tag`, `RiffInfoTag`, `AiffTextTag`, `Ilst`). Saves verify the
+  destination format and apply the Rust `!is_writable && !is_empty` gate;
+  empty writes strip read-only tags. Format-specific placement (ID3v2 in
+  WAV/AIFF chunks and at the DSF metadata pointer, VorbisComments in Ogg
+  streams and FLAC blocks) dispatches through
+  `meta.RegisterConcreteTagWriter` — the `TagWriteExt` equivalent — so
+  vendor strings, pictures, and unknown keys survive concrete saves.
+- `(*Id3v2Tag).SaveToVerified` mirrors `TagWriteExt::save_to` (the
+  unchecked internal entry point AudioFile save paths call); file-level
+  `SaveFile` uses it so read-only ID3v2 still round-trips like Rust.
+- `VorbisCommentsTag` gained the `OggPictureStorage` API
+  (`SetPicture`/`RemovePicture`/`RemovePictureType`/`RemovePictures`),
+  `TakeItems`, and `RemoveKey` now returns the removed values.
+- File structs store concrete tags like Rust (`Option<Id3v2Tag>` etc.):
+  `ID3v2` on Mpeg/Flac/Wav/Aiff/Dsf/Aac/Mpc/Ape, `ID3v1` on Aac/Mpc/
+  WavPack, `Ape` on Mpc/WavPack; `ApeFile.Ape` is a single slot (v2
+  preferred) matching Rust's `ape_tag`.
+- `TaggedFile.PrimaryTagMut` no longer inserts; only
+  `PrimaryTagMutOrInsert` creates a missing primary tag.
+- Exported `id3v2.UpgradeV2`/`UpgradeV3`, `meta.Id3v2Version2`,
+  `meta.NewProbeFromPath` (Rust `Probe::open`), `TagItem.Consume`,
+  `(*Id3v2Tag).Tag`/`Remove`/`RemoveKey`, `(*ApeTag).Clear`/`DumpTo`.
+- Typed enums: `mp4.DataType` (+ `DataTypeOther`), `mp4.AdvisoryRating`,
+  `iff.WavFormat` (+ `WavFormatOther`), `mpeg.Emphasis`;
+  `MpegProperties.ModeExtension` is `Option[uint8]` (Some only for joint
+  stereo) and `Emphasis` is `Option[Emphasis]` like Rust.
+- `Id3v2TagToTag`/`(*Id3v2Tag).Tag` is non-destructive (splits a cloned
+  frame list) so repeated conversion can't drain `t.Frames`.
+
 ## Not ported (Rust-internal, no portable equivalent)
 
 - MPC SV8 nested `StreamHeader`/`ReplayGain`/`EncoderInfo` property structs.

@@ -108,7 +108,6 @@ var (
 	divRound          = util.DivRound
 	latin1Decode      = util.Latin1Decode
 	trimEndNulls      = util.TrimEndNulls
-	parseId3v2        = id3v2.ParseId3v2
 )
 
 const TagTypeID3v2 = meta.TagTypeID3v2
@@ -127,3 +126,23 @@ var (
 	NewParseOptions = meta.NewParseOptions
 	NewWriteOptions = meta.NewWriteOptions
 )
+
+// Aliases for concrete-tag writes (Rust `TagExt` parity).
+type (
+	Id3v2Tag   = id3v2.Id3v2Tag
+	TagSupport = meta.TagSupport
+)
+
+const (
+	TagSupportUnsupported = meta.TagSupportUnsupported
+)
+
+var (
+	Id3v2TagFromTag           = id3v2.Id3v2TagFromTag
+	NewVerifiedFile           = meta.NewVerifiedFile
+	VerifiedFileFromPath      = meta.VerifiedFileFromPath
+	WriteConcreteTag          = meta.WriteConcreteTag
+	RegisterConcreteTagWriter = meta.RegisterConcreteTagWriter
+)
+
+var parseId3v2Tag = id3v2.ParseId3v2Tag

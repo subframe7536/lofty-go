@@ -161,3 +161,17 @@ const (
 )
 
 var NewOSFile = meta.NewOSFile
+
+// Aliases for concrete-tag writes (Rust `TagExt` parity).
+type (
+	TagSupport = meta.TagSupport
+)
+
+const (
+	TagSupportUnsupported = meta.TagSupportUnsupported
+)
+
+var (
+	NewVerifiedFile      = meta.NewVerifiedFile
+	VerifiedFileFromPath = meta.VerifiedFileFromPath
+)

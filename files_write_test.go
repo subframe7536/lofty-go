@@ -1646,7 +1646,7 @@ func TestMpegTagSaveWithParseOptions(t *testing.T) {
 	if !ok {
 		t.Fatal("no id3v2 tag")
 	}
-	if s, _ := id3v2.Title(); s != "Title B" {
+	if s := id3v2.Title(); s != "Title B" {
 		t.Fatalf("title = %q, want Title B", s)
 	}
 }
@@ -1941,7 +1941,7 @@ func TestMpegTip1Frame(t *testing.T) {
 	}
 	var tag *Tag
 	if t2, ok := mf.ID3v2.Get(); ok {
-		tag = t2
+		tag = t2.Tag()
 	} else {
 		tag = NewTag(TagTypeID3v2)
 	}
@@ -1970,10 +1970,10 @@ func TestMpegTip1Frame(t *testing.T) {
 	if !ok {
 		t.Fatal("no id3v2 after write")
 	}
-	if s, ok := rt.GetString(ItemKeyEngineer); !ok || s != "testperson" {
+	if s, ok := rt.Tag().GetString(ItemKeyEngineer); !ok || s != "testperson" {
 		t.Fatalf("engineer = %q", s)
 	}
-	if s, ok := rt.GetString(ItemKeyProducer); !ok || s != "testhuman" {
+	if s, ok := rt.Tag().GetString(ItemKeyProducer); !ok || s != "testhuman" {
 		t.Fatalf("vocalist = %q", s)
 	}
 }

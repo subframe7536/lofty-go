@@ -68,7 +68,6 @@ var (
 	FindId3v2            = id3v2.FindId3v2
 	ParseId3v2           = id3v2.ParseId3v2
 	ParseId3v2HeaderRaw  = id3v2.ParseId3v2HeaderRaw
-	parseId3v2           = id3v2.ParseId3v2
 	WriteId3v1           = id3v1.WriteId3v1
 	WriteId3v2           = id3v2.WriteId3v2
 	Id3v1TagFromTag      = id3v1.Id3v1TagFromTag
@@ -96,3 +95,12 @@ var (
 )
 
 func optionFromPtr[T any](p *T) Option[*T] { return util.OptionFromPtr(p) }
+
+// Aliases for concrete-tag writes (Rust `TagExt` parity).
+type (
+	Id3v1Tag = id3v1.Id3v1Tag
+	Id3v2Tag = id3v2.Id3v2Tag
+	ApeTag   = ape.ApeTag
+)
+
+var parseId3v2Tag = id3v2.ParseId3v2Tag

@@ -121,9 +121,9 @@ func (p MpcProperties) FileProperties() FileProperties {
 // MusepackFile is a Musepack file.
 type MusepackFile struct {
 	Properties MpcProperties
-	ID3v1      Option[*Tag]
-	ID3v2      Option[*Tag]
-	Ape        Option[*Tag]
+	ID3v1      Option[*Id3v1Tag]
+	ID3v2      Option[*Id3v2Tag]
+	Ape        Option[*ApeTag]
 }
 
 var mpcSampleRates = [4]uint32{44100, 48000, 37800, 32000}
@@ -144,7 +144,7 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*Mus
 		return nil, &FileParseError{Source: err}
 	}
 
-	var id3v2Tag *Tag
+	var id3v2Tag *Id3v2Tag
 	// ID3v2 at the start
 	header, _, found2, err := findId3v2(reader, parseOptions.ReadTags, parseOptions)
 	if err != nil {
@@ -160,7 +160,7 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*Mus
 			if _, err := reader.Seek(start+int64(header.FullTagSize()-header.Size), io.SeekStart); err != nil {
 				return nil, &FileParseError{Source: err}
 			}
-			if t, err := parseId3v2(reader, header, parseOptions); err == nil {
+			if t, err := parseId3v2Tag(reader, header, parseOptions); err == nil {
 				id3v2Tag = t
 			}
 		}
@@ -388,10 +388,10 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*Mus
 	if parseOptions.ReadTags {
 		file.ID3v2 = optionFromPtr(id3v2Tag)
 		if apeTag != nil {
-			file.Ape = Some(apeTag.Tag())
+			file.Ape = Some(apeTag)
 		}
 		if id3v1Tag != nil {
-			file.ID3v1 = Some(id3v1Tag.Tag())
+			file.ID3v1 = Some(id3v1Tag)
 		}
 	}
 	return &file, nil
@@ -456,13 +456,13 @@ func (f *MusepackFile) ContainsTagType(t TagType) bool {
 func (f *MusepackFile) TaggedFile() *TaggedFile {
 	var tags []*Tag
 	if t, ok := f.ID3v2.Get(); ok {
-		tags = append(tags, t)
+		tags = append(tags, t.Tag())
 	}
 	if t, ok := f.ID3v1.Get(); ok {
-		tags = append(tags, t)
+		tags = append(tags, t.Tag())
 	}
 	if t, ok := f.Ape.Get(); ok {
-		tags = append(tags, t)
+		tags = append(tags, t.Tag())
 	}
 	return NewTaggedFile(FileTypeMpc, tags, *f.GetProperties())
 }
@@ -476,13 +476,13 @@ func (f *MusepackFile) SavePath(path string, wo WriteOptions) error {
 func (f *MusepackFile) SaveFile(file FileLike, wo WriteOptions) error {
 	var tags []*Tag
 	if t, ok := f.ID3v1.Get(); ok {
-		tags = append(tags, t)
+		tags = append(tags, t.Tag())
 	}
 	if t, ok := f.ID3v2.Get(); ok {
-		tags = append(tags, t)
+		tags = append(tags, t.Tag())
 	}
 	if t, ok := f.Ape.Get(); ok {
-		tags = append(tags, t)
+		tags = append(tags, t.Tag())
 	}
 	return SaveTagFields(file, FileTypeMpc, tags, wo)
 }

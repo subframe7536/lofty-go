@@ -98,3 +98,10 @@ const (
 	ChannelMaskMono   = meta.ChannelMaskMono
 	ChannelMaskStereo = meta.ChannelMaskStereo
 )
+
+// Aliases for concrete-tag writes (Rust `TagExt` parity).
+type (
+	Id3v1Tag = id3v1.Id3v1Tag
+	Id3v2Tag = id3v2.Id3v2Tag
+	ApeTag   = ape.ApeTag
+)

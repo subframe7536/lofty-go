@@ -134,6 +134,9 @@ func (t TagItem) Value() ItemValue { return t.value }
 // IntoValue returns the [ItemValue].
 func (t TagItem) IntoValue() ItemValue { return t.value }
 
+// Consume returns the item's key and value.
+func (t TagItem) Consume() (ItemKey, ItemValue) { return t.key, t.value }
+
 // SetKey replaces the item's key.
 func (t *TagItem) SetKey(k ItemKey) { t.key = k }
 

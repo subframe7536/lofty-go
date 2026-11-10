@@ -122,7 +122,7 @@ func TestTaglibMpegIgnoreGarbage(t *testing.T) {
 	if !ok {
 		t.Fatal("no id3v2 tag")
 	}
-	if s, _ := tag.Title(); s != "Title A" {
+	if s := tag.Title(); s != "Title A" {
 		t.Fatalf("title = %q", s)
 	}
 }
@@ -206,7 +206,7 @@ func TestTaglibWavGarbageAppended(t *testing.T) {
 		}
 		id3v2 := NewTag(TagTypeID3v2)
 		id3v2.SetTitle("ID3v2 Title")
-		wf.ID3v2 = Some(id3v2)
+		wf.ID3v2 = Some(Id3v2TagFromTag(id3v2))
 		riff := NewTag(TagTypeRiffInfo)
 		riff.SetTitle("INFO Title")
 		wf.RiffInfo = Some(RiffInfoTagFromTag(riff))
@@ -658,7 +658,7 @@ func TestTaglibFlacEmptyId3v2(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		ff.ID3v2 = Some(NewTag(TagTypeID3v2))
+		ff.ID3v2 = Some(Id3v2TagFromTag(NewTag(TagTypeID3v2)))
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
 			t.Fatal(err)
 		}
@@ -1525,7 +1525,7 @@ func TestTaglibApeStripAndProperties(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		af.APEv2 = Some(ApeTagFromTag(apeTagWithTitle("APE")))
+		af.Ape = Some(ApeTagFromTag(apeTagWithTitle("APE")))
 		af.ID3v1 = Some(Id3v1TagFromTag(id3v1TagWithTitle("ID3v1")))
 		f.Seek(0, 0)
 		if err := af.SaveFile(NewOSFile(f), NewWriteOptions()); err != nil {
@@ -1538,7 +1538,7 @@ func TestTaglibApeStripAndProperties(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		ape, ok := af.APEv2.Get()
+		ape, ok := af.Ape.Get()
 		if !ok {
 			t.Fatal("no APE tag after save")
 		}
@@ -1563,20 +1563,20 @@ func TestTaglibApeRepeatedSave(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if af.APEv2.IsSome() || af.ID3v1.IsSome() {
+		if af.Ape.IsSome() || af.ID3v1.IsSome() {
 			t.Fatal("unexpected tags on fresh file")
 		}
-		af.APEv2 = Some(ApeTagFromTag(apeTagWithTitle("01234 56789 ABCDE FGHIJ")))
+		af.Ape = Some(ApeTagFromTag(apeTagWithTitle("01234 56789 ABCDE FGHIJ")))
 		f.Seek(0, 0)
 		if err := af.SaveFile(NewOSFile(f), NewWriteOptions()); err != nil {
 			t.Fatal(err)
 		}
 		f.Seek(0, 0)
 
-		ape, _ := af.APEv2.Get()
+		ape, _ := af.Ape.Get()
 		gt := ape.Tag()
 		gt.SetTitle("0")
-		af.APEv2 = Some(ApeTagFromTag(gt))
+		af.Ape = Some(ApeTagFromTag(gt))
 		if err := af.SaveFile(NewOSFile(f), NewWriteOptions()); err != nil {
 			t.Fatal(err)
 		}
@@ -1585,7 +1585,7 @@ func TestTaglibApeRepeatedSave(t *testing.T) {
 		af.ID3v1 = Some(Id3v1TagFromTag(id3v1TagWithTitle("01234 56789 ABCDE FGHIJ")))
 		gt2 := ape.Tag()
 		gt2.SetTitle("01234 56789 ABCDE FGHIJ 01234 56789 ABCDE FGHIJ 01234 56789")
-		af.APEv2 = Some(ApeTagFromTag(gt2))
+		af.Ape = Some(ApeTagFromTag(gt2))
 		if err := af.SaveFile(NewOSFile(f), NewWriteOptions()); err != nil {
 			t.Fatal(err)
 		}
@@ -1596,8 +1596,8 @@ func TestTaglibApeRepeatedSave(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if af.APEv2.IsNone() || af.ID3v1.IsNone() {
-			t.Fatalf("missing tags: ape=%v id3v1=%v", af.APEv2.IsSome(), af.ID3v1.IsSome())
+		if af.Ape.IsNone() || af.ID3v1.IsNone() {
+			t.Fatalf("missing tags: ape=%v id3v1=%v", af.Ape.IsSome(), af.ID3v1.IsSome())
 		}
 	}
 }
@@ -1610,8 +1610,8 @@ func TestTaglibWavPackStripAndProperties(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		wf.Ape = Some(apeTagWithTitle("APE"))
-		wf.ID3v1 = Some(id3v1TagWithTitle("ID3v1"))
+		wf.Ape = Some(ApeTagFromTag(apeTagWithTitle("APE")))
+		wf.ID3v1 = Some(Id3v1TagFromTag(id3v1TagWithTitle("ID3v1")))
 		f.Seek(0, 0)
 		if err := wf.SaveFile(NewOSFile(f), NewWriteOptions()); err != nil {
 			t.Fatal(err)
@@ -1634,7 +1634,7 @@ func TestTaglibWavPackStripAndProperties(t *testing.T) {
 		if !ok {
 			t.Fatal("no ID3v1 tag")
 		}
-		if title, _ := id3v1.Title(); title != "ID3v1" {
+		if title, _ := id3v1.Title.Get(); title != "ID3v1" {
 			t.Fatalf("id3v1 title = %q", title)
 		}
 	}
@@ -1648,7 +1648,7 @@ func TestTaglibWavPackRepeatedSave(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		wf.Ape = Some(apeTagWithTitle("01234 56789 ABCDE FGHIJ"))
+		wf.Ape = Some(ApeTagFromTag(apeTagWithTitle("01234 56789 ABCDE FGHIJ")))
 		f.Seek(0, 0)
 		if err := wf.SaveFile(NewOSFile(f), NewWriteOptions()); err != nil {
 			t.Fatal(err)
@@ -1662,7 +1662,7 @@ func TestTaglibWavPackRepeatedSave(t *testing.T) {
 		}
 		f.Seek(0, 0)
 
-		wf.ID3v1 = Some(id3v1TagWithTitle("01234 56789 ABCDE FGHIJ"))
+		wf.ID3v1 = Some(Id3v1TagFromTag(id3v1TagWithTitle("01234 56789 ABCDE FGHIJ")))
 		ape.SetTitle("01234 56789 ABCDE FGHIJ 01234 56789 ABCDE FGHIJ 01234 56789")
 		if err := wf.SaveFile(NewOSFile(f), NewWriteOptions()); err != nil {
 			t.Fatal(err)
@@ -1688,7 +1688,7 @@ func TestTaglibMpcStripAndProperties(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		mf.Ape = Some(apeTagWithTitle("APE"))
+		mf.Ape = Some(ApeTagFromTag(apeTagWithTitle("APE")))
 		f.Seek(0, 0)
 		if err := mf.SaveFile(NewOSFile(f), NewWriteOptions()); err != nil {
 			t.Fatal(err)
@@ -1734,7 +1734,7 @@ func TestTaglibMpcRepeatedSave(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		mf.Ape = Some(apeTagWithTitle("01234 56789 ABCDE FGHIJ"))
+		mf.Ape = Some(ApeTagFromTag(apeTagWithTitle("01234 56789 ABCDE FGHIJ")))
 		f.Seek(0, 0)
 		if err := mf.SaveFile(NewOSFile(f), NewWriteOptions()); err != nil {
 			t.Fatal(err)
@@ -2099,7 +2099,7 @@ func TestTaglibWavId3v2Tag(t *testing.T) {
 		id3v2 := NewTag(TagTypeID3v2)
 		id3v2.SetTitle("Title")
 		id3v2.SetArtist("Artist")
-		wf.ID3v2 = Some(id3v2)
+		wf.ID3v2 = Some(Id3v2TagFromTag(id3v2))
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
 			t.Fatal(err)
 		}
@@ -2122,10 +2122,10 @@ func TestTaglibWavId3v2Tag(t *testing.T) {
 		if !ok {
 			t.Fatal("no id3v2")
 		}
-		if s, _ := id3v2.Title(); s != "Title" {
+		if s := id3v2.Title(); s != "Title" {
 			t.Fatalf("title = %q", s)
 		}
-		if s, _ := id3v2.Artist(); s != "Artist" {
+		if s := id3v2.Artist(); s != "Artist" {
 			t.Fatalf("artist = %q", s)
 		}
 		id3v2.RemoveTitle()
@@ -2166,7 +2166,7 @@ func TestTaglibWavSaveId3v23(t *testing.T) {
 		id3v2 := NewTag(TagTypeID3v2)
 		id3v2.SetTitle(xxx)
 		id3v2.SetArtist("Artist A")
-		wf.ID3v2 = Some(id3v2)
+		wf.ID3v2 = Some(Id3v2TagFromTag(id3v2))
 		wo := NewWriteOptions()
 		wo.UseID3v23 = true
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
@@ -2188,13 +2188,13 @@ func TestTaglibWavSaveId3v23(t *testing.T) {
 		if !ok {
 			t.Fatal("no id3v2")
 		}
-		if tag.OriginalVersion != Id3v2Version3 {
-			t.Fatalf("original_version = %d", tag.OriginalVersion)
+		if tag.OriginalVersion() != Id3v2Version3 {
+			t.Fatalf("original_version = %d", tag.OriginalVersion())
 		}
-		if s, _ := tag.Artist(); s != "Artist A" {
+		if s := tag.Artist(); s != "Artist A" {
 			t.Fatalf("artist = %q", s)
 		}
-		if s, _ := tag.Title(); s != xxx {
+		if s := tag.Title(); s != xxx {
 			t.Fatalf("title = %q", s)
 		}
 	}
@@ -2274,7 +2274,7 @@ func TestTaglibWavStripTags(t *testing.T) {
 		}
 		id3v2 := NewTag(TagTypeID3v2)
 		id3v2.SetTitle("test title")
-		wf.ID3v2 = Some(id3v2)
+		wf.ID3v2 = Some(Id3v2TagFromTag(id3v2))
 		info := &RiffInfoTag{}
 		info.SetTitle("test title")
 		wf.RiffInfo = Some(info)
@@ -2391,7 +2391,7 @@ func TestTaglibMpegSaveId3v24(t *testing.T) {
 		tag := NewTag(TagTypeID3v2)
 		tag.SetTitle(xxx)
 		tag.SetArtist("Artist A")
-		mf.ID3v2 = Some(tag)
+		mf.ID3v2 = Some(Id3v2TagFromTag(tag))
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
 			t.Fatal(err)
 		}
@@ -2411,13 +2411,13 @@ func TestTaglibMpegSaveId3v24(t *testing.T) {
 		if !ok {
 			t.Fatal("no id3v2")
 		}
-		if tag.OriginalVersion != Id3v2Version4 {
-			t.Fatalf("original_version = %d", tag.OriginalVersion)
+		if tag.OriginalVersion() != Id3v2Version4 {
+			t.Fatalf("original_version = %d", tag.OriginalVersion())
 		}
-		if s, _ := tag.Artist(); s != "Artist A" {
+		if s := tag.Artist(); s != "Artist A" {
 			t.Fatalf("artist = %q", s)
 		}
-		if s, _ := tag.Title(); s != xxx {
+		if s := tag.Title(); s != xxx {
 			t.Fatalf("title = %q", s)
 		}
 	}
@@ -2438,7 +2438,7 @@ func TestTaglibMpegSaveId3v23(t *testing.T) {
 		tag := NewTag(TagTypeID3v2)
 		tag.SetTitle(xxx)
 		tag.SetArtist("Artist A")
-		mf.ID3v2 = Some(tag)
+		mf.ID3v2 = Some(Id3v2TagFromTag(tag))
 		wo := NewWriteOptions()
 		wo.UseID3v23 = true
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
@@ -2460,13 +2460,13 @@ func TestTaglibMpegSaveId3v23(t *testing.T) {
 		if !ok {
 			t.Fatal("no id3v2")
 		}
-		if tag.OriginalVersion != Id3v2Version3 {
-			t.Fatalf("original_version = %d", tag.OriginalVersion)
+		if tag.OriginalVersion() != Id3v2Version3 {
+			t.Fatalf("original_version = %d", tag.OriginalVersion())
 		}
-		if s, _ := tag.Artist(); s != "Artist A" {
+		if s := tag.Artist(); s != "Artist A" {
 			t.Fatalf("artist = %q", s)
 		}
-		if s, _ := tag.Title(); s != xxx {
+		if s := tag.Title(); s != xxx {
 			t.Fatalf("title = %q", s)
 		}
 	}
@@ -2482,7 +2482,7 @@ func TestTaglibMpegStripAndProperties(t *testing.T) {
 		}
 		id3v2 := NewTag(TagTypeID3v2)
 		id3v2.SetTitle("ID3v2")
-		mf.ID3v2 = Some(id3v2)
+		mf.ID3v2 = Some(Id3v2TagFromTag(id3v2))
 		ape := NewApeTag()
 		ape.SetTitle("APE")
 		mf.APE = Some(ape)
@@ -2508,10 +2508,10 @@ func TestTaglibMpegStripAndProperties(t *testing.T) {
 		if !ok {
 			t.Fatal("no id3v2")
 		}
-		if s, _ := id3v2.Title(); s != "ID3v2" {
+		if s := id3v2.Title(); s != "ID3v2" {
 			t.Fatalf("id3v2 title = %q", s)
 		}
-		mf.ID3v2 = None[*Tag]()
+		mf.ID3v2 = None[*Id3v2Tag]()
 		ape, ok := mf.APE.Get()
 		if !ok {
 			t.Fatal("no ape")
@@ -3082,7 +3082,7 @@ func taglibFileRefSave(t *testing.T, path string, expectedType FileType) {
 		if tf.FileType() != expectedType {
 			t.Fatalf("file_type = %v, want %v", tf.FileType(), expectedType)
 		}
-		tag := tf.PrimaryTagMut()
+		tag := tf.PrimaryTagMutOrInsert()
 		tag.SetArtist("test artist")
 		tag.SetTitle("test title")
 		tag.SetGenre("Test!")
@@ -3241,7 +3241,7 @@ func TestTaglibAiffSaveId3v2(t *testing.T) {
 		}
 		tag := NewTag(TagTypeID3v2)
 		tag.SetTitle("TitleXXX")
-		af.ID3v2 = Some(tag)
+		af.ID3v2 = Some(Id3v2TagFromTag(tag))
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
 			t.Fatal(err)
 		}
@@ -3264,7 +3264,7 @@ func TestTaglibAiffSaveId3v2(t *testing.T) {
 		if !ok {
 			t.Fatal("no id3v2")
 		}
-		if s, _ := tag.Title(); s != "TitleXXX" {
+		if s := tag.Title(); s != "TitleXXX" {
 			t.Fatalf("title = %q", s)
 		}
 		// Clearing all items and saving removes the on-disk tag (empty write).
@@ -3305,7 +3305,7 @@ func TestTaglibAiffSaveId3v23(t *testing.T) {
 		tag := NewTag(TagTypeID3v2)
 		tag.SetTitle(xxx)
 		tag.SetArtist("Artist A")
-		af.ID3v2 = Some(tag)
+		af.ID3v2 = Some(Id3v2TagFromTag(tag))
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
 			t.Fatal(err)
 		}
@@ -3327,13 +3327,13 @@ func TestTaglibAiffSaveId3v23(t *testing.T) {
 		if !ok {
 			t.Fatal("no id3v2")
 		}
-		if tag.OriginalVersion != Id3v2Version3 {
-			t.Fatalf("original_version = %d", tag.OriginalVersion)
+		if tag.OriginalVersion() != Id3v2Version3 {
+			t.Fatalf("original_version = %d", tag.OriginalVersion())
 		}
-		if s, _ := tag.Artist(); s != "Artist A" {
+		if s := tag.Artist(); s != "Artist A" {
 			t.Fatalf("artist = %q", s)
 		}
-		if s, _ := tag.Title(); s != xxx {
+		if s := tag.Title(); s != xxx {
 			t.Fatalf("title = %q", s)
 		}
 	}
@@ -3367,7 +3367,7 @@ func TestTaglibDsfTags(t *testing.T) {
 		tag := NewTag(TagTypeID3v2)
 		tag.SetArtist("The Artist")
 		tag.PushUnchecked(NewTagItem(ItemKeyAlbumArtist, ItemValueText("Album Artist")))
-		df.ID3v2 = Some(tag)
+		df.ID3v2 = Some(Id3v2TagFromTag(tag))
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
 			t.Fatal(err)
 		}
@@ -3387,10 +3387,10 @@ func TestTaglibDsfTags(t *testing.T) {
 		if !ok {
 			t.Fatal("no id3v2")
 		}
-		if s, _ := tag.Artist(); s != "The Artist" {
+		if s := tag.Artist(); s != "The Artist" {
 			t.Fatalf("artist = %q", s)
 		}
-		if s, _ := tag.GetString(ItemKeyAlbumArtist); s != "Album Artist" {
+		if s, _ := tag.Tag().GetString(ItemKeyAlbumArtist); s != "Album Artist" {
 			t.Fatalf("album artist = %q", s)
 		}
 		// Clear the tag — an empty write removes the on-disk tag.
@@ -3478,11 +3478,11 @@ func TestTaglibApeProperties(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		af.APEv2 = Some(apeTag)
+		af.Ape = Some(apeTag)
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
 			t.Fatal(err)
 		}
-		ape, ok := af.APEv2.Get()
+		ape, ok := af.Ape.Get()
 		if !ok {
 			t.Fatal("no ape tag")
 		}
@@ -3498,7 +3498,7 @@ func TestTaglibApeProperties(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, ok := af.APEv2.Get()
+		got, ok := af.Ape.Get()
 		if !ok {
 			t.Fatal("no ape tag")
 		}

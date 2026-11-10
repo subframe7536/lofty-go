@@ -653,17 +653,51 @@ func Id3v2Serialize(tag *Tag, writeOptions WriteOptions) ([]byte, error) {
 	return createTag(Id3v2TagFlags{}, frames, writeOptions)
 }
 
+// Tag converts the tag to a generic [Tag], mirroring Rust's `split_tag`.
+func (t *Id3v2Tag) Tag() *Tag { return Id3v2TagToTag(t) }
+
 // SaveTo writes the native tag into file at the ID3v2 position, mirroring
 // Rust `TagWriteExt::save_to` — replaces any existing tag, removes when empty.
 func (t *Id3v2Tag) SaveTo(file FileLike, writeOptions WriteOptions) error {
+	vf, err := NewVerifiedFile(file, writeOptions.ParseOptions)
+	if err != nil {
+		return &FileEncodingError{Source: err}
+	}
+	return t.SaveToVerified(vf, writeOptions)
+}
+
+// SaveToPath writes the tag to a path.
+func (t *Id3v2Tag) SaveToPath(path string, writeOptions WriteOptions) error {
+	vf, f, err := VerifiedFileFromPath(path, writeOptions.ParseOptions)
+	if err != nil {
+		return &FileEncodingError{Source: err}
+	}
+	defer f.Close()
+	return t.SaveToVerified(vf, writeOptions)
+}
+
+// SaveToVerified writes the tag into a [VerifiedFile], skipping the public
+// support check — mirrors Rust's `TagWriteExt::save_to`, which AudioFile save
+// paths invoke directly (e.g. ID3v2 in FLAC is read-only yet still written).
+func (t *Id3v2Tag) SaveToVerified(vf *VerifiedFile, writeOptions WriteOptions) error {
+	format := vf.Format()
+	support := format.TagSupport(TagTypeID3v2)
+	if support == TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
+		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
+	}
 	var encoded []byte
 	if !t.Frames.IsEmpty() {
 		var err error
 		encoded, err = createTag(t.flags, t.Frames.CloneFrames(), writeOptions)
 		if err != nil {
-			return &FileEncodingError{Source: &TagEncodingError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
+			return &FileEncodingError{FileType: format, Source: &TagEncodingError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
 		}
 	}
+	// Format-specific placement (WAV/AIFF chunk, DSF end-of-stream)
+	if handled, err := WriteConcreteTag(vf, TagTypeID3v2, encoded, writeOptions); handled {
+		return err
+	}
+	file := vf.File()
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return &FileEncodingError{Source: err}
 	}
@@ -676,6 +710,16 @@ func (t *Id3v2Tag) SaveTo(file FileLike, writeOptions WriteOptions) error {
 		end = uint64(rangeEnd)
 	}
 	return Splice(file, 0, end, encoded)
+}
+
+// RemoveFrom removes an ID3v2 tag from a [FileLike].
+func (t *Id3v2Tag) RemoveFrom(file FileLike, writeOptions WriteOptions) error {
+	return TagTypeID3v2.RemoveFrom(file, writeOptions)
+}
+
+// RemoveFromPath removes an ID3v2 tag from a path.
+func (t *Id3v2Tag) RemoveFromPath(path string, writeOptions WriteOptions) error {
+	return TagTypeID3v2.RemoveFromPath(path, writeOptions)
 }
 
 // WriteId3v2 writes an ID3v2 tag at the start of a file.
@@ -990,14 +1034,14 @@ func langOrXxx(l Lang) string {
 
 // --- upgrade maps ---
 
-// upgradeV2 maps an ID3v2.2 frame ID to its ID3v2.4 equivalent.
-func upgradeV2(id string) (string, bool) {
+// UpgradeV2 upgrades an ID3v2.2 key to its ID3v2.4 equivalent.
+func UpgradeV2(id string) (string, bool) {
 	v, ok := v2ToV4FrameIds[id]
 	return v, ok
 }
 
-// upgradeV3 maps an ID3v2.3 frame ID to its ID3v2.4 equivalent.
-func upgradeV3(id string) (string, bool) {
+// UpgradeV3 upgrades an ID3v2.3 key to its ID3v2.4 equivalent.
+func UpgradeV3(id string) (string, bool) {
 	v, ok := v3ToV4FrameIds[id]
 	return v, ok
 }
@@ -1041,3 +1085,23 @@ func init() {
 		return err
 	})
 }
+
+// RemoveKey removes all frames mapping to `key`, mirroring Rust's
+// `TagExt::remove_key` on `Id3v2Tag`.
+func (t *Id3v2Tag) RemoveKey(key ItemKey) {
+	removed := map[string]bool{}
+	if id, ok := key.MapKey(TagTypeID3v2); ok {
+		removed[id] = true
+	}
+	// Keys sharing a frame ID (e.g. TrackNumber/TrackTotal -> TRCK) and
+	// multi-role frames (TIPL/TMCL) are dropped when any of their keys is
+	// removed, matching Rust item-level retain semantics on frames.
+	var fid FrameId
+	for id := range removed {
+		fid = FrameIdValid(id)
+		t.Frames.Remove(fid)
+	}
+}
+
+// Remove removes all frames with the given [FrameId].
+func (t *Id3v2Tag) Remove(id FrameId) { t.Frames.Remove(id) }

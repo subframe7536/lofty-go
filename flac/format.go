@@ -54,7 +54,7 @@ func (p FlacProperties) FileProperties() FileProperties {
 type FlacFile struct {
 	Properties     FlacProperties
 	VorbisComments Option[*VorbisCommentsTag]
-	ID3v2          Option[*Tag]
+	ID3v2          Option[*Id3v2Tag]
 	pictures       []PictureInfoPair
 }
 
@@ -106,7 +106,7 @@ func FlacFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*FlacFil
 	if _, err := reader.Seek(fileStart, io.SeekStart); err != nil {
 		return nil, &FileParseError{Source: err}
 	}
-	var id3v2Tag *Tag
+	var id3v2Tag *Id3v2Tag
 	header, tagEnd, found, err := findId3v2(reader, false, parseOptions)
 	if err != nil {
 		return nil, &FileParseError{Source: err}
@@ -116,7 +116,7 @@ func FlacFileReadFrom(reader io.ReadSeeker, parseOptions ParseOptions) (*FlacFil
 			if _, err := reader.Seek(tagEnd-int64(header.Size), io.SeekStart); err != nil {
 				return nil, &FileParseError{Source: err}
 			}
-			t, err := parseId3v2(reader, header, parseOptions)
+			t, err := parseId3v2Tag(reader, header, parseOptions)
 			if err != nil {
 				return nil, &FileParseError{Source: &TagParseError{TagType: TagTypeID3v2, HasTagType: true, Source: err}}
 			}
@@ -216,7 +216,7 @@ func (f *FlacFile) ContainsTagType(tagType TagType) bool {
 func (f *FlacFile) TaggedFile() *TaggedFile {
 	var tags []*Tag
 	if t, ok := f.ID3v2.Get(); ok {
-		tags = append(tags, t)
+		tags = append(tags, t.Tag())
 	}
 	if t, ok := f.VorbisComments.Get(); ok {
 		g := t.Tag()
@@ -242,10 +242,7 @@ func (f *FlacFile) SavePath(path string, writeOptions WriteOptions) error {
 // SaveFile writes tags to an open file.
 func (f *FlacFile) SaveFile(file FileLike, writeOptions WriteOptions) error {
 	if t, ok := f.ID3v2.Get(); ok {
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			return &FileEncodingError{Source: err}
-		}
-		if err := WriteId3v2(file, t, writeOptions); err != nil {
+		if err := t.SaveToVerified(NewVerifiedFileOf(FileTypeFlac, file), writeOptions); err != nil {
 			return err
 		}
 	}
@@ -307,10 +304,6 @@ func flacWriteTagPics(file FileLike, tag *Tag, pics []PictureInfoPair, writeOpti
 		}
 	}
 
-	flacStart, err := file.Seek(0, io.SeekCurrent)
-	if err != nil {
-		return &FileEncodingError{Source: err}
-	}
 	var marker [4]byte
 	if _, err := io.ReadFull(file, marker[:]); err != nil || !bytes.Equal(marker[:], flacPreamble) {
 		return &FileEncodingError{Source: &FlacParseError{Source: &FakeTagError{}}}
@@ -366,11 +359,72 @@ func flacWriteTagPics(file FileLike, tag *Tag, pics []PictureInfoPair, writeOpti
 
 	// Build new tag blocks
 	vc := VorbisCommentsTagForWritePics(tag, vendor, false)
+	return flacWriteBlocksAt(file, metaStart, metaEnd, kept, hasPadding, vc, !tag.IsEmpty(), pics, writeOptions)
+}
+
+// flacWriteVorbisComments writes a concrete [VorbisCommentsTag] into a FLAC
+// file, mirroring Rust `flac::write::write_to_inner`.
+func flacWriteVorbisComments(file FileLike, vc *VorbisCommentsTag, writeOptions WriteOptions) error {
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return &FileEncodingError{Source: err}
+	}
+	if _, _, found, err := findId3v2(file, false, writeOptions.ParseOptions); err != nil {
+		return &FileEncodingError{Source: err}
+	} else if !found {
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return &FileEncodingError{Source: err}
+		}
+	}
+	var marker [4]byte
+	if _, err := io.ReadFull(file, marker[:]); err != nil || !bytes.Equal(marker[:], flacPreamble) {
+		return &FileEncodingError{Source: &FlacParseError{Source: &FakeTagError{}}}
+	}
+	metaStart, _ := file.Seek(0, io.SeekCurrent)
+	var kept [][]byte
+	hasPadding := false
+	for {
+		var hdr [4]byte
+		if _, err := io.ReadFull(file, hdr[:]); err != nil {
+			return &FileEncodingError{Source: err}
+		}
+		last := hdr[0]&0x80 != 0
+		blockType := hdr[0] & 0x7F
+		size := int(hdr[1])<<16 | int(hdr[2])<<8 | int(hdr[3])
+		data, err := tryByteSlice(size)
+		if err != nil {
+			return &FileEncodingError{Source: err}
+		}
+		if _, err := io.ReadFull(file, data); err != nil {
+			return &FileEncodingError{Source: err}
+		}
+		if blockType == byte(flac.Padding) {
+			hasPadding = true
+		}
+		if blockType != byte(flac.VorbisComment) && blockType != byte(flac.Picture) {
+			var hdrB [4]byte
+			hdrB[0] = blockType
+			hdrB[1] = byte(size >> 16)
+			hdrB[2] = byte(size >> 8)
+			hdrB[3] = byte(size)
+			kept = append(kept, append(hdrB[:], data...))
+		}
+		if last {
+			break
+		}
+	}
+	metaEnd, err := file.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return &FileEncodingError{Source: err}
+	}
+	return flacWriteBlocksAt(file, metaStart, metaEnd, kept, hasPadding, vc, !vc.IsEmpty(), vc.Pictures(), writeOptions)
+}
+
+func flacWriteBlocksAt(file FileLike, metaStart, metaEnd int64, kept [][]byte, hasPadding bool, vc *VorbisCommentsTag, writeVC bool, pics []PictureInfoPair, writeOptions WriteOptions) error {
 	vcData, err := EncodeVorbisComments(vc)
 	if err != nil {
 		return &FileEncodingError{Source: &TagEncodingError{TagType: TagTypeVorbisComments, HasTagType: true, Source: err}}
 	}
-	if !tag.IsEmpty() {
+	if writeVC {
 		var hdrB [4]byte
 		hdrB[0] = byte(flac.VorbisComment)
 		hdrB[1] = byte(len(vcData) >> 16)
@@ -423,7 +477,6 @@ func flacWriteTagPics(file FileLike, tag *Tag, pics []PictureInfoPair, writeOpti
 		meta.Write(block)
 	}
 
-	_ = flacStart
 	return Splice(file, uint64(metaStart), uint64(metaEnd), meta.Bytes())
 }
 
@@ -448,6 +501,9 @@ func init() {
 			return WriteId3v2(f, tag, writeOptions)
 		}
 		return &FileEncodingError{Source: &UnsupportedTagError{}}
+	})
+	RegisterConcreteTagWriter(FileTypeFlac, TagTypeVorbisComments, func(file *VerifiedFile, tag any, writeOptions WriteOptions) error {
+		return flacWriteVorbisComments(file.File(), tag.(*VorbisCommentsTag), writeOptions)
 	})
 	RegisterTagDumper(TagTypeVorbisComments, func(tag *Tag, writer io.Writer, writeOptions WriteOptions) error {
 		vc := VorbisCommentsTagFromTag(tag, "")

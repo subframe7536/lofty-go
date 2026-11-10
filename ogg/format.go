@@ -841,5 +841,11 @@ func init() {
 			}
 			return oggWriteVorbisComments(file.File(), file.Format(), tag, writeOptions)
 		})
+		RegisterConcreteTagWriter(ft, TagTypeVorbisComments, func(file *VerifiedFile, tag any, writeOptions WriteOptions) error {
+			vc := tag.(*VorbisCommentsTag)
+			return oggWriteVorbisCommentsImpl(file.File(), file.Format(), writeOptions, func(string) *VorbisCommentsTag {
+				return vc
+			})
+		})
 	}
 }

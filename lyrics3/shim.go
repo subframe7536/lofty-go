@@ -73,3 +73,19 @@ var (
 	NewParseOptions = meta.NewParseOptions
 	NewWriteOptions = meta.NewWriteOptions
 )
+
+// Aliases for concrete-tag writes (Rust `TagExt` parity).
+type (
+	UnsupportedTagError = meta.UnsupportedTagError
+	VerifiedFile        = meta.VerifiedFile
+	TagSupport          = meta.TagSupport
+)
+
+const (
+	TagSupportUnsupported = meta.TagSupportUnsupported
+)
+
+var (
+	NewVerifiedFile      = meta.NewVerifiedFile
+	VerifiedFileFromPath = meta.VerifiedFileFromPath
+)
