@@ -578,13 +578,16 @@ func TestFlacTryWriteNonEmptyId3v2(t *testing.T) {
 }
 
 func TestFlacStreamInfoLast(t *testing.T) {
-	// STREAMINFO may appear after other metadata blocks
+	// STREAMINFO may appear after other metadata blocks. This fixture's
+	// STREAMINFO declares 0 total samples, so Rust also reports a zero
+	// duration while still exposing rate/depth/channels.
 	file := probeRead(t, testAsset("stream_info_last.flac"), NewParseOptions())
 	if !file.FileType().Equal(FileTypeFlac) {
 		t.Fatalf("expected Flac, got %s", file.FileType())
 	}
-	if file.Properties().Duration() <= 0 {
-		t.Fatal("expected non-zero duration from trailing STREAMINFO")
+	p := file.Properties()
+	if p.SampleRate().OrZero() != 44100 || p.BitDepth().OrZero() != 16 || p.Channels().OrZero() != 2 {
+		t.Fatalf("expected STREAMINFO props, got %+v", p)
 	}
 }
 

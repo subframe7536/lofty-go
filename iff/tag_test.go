@@ -4,10 +4,13 @@ package iff
 
 import (
 	"bytes"
+	"encoding/binary"
+	"errors"
 	"os"
 	"testing"
 
 	meta "github.com/subframe7536/lofty-go/internal/meta"
+	"github.com/subframe7536/lofty-go/internal/util"
 
 	"github.com/subframe7536/lofty-go/internal/testutil"
 )
@@ -120,6 +123,92 @@ func TestRiffInfoCompanionTagRoundtrip(t *testing.T) {
 	}
 	if v, _ := info2.Get("WHAT"); v != "Something format-specific" {
 		t.Fatalf("WHAT = %q", v)
+	}
+}
+
+// Rust's tagitems_into_riff maps a generic popularimeter to its RIFF rating
+// number on write/dump, while merge_tag keeps the raw popm text.
+func TestTagitemsIntoRiffPopm(t *testing.T) {
+	popm := meta.PopularimeterMusicBee(meta.StarRatingThree, 5)
+	tag := meta.NewTag(meta.TagTypeRiffInfo)
+	tag.InsertText(meta.ItemKeyPopularimeter, popm.String())
+	tag.InsertText(meta.ItemKeyTrackTitle, "Foo title")
+
+	// merge_tag: raw value
+	info := RiffInfoTagFromTag(tag)
+	if v, ok := info.Get("IRTD"); !ok || v != popm.String() {
+		t.Fatalf("merge_tag IRTD = %q, want %q", v, popm.String())
+	}
+
+	// tagitems_into_riff: mapped u8 (MusicBee rate for RiffInfo = rating*20)
+	items := tagitemsIntoRiff(tag)
+	var irt string
+	for _, it := range items {
+		if it.key == "IRTD" {
+			irt = it.value
+		}
+	}
+	if want := "60"; irt != want {
+		t.Fatalf("tagitems_into_riff IRTD = %q, want %q", irt, want)
+	}
+}
+
+// Rust's write_riff_info errors with SizeMismatchError when the file is
+// shorter than the declared RIFF size.
+func TestWavWriteRiffInfoShortFile(t *testing.T) {
+	// Declares 100 bytes of RIFF content but the file ends at "WAVE".
+	wav := []byte("RIFF\x64\x00\x00\x00WAVE")
+	file := util.NewBytesFile(wav)
+	tag := &RiffInfoTag{}
+	tag.SetTitle("Foo title")
+	err := wavWriteRiffInfoTag(file, tag, meta.NewWriteOptions())
+	if err == nil {
+		t.Fatal("expected SizeMismatchError")
+	}
+	var fErr *meta.FileEncodingError
+	if !errors.As(err, &fErr) {
+		t.Fatalf("expected FileEncodingError, got %v", err)
+	}
+	var sm *meta.SizeMismatchError
+	if !errors.As(err, &sm) {
+		t.Fatalf("expected SizeMismatchError, got %v", err)
+	}
+}
+
+// Writing RIFF INFO into a WAV with trailing data inserts at the declared
+// RIFF end, and the RIFF size grows by the written bytes.
+func TestWavWriteRiffInfoAppend(t *testing.T) {
+	var wav []byte
+	wav = append(wav, []byte("RIFF")...)
+	wav = binary.LittleEndian.AppendUint32(wav, 0) // placeholder size
+	wav = append(wav, []byte("WAVE")...)
+	// fmt chunk: "fmt " + size(16) + 16 bytes of body
+	wav = append(wav, []byte("fmt ")...)
+	wav = binary.LittleEndian.AppendUint32(wav, 16)
+	wav = append(wav, make([]byte, 16)...)
+	// declared RIFF size ends after the fmt chunk; junk follows outside
+	riffSize := uint32(len(wav) - 8)
+	binary.LittleEndian.PutUint32(wav[4:], riffSize)
+	wav = append(wav, []byte("JUNKDATA")...)
+
+	file := util.NewBytesFile(wav)
+	tag := &RiffInfoTag{}
+	tag.SetTitle("Foo title")
+	if err := wavWriteRiffInfoTag(file, tag, meta.NewWriteOptions()); err != nil {
+		t.Fatal(err)
+	}
+	got := file.Bytes()
+	insertAt := int64(8) + int64(riffSize)
+	if !bytes.Equal(got[insertAt:insertAt+4], []byte("LIST")) {
+		t.Fatalf("expected LIST at declared RIFF end %d", insertAt)
+	}
+	newSize := binary.LittleEndian.Uint32(got[4:])
+	if newSize != riffSize+uint32(len(got)-len(wav)) {
+		t.Fatalf("RIFF size = %d, want %d", newSize, riffSize+uint32(len(got)-len(wav)))
+	}
+	// Trailing junk preserved after the inserted LIST
+	if !bytes.Equal(got[len(got)-8:], []byte("JUNKDATA")) {
+		t.Fatal("trailing data not preserved")
 	}
 }
 
@@ -276,6 +365,28 @@ func TestAiffParseComtInvalidPadding(t *testing.T) {
 	po.ParsingMode = meta.ParsingModeStrict
 	if _, err := AiffFileReadFrom(bytes.NewReader(aiff), po); err == nil {
 		t.Fatal("expected strict-mode failure")
+	}
+}
+
+// Rust reads COMT through the chunk-bounded Chunk reader: a comment field
+// that overruns the declared chunk size is an error in all modes.
+func TestAiffParseComtOverrun(t *testing.T) {
+	var aiff []byte
+	aiff = append(aiff, []byte("FORM\x00\x00\x00\x00AIFF")...)
+	// COMT declares 0x0E body bytes: count(2) + one comment header(8) + 4 text
+	aiff = append(aiff, []byte("COMT\x00\x00\x00\x0E\x00\x01")...)
+	aiff = append(aiff, []byte("\x00\x00\x04\x00\x00\x00\x00\x14Foo!")...)
+	// The comment claims 0x14 bytes of text but the chunk ends at 0x0E;
+	// this NAME chunk must not be read as comment text.
+	aiff = append(aiff, []byte("NAME\x00\x00\x00\x09Foo title\x00")...)
+
+	po := meta.NewParseOptions()
+	po.ReadProperties = false
+	for _, mode := range []meta.ParsingMode{meta.ParsingModeStrict, meta.ParsingModeBestAttempt, meta.ParsingModeRelaxed} {
+		po.ParsingMode = mode
+		if _, err := AiffFileReadFrom(bytes.NewReader(aiff), po); err == nil {
+			t.Fatalf("mode %v: expected COMT overrun error", mode)
+		}
 	}
 }
 

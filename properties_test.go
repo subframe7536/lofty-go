@@ -113,7 +113,7 @@ func TestPropertiesFlac(t *testing.T) {
 	}
 	p := f.Properties
 	eqMs(t, p.Duration, 1428)
-	eq(t, "overall_bitrate", p.OverallBitrate.OrZero(), uint32(321))
+	eq(t, "overall_bitrate", p.OverallBitrate, uint32(321))
 	eq(t, "audio_bitrate", p.AudioBitrate, 275)
 	eq(t, "sample_rate", p.SampleRate, 48000)
 	eq(t, "bit_depth", p.BitDepth, 16)
@@ -184,10 +184,10 @@ func TestPropertiesMp4Aac(t *testing.T) {
 	eq(t, "codec", p.Codec, Mp4CodecAAC)
 	eq(t, "extended_audio_object_type", p.ExtendedAudioObjectType.OrZero(), AudioObjectTypeAacLowComplexity)
 	eqMs(t, p.Duration, 1449)
-	eq(t, "overall_bitrate", p.OverallBitrate, 135)
-	eq(t, "audio_bitrate", p.AudioBitrate, 124)
-	eq(t, "sample_rate", p.SampleRate, 48000)
-	eq(t, "channels", p.Channels, 2)
+	eq(t, "overall_bitrate", p.OverallBitrate.OrZero(), 135)
+	eq(t, "audio_bitrate", p.AudioBitrate.OrZero(), 124)
+	eq(t, "sample_rate", p.SampleRate.OrZero(), 48000)
+	eq(t, "channels", p.Channels.OrZero(), 2)
 	eq(t, "drm", p.IsDrmProtected, false)
 	eq(t, "ftyp", p.Ftyp, "M4A ")
 }
@@ -201,11 +201,11 @@ func TestPropertiesMp4Alac(t *testing.T) {
 	eq(t, "codec", p.Codec, Mp4CodecALAC)
 	eq(t, "extended_audio_object_type", p.ExtendedAudioObjectType.IsNone(), true)
 	eqMs(t, p.Duration, 1428)
-	eq(t, "overall_bitrate", p.OverallBitrate, 331)
-	eq(t, "audio_bitrate", p.AudioBitrate, 326)
-	eq(t, "sample_rate", p.SampleRate, 48000)
-	eq(t, "bit_depth", p.BitDepth, 16)
-	eq(t, "channels", p.Channels, 2)
+	eq(t, "overall_bitrate", p.OverallBitrate.OrZero(), 331)
+	eq(t, "audio_bitrate", p.AudioBitrate.OrZero(), 326)
+	eq(t, "sample_rate", p.SampleRate.OrZero(), 48000)
+	eq(t, "bit_depth", p.BitDepth.OrZero(), 16)
+	eq(t, "channels", p.Channels.OrZero(), 2)
 	eq(t, "ftyp", p.Ftyp, "M4A ")
 }
 
@@ -218,10 +218,10 @@ func TestPropertiesMp4Als(t *testing.T) {
 	eq(t, "codec", p.Codec, Mp4CodecAAC)
 	eq(t, "extended_audio_object_type", p.ExtendedAudioObjectType.OrZero(), AudioObjectTypeAudioLosslessCoding)
 	eqMs(t, p.Duration, 1429)
-	eq(t, "overall_bitrate", p.OverallBitrate, 1083)
-	eq(t, "audio_bitrate", p.AudioBitrate, 1078)
-	eq(t, "sample_rate", p.SampleRate, 48000)
-	eq(t, "channels", p.Channels, 2)
+	eq(t, "overall_bitrate", p.OverallBitrate.OrZero(), 1083)
+	eq(t, "audio_bitrate", p.AudioBitrate.OrZero(), 1078)
+	eq(t, "sample_rate", p.SampleRate.OrZero(), 48000)
+	eq(t, "channels", p.Channels.OrZero(), 2)
 	eq(t, "ftyp", p.Ftyp, "mp42")
 }
 
@@ -233,11 +233,11 @@ func TestPropertiesMp4Flac(t *testing.T) {
 	p := f.Properties
 	eq(t, "codec", p.Codec, Mp4CodecFLAC)
 	eqMs(t, p.Duration, 1428)
-	eq(t, "overall_bitrate", p.OverallBitrate, 280)
-	eq(t, "audio_bitrate", p.AudioBitrate, 275)
-	eq(t, "sample_rate", p.SampleRate, 48000)
-	eq(t, "bit_depth", p.BitDepth, 16)
-	eq(t, "channels", p.Channels, 2)
+	eq(t, "overall_bitrate", p.OverallBitrate.OrZero(), 280)
+	eq(t, "audio_bitrate", p.AudioBitrate.OrZero(), 275)
+	eq(t, "sample_rate", p.SampleRate.OrZero(), 48000)
+	eq(t, "bit_depth", p.BitDepth.OrZero(), 16)
+	eq(t, "channels", p.Channels.OrZero(), 2)
 	eq(t, "ftyp", p.Ftyp, "isom")
 }
 

@@ -75,6 +75,98 @@ func TestIlstParse(t *testing.T) {
 	}
 }
 
+func ilstTestAtom(fourcc string, datas ...[]byte) []byte {
+	var body []byte
+	for _, payload := range datas {
+		var d [16]byte
+		binary.BigEndian.PutUint32(d[:4], uint32(16+len(payload)))
+		copy(d[4:8], "data")
+		d[11] = 1 // type: UTF-8, well-known set 0
+		body = append(body, d[:]...)
+		body = append(body, payload...)
+	}
+	var h [8]byte
+	binary.BigEndian.PutUint32(h[:4], uint32(8+len(body)))
+	copy(h[4:8], mp4NameFromKey(fourcc))
+	return append(h[:], body...)
+}
+
+// Rust's parse_ilst reads the whole declared body up front — a truncated
+// body is a hard error in every parsing mode.
+func TestIlstTruncatedBody(t *testing.T) {
+	data := ilstTestAtom("©nam", []byte("title"))
+	for _, mode := range []meta.ParsingMode{meta.ParsingModeStrict, meta.ParsingModeBestAttempt, meta.ParsingModeRelaxed} {
+		po := meta.NewParseOptions()
+		po.ParsingMode = mode
+		// Declare more than the buffer holds
+		if _, err := ParseIlst(bytes.NewReader(data), int64(len(data)+10), po); err == nil {
+			t.Fatalf("mode %v: truncated body did not error", mode)
+		}
+		// Fewer bytes than declared is fine only when the bound matches
+		if _, err := ParseIlst(bytes.NewReader(data), int64(len(data)), po); err != nil {
+			t.Fatalf("mode %v: %v", mode, err)
+		}
+	}
+}
+
+// A malformed `----` freeform atom fails inside Rust's AtomInfo::read —
+// `while let Ok` swallows it and just ends the scan, keeping prior atoms.
+func TestIlstBadFreeformEndsScan(t *testing.T) {
+	good := ilstTestAtom("©nam", []byte("title"))
+	// `----` atom whose first child isn't `mean` (24+ byte payload so it
+	// isn't rejected on size alone)
+	var bad bytes.Buffer
+	bad.Write(binary.BigEndian.AppendUint32(nil, 8+28))
+	bad.WriteString("----")
+	bad.Write([]byte("this is not a mean box 123456"))
+	data := append(good, bad.Bytes()...)
+	po := meta.NewParseOptions()
+	po.ParsingMode = meta.ParsingModeStrict
+	ilst, err := ParseIlst(bytes.NewReader(data), int64(len(data)), po)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ilst.Len() != 1 || ilst.Get(FourccIdent("©nam")) == nil {
+		t.Fatalf("len = %d, want 1 atom (©nam)", ilst.Len())
+	}
+}
+
+// A `data` child atom overshooting the ilst bound: Rust propagates the
+// next() error except in Relaxed mode, where it ends the scan cleanly.
+func TestIlstOversizeDataAtom(t *testing.T) {
+	var body bytes.Buffer
+	body.Write(binary.BigEndian.AppendUint32(nil, 40)) // ©nam claims 40, fits
+	body.WriteString("\xa9nam")
+	body.Write(binary.BigEndian.AppendUint32(nil, 200)) // data overshoots
+	body.WriteString("data")
+	body.Write([]byte{0, 0, 0, 1, 0, 0, 0, 0})
+	body.Write([]byte("0123456789abcdef"))
+	data := body.Bytes()
+	if len(data) != 40 {
+		t.Fatalf("test body = %d, want 40", len(data))
+	}
+
+	strict := meta.NewParseOptions()
+	strict.ParsingMode = meta.ParsingModeStrict
+	if _, err := ParseIlst(bytes.NewReader(data), int64(len(data)), strict); err == nil {
+		t.Fatal("strict: oversize data atom did not error")
+	}
+	best := meta.NewParseOptions()
+	best.ParsingMode = meta.ParsingModeBestAttempt
+	if _, err := ParseIlst(bytes.NewReader(data), int64(len(data)), best); err == nil {
+		t.Fatal("best-attempt: oversize data atom did not error")
+	}
+	relaxed := meta.NewParseOptions()
+	relaxed.ParsingMode = meta.ParsingModeRelaxed
+	ilst, err := ParseIlst(bytes.NewReader(data), int64(len(data)), relaxed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ilst.Len() != 0 {
+		t.Fatalf("len = %d, want 0", ilst.Len())
+	}
+}
+
 func TestIlstReRead(t *testing.T) {
 	ilst := readIlstAssetStrict(t, "test.ilst")
 	var buf bytes.Buffer

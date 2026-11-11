@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
-	"sort"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -863,7 +863,11 @@ func ApeWriteTo(file meta.FileLike, tag *ApeTag, writeOptions meta.WriteOptions)
 					}
 				}
 				if len(ro) > 0 {
-					tags.readOnly = &ApeTag{items: ro}
+					// Rust merges read-only items from both tags
+					if tags.readOnly == nil {
+						tags.readOnly = &ApeTag{}
+					}
+					tags.readOnly.items = append(tags.readOnly.items, ro...)
 				}
 			}
 			// The tag region ends at start+32 and spans header.Size total
@@ -895,18 +899,10 @@ func ApeWriteTo(file meta.FileLike, tag *ApeTag, writeOptions meta.WriteOptions)
 		items = append(items, item)
 	}
 
-	// Encode
+	// Encode — Rust writes items in tag order (no sorting)
 	var content bytes.Buffer
-	var keys []string
-	itemMap := map[string]*ApeItem{}
-	for _, i := range items {
-		itemMap[i.Key] = i
-		keys = append(keys, i.Key)
-	}
-	sort.Strings(keys)
 	size := uint64(0)
-	for _, key := range keys {
-		item := itemMap[key]
+	for _, item := range items {
 		var valueLen uint32
 		var itemFlags uint32
 		switch item.Value.Kind() {
@@ -943,47 +939,47 @@ func ApeWriteTo(file meta.FileLike, tag *ApeTag, writeOptions meta.WriteOptions)
 		size += 8 + uint64(len(item.Key)) + 1 + uint64(valueLen)
 	}
 
-	// Remove existing tags. An APE tag at the start of the file is removed
-	// with a splice, not a truncate (audio data may follow it).
-	insertPos := existing.writePosition
+	// Encode the full tag (header + content + footer). The size field
+	// covers the content plus the 32-byte footer.
+	if size+32 > math.MaxUint32 {
+		return &meta.FileEncodingError{Source: &meta.TooMuchDataError{}}
+	}
+	var encoded bytes.Buffer
+	if len(items) > 0 {
+		totalSize := uint32(size + 32)
+		var hdr [32]byte
+		copy(hdr[:8], apePreamble)
+		binary.LittleEndian.PutUint32(hdr[8:], 2000)
+		binary.LittleEndian.PutUint32(hdr[12:], totalSize)
+		binary.LittleEndian.PutUint32(hdr[16:], uint32(len(items)))
+		binary.LittleEndian.PutUint32(hdr[20:], apeHeaderIsHeader|apeHeaderContainsFooter|apeHeaderContainsHeader)
+		encoded.Write(hdr[:])
+		encoded.Write(content.Bytes())
+		var ftr [32]byte
+		copy(ftr[:8], apePreamble)
+		binary.LittleEndian.PutUint32(ftr[8:], 2000)
+		binary.LittleEndian.PutUint32(ftr[12:], totalSize)
+		binary.LittleEndian.PutUint32(ftr[16:], uint32(len(items)))
+		binary.LittleEndian.PutUint32(ftr[20:], apeHeaderContainsFooter|apeHeaderContainsHeader)
+		encoded.Write(ftr[:])
+	}
+
+	// Rust `write_tag`: replace the footer tag's range with the new tag
+	// (or insert at write_position when none), THEN drain the header tag.
+	// Draining the header first would invalidate the footer positions.
+	if existing.footerFound {
+		if err := meta.Splice(file, uint64(existing.footer[0]), uint64(existing.footer[1]), encoded.Bytes()); err != nil {
+			return &meta.FileEncodingError{Source: err}
+		}
+	} else if encoded.Len() > 0 {
+		if err := meta.Splice(file, uint64(existing.writePosition), uint64(existing.writePosition), encoded.Bytes()); err != nil {
+			return &meta.FileEncodingError{Source: err}
+		}
+	}
 	if existing.headerFound {
 		if err := meta.Splice(file, uint64(existing.header[0]), uint64(existing.header[1]), nil); err != nil {
 			return &meta.FileEncodingError{Source: err}
 		}
-	}
-	if existing.footerFound {
-		insertPos = existing.footer[0]
-		if err := meta.Splice(file, uint64(existing.footer[0]), uint64(existing.footer[1]), nil); err != nil {
-			return &meta.FileEncodingError{Source: err}
-		}
-	}
-
-	if len(items) == 0 {
-		return nil
-	}
-
-	// Encode the full tag (header + content + footer) and insert it at the
-	// previous tag's position (or before any trailing ID3v1/Lyrics3 tags).
-	totalSize := uint32(size + 32) // footer included
-	var encoded bytes.Buffer
-	var hdr [32]byte
-	copy(hdr[:8], apePreamble)
-	binary.LittleEndian.PutUint32(hdr[8:], 2000)
-	binary.LittleEndian.PutUint32(hdr[12:], totalSize)
-	binary.LittleEndian.PutUint32(hdr[16:], uint32(len(items)))
-	binary.LittleEndian.PutUint32(hdr[20:], apeHeaderIsHeader|apeHeaderContainsFooter|apeHeaderContainsHeader)
-	encoded.Write(hdr[:])
-	encoded.Write(content.Bytes())
-	var ftr [32]byte
-	copy(ftr[:8], apePreamble)
-	binary.LittleEndian.PutUint32(ftr[8:], 2000)
-	binary.LittleEndian.PutUint32(ftr[12:], totalSize)
-	binary.LittleEndian.PutUint32(ftr[16:], uint32(len(items)))
-	binary.LittleEndian.PutUint32(ftr[20:], apeHeaderContainsFooter|apeHeaderContainsHeader)
-	encoded.Write(ftr[:])
-
-	if err := meta.Splice(file, uint64(insertPos), uint64(insertPos), encoded.Bytes()); err != nil {
-		return &meta.FileEncodingError{Source: err}
 	}
 	return nil
 }
@@ -1001,16 +997,8 @@ func init() {
 		binary.LittleEndian.PutUint32(hdr[8:], 2000)
 		// compute content
 		var content bytes.Buffer
-		var keys []string
-		itemMap := map[string]*ApeItem{}
-		for _, i := range at.items {
-			itemMap[i.Key] = i
-			keys = append(keys, i.Key)
-		}
-		sort.Strings(keys)
 		size := uint64(0)
-		for _, key := range keys {
-			item := itemMap[key]
+		for _, item := range at.items {
 			var valueLen uint32
 			var itemFlags uint32
 			switch item.Value.Kind() {
@@ -1172,11 +1160,16 @@ func ApeFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Ape
 	}
 	if foundI {
 		id3v1Tag = id3v1
+		if streamLen < 128 {
+			return nil, &meta.FileParseError{Source: &meta.SizeMismatchError{}}
+		}
 		streamLen -= 128
 	}
 
 	// Find Lyrics3
-	if _, _, _, foundL, err := lyrics3.FindLyrics3(data, false, parseOptions); err == nil && foundL {
+	if _, _, _, foundL, err := lyrics3.FindLyrics3(data, false, parseOptions); err != nil {
+		return nil, &meta.FileParseError{Source: err}
+	} else if foundL {
 		// Lyrics3 consumed: the reader sits at its start
 		pos, _ := data.Seek(0, io.SeekCurrent)
 		if pos-start < int64(streamLen) {
@@ -1487,31 +1480,33 @@ func ReadEndTags(reader io.ReadSeeker, start int64, streamLen uint64, parseOptio
 		return 0, nil, nil, err
 	}
 	if foundI {
+		if streamLen < 128 {
+			return 0, nil, nil, &meta.SizeMismatchError{}
+		}
 		streamLen -= 128
 	}
-	if _, _, _, foundL, err := lyrics3.FindLyrics3(reader, false, parseOptions); err == nil && foundL {
-		pos, _ := reader.Seek(0, io.SeekCurrent)
-		if pos-start < int64(streamLen) {
-			streamLen = uint64(pos - start)
-		}
-	}
+	// Rust's aac/musepack/wavpack readers check only ID3v1 and APE here —
+	// no Lyrics3 scan.
 	var apeTag *ApeTag
 	endPos, err := reader.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return 0, nil, nil, err
 	}
-	if _, err := reader.Seek(endPos-32, io.SeekStart); err == nil {
-		tag, apeHeader, err := ReadApeTag(reader, true, parseOptions)
-		if err != nil {
-			return 0, nil, nil, &meta.TagParseError{Source: err}
+	// Rust propagates `reader.seek(SeekFrom::Current(-32))?` — a negative
+	// target (fewer than 32 bytes past this point) fails the whole read.
+	if _, err := reader.Seek(endPos-32, io.SeekStart); err != nil {
+		return 0, nil, nil, err
+	}
+	tag, apeHeader, err := ReadApeTag(reader, true, parseOptions)
+	if err != nil {
+		return 0, nil, nil, &meta.TagParseError{Source: err}
+	}
+	if apeHeader != nil {
+		if parseOptions.ReadTags {
+			apeTag = tag
 		}
-		if apeHeader != nil {
-			if parseOptions.ReadTags {
-				apeTag = tag
-			}
-			if newLen := streamLen - uint64(apeHeader.Size); newLen < streamLen {
-				streamLen = newLen
-			}
+		if newLen := streamLen - uint64(apeHeader.Size); newLen < streamLen {
+			streamLen = newLen
 		}
 	}
 	return streamLen, id3v1, apeTag, nil
@@ -1538,16 +1533,8 @@ func (t *ApeTag) RemoveFromPath(path string, writeOptions meta.WriteOptions) err
 // mirroring Rust `ApeTag::dump_to`.
 func encodeApeTag(t *ApeTag) []byte {
 	var content bytes.Buffer
-	keys := make([]string, 0, len(t.items))
-	itemMap := map[string]*ApeItem{}
-	for _, i := range t.items {
-		itemMap[i.Key] = i
-		keys = append(keys, i.Key)
-	}
-	sort.Strings(keys)
 	count := uint32(0)
-	for _, key := range keys {
-		item := itemMap[key]
+	for _, item := range t.items {
 		var valueLen uint32
 		var itemFlags uint32
 		var val []byte

@@ -102,14 +102,16 @@ func WriteConcreteTag(file *VerifiedFile, tagType TagType, tag any, writeOptions
 // WriteTag writes a tag to a file of the verified format.
 func WriteTag(tag *Tag, file *VerifiedFile, writeOptions WriteOptions) error {
 	format := file.Format()
+	// Rust's write_tag hits `unreachable!` for custom formats; returning
+	// an error is the Go-port equivalent.
 	if format.kind == fileTypeCustom {
-		return &FileEncodingError{Source: &UnsupportedTagError{}}
+		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
 	}
 	support := format.TagSupport(tag.tagType)
 	// Rust tag_ext::save_to: empty tag writes are allowed for read-only
 	// formats, since they'll be stripped; non-empty writes are rejected.
 	if support == TagSupportUnsupported || (!support.IsWritable() && !tag.IsEmpty()) {
-		return &FileEncodingError{Source: &UnsupportedTagError{}}
+		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
 	}
 	if w, ok := formatWriters[format.kind]; ok {
 		err := w(file, tag, writeOptions)

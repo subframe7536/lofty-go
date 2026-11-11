@@ -370,6 +370,37 @@ func TestItemKeyMapManyToOne(t *testing.T) {
 	}
 }
 
+// Rust's gen_map! tables contain repeated keys as *separate* entries
+// (e.g. "TRCK" => TrackNumber then "TRCK" => TrackTotal); the HashMap
+// insert makes the last entry win for key lookup. Aliased entries like
+// "TIPL" => Producer|Arranger|... still resolve to the first variant.
+func TestItemKeyFromKeyLastWins(t *testing.T) {
+	cases := []struct {
+		tagType TagType
+		key     string
+		want    ItemKey
+	}{
+		{TagTypeID3v2, "TRCK", ItemKeyTrackTotal},
+		{TagTypeID3v2, "TPOS", ItemKeyDiscTotal},
+		{TagTypeID3v2, "MVIN", ItemKeyMovementTotal},
+		{TagTypeID3v2, "TEXT", ItemKeyLyricist},
+		{TagTypeID3v2, "TIPL", ItemKeyProducer},
+		{TagTypeID3v2, "TPUB", ItemKeyPublisher},
+		{TagTypeID3v2, "TSSE", ItemKeyEncoderSettings},
+		{TagTypeApe, "Track", ItemKeyTrackTotal},
+		{TagTypeApe, "Disc", ItemKeyDiscTotal},
+		{TagTypeApe, "Year", ItemKeyRecordingDate},
+		{TagTypeMp4Ilst, "trkn", ItemKeyTrackTotal},
+		{TagTypeMp4Ilst, "disk", ItemKeyDiscTotal},
+		{TagTypeMp4Ilst, "©lyr", ItemKeyLyrics},
+	}
+	for _, c := range cases {
+		if got, ok := ItemKeyFromKey(c.tagType, c.key); !ok || got != c.want {
+			t.Errorf("%v %q -> %v, want %v", c.tagType, c.key, got, c.want)
+		}
+	}
+}
+
 // Ported from tag/items/popularimeter.rs::popm_conversions.
 func TestPopmConversions(t *testing.T) {
 	expected := PopularimeterMusicBee(StarRatingThree, 5)

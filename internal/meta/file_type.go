@@ -300,6 +300,9 @@ func quickTypeGuess(buf []byte) (FileType, bool) {
 			if id == "AIFF" || id == "AIFC" {
 				return FileTypeAiff, true
 			}
+			// Rust's match arm yields None here — the ftyp/MPCK fallbacks
+			// are skipped for committed FORM buffers.
+			return FileType{}, false
 		}
 	case 'O':
 		if len(buf) >= 36 && string(buf[:4]) == "OggS" {
@@ -312,14 +315,18 @@ func quickTypeGuess(buf []byte) (FileType, bool) {
 			if string(buf[28:36]) == "Speex   " {
 				return FileTypeSpeex, true
 			}
+			return FileType{}, false
 		}
 	case 'f':
 		if len(buf) >= 4 && string(buf[:4]) == "fLaC" {
 			return FileTypeFlac, true
 		}
 	case 'R':
-		if len(buf) >= 12 && string(buf[:4]) == "RIFF" && string(buf[8:12]) == "WAVE" {
-			return FileTypeWav, true
+		if len(buf) >= 12 && string(buf[:4]) == "RIFF" {
+			if string(buf[8:12]) == "WAVE" {
+				return FileTypeWav, true
+			}
+			return FileType{}, false
 		}
 	case 'w':
 		if len(buf) >= 4 && string(buf[:4]) == "wvpk" {

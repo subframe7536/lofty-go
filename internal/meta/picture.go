@@ -210,6 +210,14 @@ func (p PictureType) AsApeKey() (string, bool) {
 	return "", false
 }
 
+// apePictureTypeUnknown stands in for Rust's `PictureType::Undefined(0)`,
+// which `from_ape_key` produces for unmapped "Cover Art" keys. Go's
+// [PictureType] is a plain u8 and cannot distinguish `Undefined(0)` from
+// `Other`; an out-of-range value keeps [PictureType.AsApeKey] returning
+// false like Rust (`Undefined(_) => None`), so such pictures are skipped
+// on write instead of being renamed to "Cover Art (Other)".
+const apePictureTypeUnknown = PictureType(21)
+
 // PictureTypeFromApeKey gets a [PictureType] from an APE item key.
 func PictureTypeFromApeKey(key string) PictureType {
 	for i, k := range ApePictureTypes {
@@ -217,7 +225,7 @@ func PictureTypeFromApeKey(key string) PictureType {
 			return PictureType(i)
 		}
 	}
-	return PictureType(0)
+	return apePictureTypeUnknown
 }
 
 // PictureInformation describes a [Picture].
@@ -747,7 +755,8 @@ func PictureFromApeBytes(key string, b []byte) (Picture, error) {
 		if ch == 0 {
 			break
 		}
-		descText.WriteByte(ch)
+		// Rust uses `char::from(u8)` — Latin-1 to UTF-8 transcoding
+		descText.WriteRune(rune(ch))
 	}
 
 	if descText.Len() > 0 {

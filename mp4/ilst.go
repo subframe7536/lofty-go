@@ -593,49 +593,60 @@ func utf16BEEncode(s string) []byte {
 
 // ParseIlst parses the atoms inside an `ilst` atom body into an [Ilst].
 func ParseIlst(reader io.ReadSeeker, end int64, parseOptions meta.ParseOptions) (*Ilst, error) {
+	// Rust `parse_ilst` buffers the whole atom body up front
+	// (try_vec + read_exact): a truncated body is a hard error in all
+	// parsing modes, and every read below stays inside the declared bound.
+	pos, err := reader.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return nil, err
+	}
+	bodyLen := end - pos
+	if bodyLen < 0 {
+		return nil, &Mp4ParseError{Source: &meta.SizeMismatchError{}}
+	}
+	contents, err := util.TryByteSlice(int(bodyLen))
+	if err != nil {
+		return nil, err
+	}
+	if _, err := io.ReadFull(reader, contents); err != nil {
+		return nil, err
+	}
+	cursor := &offsetReadSeeker{r: bytes.NewReader(contents), base: pos}
+
 	ilst := &Ilst{}
 	var upgradedGnres []AtomData
 	for {
-		pos, _ := reader.Seek(0, io.SeekCurrent)
-		if pos >= end {
+		cpos, _ := cursor.Seek(0, io.SeekCurrent)
+		if cpos >= end {
 			break
 		}
-		atom, err := mp4ReadBox(reader)
+		// Rust's outer `while let Ok(Some(atom)) = ilst_reader.next()`
+		// swallows every header-level error — a malformed atom (invalid
+		// ident, oversize, bad freeform) just ends the scan while keeping
+		// previously parsed atoms.
+		atom, err := mp4ReadBoxBound(cursor, uint64(end-cpos), parseOptions.ParsingMode)
 		if err != nil || atom == nil {
-			break
-		}
-		// Rust's AtomInfo validates ident bytes (0x20–0x7E or 0xA9); an
-		// invalid ident fails `next()`, which ends the ilst loop while
-		// keeping previously parsed atoms.
-		validIdent := true
-		for _, b := range atom.name {
-			if b != 0xA9 && (b < 0x20 || b > 0x7E) {
-				validIdent = false
-				break
-			}
-		}
-		if !validIdent {
 			break
 		}
 		atomEnd := atom.pos + int64(atom.size)
 		// `free`/`skip` atoms inside ilst are ignored
 		if atom.name == [4]byte{'f', 'r', 'e', 'e'} || atom.name == [4]byte{'s', 'k', 'i', 'p'} {
-			if _, err := reader.Seek(atomEnd, io.SeekStart); err != nil {
+			if _, err := cursor.Seek(atomEnd, io.SeekStart); err != nil {
 				break
 			}
 			continue
 		}
 		name := mp4AtomName(atom.name)
-		if _, err := reader.Seek(atom.pos, io.SeekStart); err != nil {
+		if _, err := cursor.Seek(atom.pos, io.SeekStart); err != nil {
 			break
 		}
 		var ident AtomIdent
 		if name == "----" {
-			// Rust `parse_freeform`: ordered mean-then-name sub-boxes,
-			// each a fullbox with a UTF-8 payload; errors are fatal.
-			id, err := mp4ParseFreeform(reader, atom, atomEnd)
+			// Rust `parse_freeform` runs inside `AtomInfo::read`, so its
+			// errors are swallowed by `while let Ok` — the scan just ends.
+			id, err := mp4ParseFreeform(cursor, atom, atomEnd)
 			if err != nil {
-				return nil, err
+				break
 			}
 			ident = id
 		} else {
@@ -646,7 +657,7 @@ func ParseIlst(reader io.ReadSeeker, end int64, parseOptions meta.ParseOptions) 
 		fourcc := atom.name
 		isCovr := fourcc == [4]byte{'c', 'o', 'v', 'r'}
 		if isCovr && !parseOptions.ReadCoverArt {
-			if _, err := reader.Seek(atomEnd, io.SeekStart); err != nil {
+			if _, err := cursor.Seek(atomEnd, io.SeekStart); err != nil {
 				break
 			}
 			continue
@@ -656,12 +667,18 @@ func ParseIlst(reader io.ReadSeeker, end int64, parseOptions meta.ParseOptions) 
 			[4]byte{'s', 'h', 'w', 'm'} == fourcc
 
 		for {
-			cpos, _ := reader.Seek(0, io.SeekCurrent)
+			cpos, _ := cursor.Seek(0, io.SeekCurrent)
 			if cpos >= atomEnd {
 				break
 			}
-			ch, err := mp4ReadBox(reader)
-			if err != nil || ch == nil {
+			// Rust `parse_data_inner`: `reader.next()?` — errors here
+			// propagate in all modes; `Ok(None)` ends the loop. The bound
+			// is the whole remaining `ilst` body, matching AtomReader.
+			ch, err := mp4ReadBoxBound(cursor, uint64(end-cpos), parseOptions.ParsingMode)
+			if err != nil {
+				return nil, err
+			}
+			if ch == nil {
 				break
 			}
 			childEnd := ch.pos + int64(ch.size)
@@ -676,29 +693,30 @@ func ParseIlst(reader io.ReadSeeker, end int64, parseOptions meta.ParseOptions) 
 				if parseOptions.ParsingMode == meta.ParsingModeStrict {
 					return nil, &Mp4ParseError{Message: `expected atom "data" to follow name`}
 				}
-				if _, err := reader.Seek(childEnd, io.SeekStart); err != nil {
+				if _, err := cursor.Seek(childEnd, io.SeekStart); err != nil {
 					break
 				}
 				continue
 			}
 			var dh [8]byte
-			if _, err := io.ReadFull(reader, dh[:]); err != nil {
-				break
+			if _, err := io.ReadFull(cursor, dh[:]); err != nil {
+				return nil, err
 			}
 			// type indicator: [type_set, type ×3]; only the well-known set (0) is valid
 			if dh[0] != 0 {
 				if parseOptions.ParsingMode == meta.ParsingModeStrict {
 					return nil, &Mp4ParseError{Message: "unknown type set in data atom"}
 				}
-				if _, err := reader.Seek(childEnd, io.SeekStart); err != nil {
+				if _, err := cursor.Seek(childEnd, io.SeekStart); err != nil {
 					break
 				}
 				continue
 			}
-			code := dh[3]
+			// Rust reads a u24 type code (DataType::from(read_u24))
+			code := uint32(dh[1])<<16 | uint32(dh[2])<<8 | uint32(dh[3])
 			contentLen := int(ch.size) - 8
 			if contentLen <= 0 {
-				if _, err := reader.Seek(childEnd, io.SeekStart); err != nil {
+				if _, err := cursor.Seek(childEnd, io.SeekStart); err != nil {
 					break
 				}
 				continue
@@ -707,8 +725,8 @@ func ParseIlst(reader io.ReadSeeker, end int64, parseOptions meta.ParseOptions) 
 			if err != nil {
 				return nil, err
 			}
-			if _, err := io.ReadFull(reader, payload); err != nil {
-				break
+			if _, err := io.ReadFull(cursor, payload); err != nil {
+				return nil, err
 			}
 			switch {
 			case isCovr:
@@ -759,7 +777,7 @@ func ParseIlst(reader io.ReadSeeker, end int64, parseOptions meta.ParseOptions) 
 					}
 					// Drop the whole atom (Rust `handle_error`)
 					datas = nil
-					_, _ = reader.Seek(atomEnd, io.SeekStart)
+					_, _ = cursor.Seek(atomEnd, io.SeekStart)
 					break
 				}
 				// Rust only keeps 8-byte `plID` payloads
@@ -767,14 +785,16 @@ func ParseIlst(reader io.ReadSeeker, end int64, parseOptions meta.ParseOptions) 
 					datas = append(datas, d)
 				}
 			}
-			if _, err := reader.Seek(childEnd, io.SeekStart); err != nil {
+			if _, err := cursor.Seek(childEnd, io.SeekStart); err != nil {
 				break
 			}
 		}
 	atomDone:
-		// The next iteration re-seeks to atom.pos, so a failed
-		// reposition is harmless here.
-		_, _ = reader.Seek(atomEnd, io.SeekStart)
+		// Rust's `ilst_reader` never rewinds: `while let Ok(Some(atom))`
+		// reads the next header at wherever the last child read ended.
+		// A `data` child that overshoots its parent (e.g. size-0 extends
+		// to the ilst end) thus permanently ends the outer scan — no
+		// seek back to atomEnd here.
 		if len(datas) > 0 {
 			// Upgraded `gnre` values are collected per-`data` and pushed
 			// as ©gen after the loop (discarded if a ©gen atom exists);
@@ -803,7 +823,7 @@ func ParseIlst(reader io.ReadSeeker, end int64, parseOptions meta.ParseOptions) 
 
 // ilstInterpretAtomContent maps a `data` payload to an [AtomData] per Rust's
 // `interpret_atom_content` + `gnre`/`plID` special cases.
-func ilstInterpretAtomContent(code uint8, payload []byte, fourcc [4]byte, parseOptions meta.ParseOptions) (AtomData, error) {
+func ilstInterpretAtomContent(code uint32, payload []byte, fourcc [4]byte, parseOptions meta.ParseOptions) (AtomData, error) {
 	// gnre: upgrade to UTF8 ©gen when implicit conversions are on
 	if fourcc == [4]byte{'g', 'n', 'r', 'e'} {
 		if parseOptions.ImplicitConversions && len(payload) >= 2 {

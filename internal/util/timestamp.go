@@ -214,31 +214,29 @@ func TimestampParse(reader io.Reader, parseMode ParsingMode) (Option[Timestamp],
 		sepMinSec = timestampSeparators[3:4]
 	}
 
-	readSeg := func(sep []byte) (Option[uint8], error) {
-		v, n, err := timestampSegment(rdr, 2, sep, parseMode)
+	segs := []struct {
+		sep []byte
+		dst *Option[uint8]
+	}{
+		{sepMd, &timestamp.Month},
+		{sepMd, &timestamp.Day},
+		{sepHour, &timestamp.Hour},
+		{sepMinSec, &timestamp.Minute},
+		{sepMinSec, &timestamp.Second},
+	}
+	for _, s := range segs {
+		var v uint16
+		var n int
+		v, n, err = timestampSegment(rdr, 2, s.sep, parseMode)
 		if err != nil {
-			return None[uint8](), err
+			return None[Timestamp](), err
 		}
+		// Rust `read_segment!` breaks on the first segment yielding 0
+		// bytes; all remaining fields stay unset.
 		if n == 0 {
-			return None[uint8](), nil
+			break
 		}
-		return Some(uint8(v)), nil
-	}
-
-	if timestamp.Month, err = readSeg(sepMd); err != nil {
-		return None[Timestamp](), err
-	}
-	if timestamp.Day, err = readSeg(sepMd); err != nil {
-		return None[Timestamp](), err
-	}
-	if timestamp.Hour, err = readSeg(sepHour); err != nil {
-		return None[Timestamp](), err
-	}
-	if timestamp.Minute, err = readSeg(sepMinSec); err != nil {
-		return None[Timestamp](), err
-	}
-	if timestamp.Second, err = readSeg(sepMinSec); err != nil {
-		return None[Timestamp](), err
+		*s.dst = Some(uint8(v))
 	}
 
 	return Some(timestamp), nil

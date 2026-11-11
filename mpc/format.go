@@ -132,7 +132,7 @@ type MusepackFile struct {
 	Ape        meta.Option[*ape.ApeTag]
 }
 
-var mpcSampleRates = [4]uint32{44100, 48000, 37800, 32000}
+var mpcSampleRates = [8]uint32{44100, 48000, 37800, 32000, 0, 0, 0, 0}
 
 // MusepackFileReadFrom reads a [MusepackFile] from a reader.
 func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*MusepackFile, error) {
@@ -159,9 +159,10 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 	var id3v2Size uint64
 	if found2 {
 		id3v2Size = uint64(header.FullTagSize())
-		if newLen := streamLen - id3v2Size; newLen < streamLen {
-			streamLen = newLen
+		if id3v2Size > streamLen {
+			return nil, &meta.FileParseError{Source: &meta.SizeMismatchError{}}
 		}
+		streamLen -= id3v2Size
 		if parseOptions.ReadTags {
 			if _, err := reader.Seek(start+int64(header.FullTagSize()-header.Size), io.SeekStart); err != nil {
 				return nil, &meta.FileParseError{Source: err}
@@ -189,21 +190,37 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 	if _, err := io.ReadFull(reader, sig[:]); err != nil {
 		return nil, &meta.FileParseError{Source: err}
 	}
+	isSV8 := false
 	if bytes.Equal(sig[:], mpckPreamble[:3]) {
-		// SV8: "MPCK" + SH packet: [2B key "SH"][varint size][data]
 		var sig2 [1]byte
 		if _, err := io.ReadFull(reader, sig2[:]); err != nil {
 			return nil, &meta.FileParseError{Source: err}
 		}
-		if sig2[0] != 'K' {
-			return nil, &meta.FileParseError{Source: &meta.FakeTagError{}}
+		if sig2[0] == 'K' {
+			isSV8 = true
+		} else {
+			// Rust: a non-"MPCK" 4-byte signature falls through to the
+			// SV4-6 raw-header path after seeking back. Rewind to the
+			// header start and re-read the first 3 bytes into sig.
+			if _, err := reader.Seek(-4, io.SeekCurrent); err != nil {
+				return nil, &meta.FileParseError{Source: err}
+			}
+			if _, err := io.ReadFull(reader, sig[:]); err != nil {
+				return nil, &meta.FileParseError{Source: err}
+			}
 		}
+	}
+	if isSV8 {
 		p.Version = 8
+		// SV8: "MPCK" + SH packet: [2B key "SH"][varint size][data]
 		// Scan packets; stream_length accumulates each packet's content
 		// length (size field minus key and size bytes) until SE or EOF.
+		// Rust gates the whole property parse on read_properties.
 		var sv8StreamLen, sampleCount, beginningSilence uint64
 		foundSH, foundSE, foundRG := false, false, false
-		for {
+		// Rust's `while let Ok(...)` swallows all PacketReader::next errors —
+		// invalid keys, failed varints, and short reads just end the scan.
+		for parseOptions.ReadProperties {
 			pktStart, err := reader.Seek(0, io.SeekCurrent)
 			if err != nil {
 				break
@@ -212,12 +229,7 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 			if _, err := io.ReadFull(reader, key[:]); err != nil {
 				break
 			}
-			// Rust: packet keys are two uppercase ASCII bytes; anything else
-			// ends the packet scan (erroring in strict mode).
 			if key[0] < 'A' || key[0] > 'Z' || key[1] < 'A' || key[1] > 'Z' {
-				if parseOptions.ParsingMode == meta.ParsingModeStrict {
-					return nil, &meta.FileParseError{Source: &MpcParseError{Message: "invalid packet key"}}
-				}
 				break
 			}
 			size, sizeBytes, err := mpcReadSizeCount(reader)
@@ -229,26 +241,30 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 				capacity = int64(size) - int64(2+sizeBytes)
 			}
 			sv8StreamLen += uint64(capacity)
+			// Rust reads packet bodies through a reader bounded by the
+			// packet's remaining capacity; overruns are errors.
+			bounded := &io.LimitedReader{R: reader, N: capacity}
 			switch string(key[:]) {
 			case "SH":
 				// SH body: CRC(4), version(1), sample count(varint),
 				// beginning silence(varint), then 2 flag bytes
 				var crc [4]byte
-				if _, err := io.ReadFull(reader, crc[:]); err != nil {
+				if _, err := io.ReadFull(bounded, crc[:]); err != nil {
 					return nil, &meta.FileParseError{Source: err}
 				}
 				var ver [1]byte
-				if _, err := io.ReadFull(reader, ver[:]); err != nil {
+				if _, err := io.ReadFull(bounded, ver[:]); err != nil {
 					return nil, &meta.FileParseError{Source: err}
 				}
-				if sampleCount, err = mpcReadSize(reader); err != nil {
+				p.Version = ver[0]
+				if sampleCount, err = mpcReadSize(bounded); err != nil {
 					return nil, &meta.FileParseError{Source: err}
 				}
-				if beginningSilence, err = mpcReadSize(reader); err != nil {
+				if beginningSilence, err = mpcReadSize(bounded); err != nil {
 					return nil, &meta.FileParseError{Source: err}
 				}
 				var bits [2]byte
-				if _, err := io.ReadFull(reader, bits[:]); err != nil {
+				if _, err := io.ReadFull(bounded, bits[:]); err != nil {
 					return nil, &meta.FileParseError{Source: err}
 				}
 				p.SampleRate = mpcSampleRates[(int(bits[0])>>5)&7]
@@ -257,7 +273,18 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 			case "SE":
 				foundSE = true
 			case "RG":
+				// RG body: version(1) + 4 big-endian u16 gain/peak values
+				var rg [9]byte
+				if _, err := io.ReadFull(bounded, rg[:]); err != nil {
+					return nil, &meta.FileParseError{Source: err}
+				}
 				foundRG = true
+			case "EI":
+				// EI body: profile/PNS byte + major/minor/build bytes
+				var ei [4]byte
+				if _, err := io.ReadFull(bounded, ei[:]); err != nil {
+					return nil, &meta.FileParseError{Source: err}
+				}
 			}
 			if _, err := reader.Seek(pktStart+int64(size), io.SeekStart); err != nil {
 				break
@@ -266,44 +293,49 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 				break
 			}
 		}
-		if !foundSH {
-			if parseOptions.ParsingMode == meta.ParsingModeStrict {
+		if parseOptions.ReadProperties {
+			if !foundSH && parseOptions.ParsingMode == meta.ParsingModeStrict {
 				return nil, &meta.FileParseError{Source: &MpcParseError{Message: "file is missing a Stream Header packet"}}
 			}
-		} else if parseOptions.ReadProperties {
-			if beginningSilence > sampleCount {
-				return nil, &meta.FileParseError{Source: &MpcParseError{Message: "beginning silence is greater than the total sample count"}}
+			if !foundRG && parseOptions.ParsingMode == meta.ParsingModeStrict {
+				return nil, &meta.FileParseError{Source: &MpcParseError{Message: "file is missing a ReplayGain packet"}}
 			}
-			totalSamples := sampleCount - beginningSilence
-			if p.SampleRate > 0 && totalSamples > 0 {
-				length := util.DivRound(totalSamples*1000, uint64(p.SampleRate))
-				p.Duration = time.Duration(length) * time.Millisecond
-				bitrate := uint32(sv8StreamLen * 8 * uint64(p.SampleRate) / (totalSamples * 1000))
-				p.OverallBitrate = bitrate
-				p.AudioBitrate = bitrate
+			if sv8StreamLen == 0 && parseOptions.ParsingMode == meta.ParsingModeStrict {
+				return nil, &meta.FileParseError{Source: &MpcParseError{Message: "file is missing an Audio packet"}}
+			}
+			if !foundSE && parseOptions.ParsingMode == meta.ParsingModeStrict {
+				return nil, &meta.FileParseError{Source: &MpcParseError{Message: "file is missing a Stream End packet"}}
+			}
+			if foundSH {
+				if beginningSilence > sampleCount {
+					return nil, &meta.FileParseError{Source: &MpcParseError{Message: "beginning silence is greater than the total sample count"}}
+				}
+				totalSamples := sampleCount - beginningSilence
+				if p.SampleRate > 0 && totalSamples > 0 {
+					length := util.DivRound(totalSamples*1000, uint64(p.SampleRate))
+					p.Duration = time.Duration(length) * time.Millisecond
+					bitrate := uint32(sv8StreamLen * 8 * uint64(p.SampleRate) / (totalSamples * 1000))
+					p.OverallBitrate = bitrate
+					p.AudioBitrate = bitrate
+				}
 			}
 		}
-		if sv8StreamLen == 0 && parseOptions.ParsingMode == meta.ParsingModeStrict {
-			return nil, &meta.FileParseError{Source: &MpcParseError{Message: "file is missing an Audio packet"}}
-		}
-		if !foundSE && parseOptions.ParsingMode == meta.ParsingModeStrict {
-			return nil, &meta.FileParseError{Source: &MpcParseError{Message: "file is missing a Stream End packet"}}
-		}
-		if !foundRG && parseOptions.ParsingMode == meta.ParsingModeStrict {
-			return nil, &meta.FileParseError{Source: &MpcParseError{Message: "file is missing a ReplayGain packet"}}
-		}
-	} else {
+	} else if parseOptions.ReadProperties {
 		// SV7: signature is "MP+" with the version in the same u32.
 		// Anything else falls back to the SV4-6 raw header.
+		// Rust consumes 22 bytes for SV7; SV4-6 needs the full 32.
 		var rest [29]byte
-		if _, err := io.ReadFull(reader, rest[:]); err != nil {
+		if _, err := io.ReadFull(reader, rest[:22]); err != nil {
 			return nil, &meta.FileParseError{Source: err}
 		}
 		// First 3 bytes were 'M','P','+' or part of the signature dword.
 		// SV7 dword: sig "MP+" in low 24 bits, version in high 8
 		fullSig := uint32(sig[0]) | uint32(sig[1])<<8 | uint32(sig[2])<<16 | uint32(rest[0])<<24
 		if (fullSig & 0xFFFFFF) == 0x2B504D { // "MP+"
-			p.Version = uint8((fullSig >> 24) & 0xFF)
+			if rest[0]&0x0F != 7 {
+				return nil, &meta.FileParseError{Source: &MpcParseError{Message: "expected stream version 7"}}
+			}
+			p.Version = rest[0]
 			frameCount := binary.LittleEndian.Uint32(rest[1:])
 			p.FrameCount = frameCount
 			hdrFlags := binary.LittleEndian.Uint32(rest[5:])
@@ -355,6 +387,9 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 			}
 		} else {
 			// SV4-6: the signature dword + rest make up the 8 u32 header
+			if _, err := io.ReadFull(reader, rest[22:]); err != nil {
+				return nil, &meta.FileParseError{Source: err}
+			}
 			var headerData [8]uint32
 			headerData[0] = fullSig
 			for i := 1; i < 8; i++ {
@@ -391,6 +426,9 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 			}
 			p.SampleRate = 44100
 			p.Channels = 2
+			// Rust keeps the raw header bitrate when frame_count is 0
+			p.OverallBitrate = averageBitrate
+			p.AudioBitrate = averageBitrate
 			if parseOptions.ReadProperties && p.FrameCount > 0 {
 				const mpcFrameLength = 1152
 				const mpcDecoderSynthDelay = 481
@@ -532,11 +570,12 @@ func mpcReplayGain(gain uint16) int16 {
 	if gain == 0 {
 		return 0
 	}
-	v := (64.82-float64(gain)/100.0)*256.0 + 0.5
+	// Rust computes in f32: (64.82 - gain/100) * 256 + 0.5
+	v := (float32(64.82)-float32(gain)/100.0)*256.0 + 0.5
 	// Rust `(x) as i16` saturates out-of-range floats before the range
-	// check; !(0..i16::MAX).contains(&gain) => 0. Comparing in f64 avoids
+	// check; !(0..i16::MAX).contains(&gain) => 0. Comparing in f32 avoids
 	// Go's wrapping int16 conversion.
-	if v < 0 || v >= float64(math.MaxInt16) {
+	if v < 0 || v >= float32(math.MaxInt16) {
 		return 0
 	}
 	return int16(v)

@@ -3,8 +3,12 @@ package vorbis
 import (
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"io"
+	"strconv"
 	"strings"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/subframe7536/lofty-go/internal/meta"
 	"github.com/subframe7536/lofty-go/internal/util"
@@ -467,6 +471,26 @@ func VorbisCommentsTagFromTag(input *meta.Tag, vendor string) *VorbisCommentsTag
 
 // ParseVorbisComments parses the vendor+comments content (no "vorbis"/"OpusTags"
 // signature, no framing bit — callers strip those).
+var errInvalidUtf8 = errors.New("invalid UTF-8")
+
+// validVorbisCommentsKey mirrors Rust `valid_vorbis_comments_key`: the valid
+// range is 0x20..=0x7D excluding 0x3D ('=').
+func validVorbisCommentsKey(key string) bool {
+	for i := 0; i < len(key); i++ {
+		c := key[i]
+		if c < ' ' || c > '}' || c == '=' {
+			return false
+		}
+	}
+	return true
+}
+
+// asciiEscape renders a string like Rust's `escape_ascii`.
+func asciiEscape(s string) string {
+	q := strconv.QuoteToASCII(s)
+	return q[1 : len(q)-1]
+}
+
 func ParseVorbisComments(content []byte, parseOptions meta.ParseOptions) (*VorbisCommentsTag, error) {
 	tag := NewVorbisCommentsTag()
 	pos := 0
@@ -485,8 +509,20 @@ func ParseVorbisComments(content []byte, parseOptions meta.ParseOptions) (*Vorbi
 	if pos+int(vendorLen) > len(content) {
 		return nil, &VorbisCommentsParseError{Source: io.ErrUnexpectedEOF}
 	}
-	tag.Vendor = string(content[pos : pos+int(vendorLen)])
+	vendorBytes := content[pos : pos+int(vendorLen)]
 	pos += int(vendorLen)
+	if v, err := util.Utf8Decode(vendorBytes); err == nil {
+		tag.Vendor = v
+	} else if parseOptions.ParsingMode == meta.ParsingModeStrict {
+		return nil, &VorbisCommentsParseError{Source: err}
+	} else {
+		// Rust recovery: decode each byte as a u16 word (UTF-16)
+		words := make([]uint16, len(vendorBytes))
+		for i, b := range vendorBytes {
+			words[i] = uint16(b)
+		}
+		tag.Vendor = util.TrimEndNulls(string(utf16.Decode(words)))
+	}
 
 	itemCount, err := readU32()
 	if err != nil {
@@ -516,34 +552,50 @@ func ParseVorbisComments(content []byte, parseOptions meta.ParseOptions) (*Vorbi
 			}
 			data, err := base64.StdEncoding.DecodeString(value)
 			if err != nil {
+				if parseOptions.ParsingMode == meta.ParsingModeStrict {
+					return nil, &VorbisCommentsParseError{Source: err}
+				}
 				continue
 			}
-			pic, info, err := pictureFromFlacBytes(data)
-			if err == nil {
-				tag.pictures = append(tag.pictures, meta.PictureInfoPair{Picture: pic, Info: info})
+			pic, info, err := meta.PictureFromFlacBytes(data, false, parseOptions.ParsingMode)
+			if err != nil {
+				if parseOptions.ParsingMode == meta.ParsingModeStrict {
+					return nil, &VorbisCommentsParseError{Source: err}
+				}
+				continue
 			}
+			tag.pictures = append(tag.pictures, meta.PictureInfoPair{Picture: pic, Info: info})
 		case "COVERART", "COVERARTMIME":
 			if !parseOptions.ReadCoverArt {
 				continue
 			}
-			if key == "COVERART" {
+			if strings.EqualFold(key, "COVERART") {
+				// Deprecated format; converted to a picture with type Other
+				// and a best-effort MIME guess (Rust's mimetype_from_bin
+				// fallback is "image/").
 				data, err := base64.StdEncoding.DecodeString(value)
 				if err != nil {
+					if parseOptions.ParsingMode == meta.ParsingModeStrict {
+						return nil, &VorbisCommentsParseError{Source: err}
+					}
 					continue
 				}
-				pic := meta.PictureUnchecked(data).PicType(meta.PictureTypeCoverFront).Build()
-				if len(data) >= 8 {
-					if mt, err := meta.MimetypeFromBin(data[:8]); err == nil {
-						pic.SetMimeType(mt)
-					}
+				pic := meta.PictureUnchecked(data).PicType(meta.PictureTypeOther).Build()
+				if mt, err := meta.MimetypeFromBin(data); err == nil {
+					pic.SetMimeType(mt)
+				} else {
+					pic.SetMimeType(meta.MimeTypeUnknown("image/"))
 				}
-				tag.PushPicture(pic)
+				// Rust pushes PictureInformation::default() for COVERART
+				tag.pictures = append(tag.pictures, meta.PictureInfoPair{Picture: pic, Info: meta.PictureInformation{}})
 			}
-		case "BINARY":
-			item := meta.NewTagItem(meta.ItemKeyUnknown, meta.ItemValueBinary([]byte(value)))
-			item.Description = key
-			tag.items = append(tag.items, item)
 		case "TRACKNUMBER", "DISCNUMBER":
+			if !utf8.ValidString(value) {
+				if parseOptions.ParsingMode == meta.ParsingModeStrict {
+					return nil, &VorbisCommentsParseError{Source: errInvalidUtf8}
+				}
+				continue
+			}
 			upperKey := strings.ToUpper(key)
 			isTrack := upperKey == "TRACKNUMBER"
 			itemKey := meta.ItemKeyDiscNumber
@@ -585,6 +637,18 @@ func ParseVorbisComments(content []byte, parseOptions meta.ParseOptions) (*Vorbi
 				}
 			}
 		default:
+			if !validVorbisCommentsKey(key) {
+				if parseOptions.ParsingMode == meta.ParsingModeStrict {
+					return nil, &VorbisCommentsParseError{Message: "invalid item key: " + asciiEscape(key)}
+				}
+				continue
+			}
+			if !utf8.ValidString(value) {
+				if parseOptions.ParsingMode == meta.ParsingModeStrict {
+					return nil, &VorbisCommentsParseError{Source: errInvalidUtf8}
+				}
+				continue
+			}
 			if email, ok := strings.CutPrefix(key, "RATING:"); ok {
 				item := meta.NewTagItem(meta.ItemKeyPopularimeter, meta.ItemValueText(value))
 				item.Description = email
@@ -641,6 +705,15 @@ func EncodeVorbisComments(tag *VorbisCommentsTag) ([]byte, error) {
 		entries = append(entries, kv{"METADATA_BLOCK_PICTURE", base64.StdEncoding.EncodeToString(data)})
 	}
 
+	// Rust `create_comments` drops empty values
+	filtered := entries[:0]
+	for _, e := range entries {
+		if e.v != "" {
+			filtered = append(filtered, e)
+		}
+	}
+	entries = filtered
+
 	for _, e := range entries {
 		size += 4 + len(e.k) + 1 + len(e.v)
 	}
@@ -692,11 +765,6 @@ func (e *VorbisCommentsEncodingError) Error() string {
 	return "failed to encode Vorbis comments"
 }
 func (e *VorbisCommentsEncodingError) Unwrap() error { return e.Source }
-
-// pictureFromFlacBytes parses a FLAC METADATA_BLOCK_PICTURE block.
-func pictureFromFlacBytes(data []byte) (meta.Picture, meta.PictureInformation, error) {
-	return meta.PictureFromFlacBytes(data, false, meta.ParsingModeBestAttempt)
-}
 
 // flacBytes serializes a picture to a FLAC picture block body.
 

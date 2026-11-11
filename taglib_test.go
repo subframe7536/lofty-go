@@ -1048,11 +1048,11 @@ func TestTaglibMp4Properties(t *testing.T) {
 			t.Fatalf("%s: %v", tc.file, err)
 		}
 		p := mf.Properties
-		if ms(p.Duration) != tc.millis || p.AudioBitrate != tc.bitrate ||
-			p.Channels != tc.channels || p.SampleRate != tc.sampleRate {
+		if ms(p.Duration) != tc.millis || p.AudioBitrate.OrZero() != tc.bitrate ||
+			p.Channels.OrZero() != tc.channels || p.SampleRate.OrZero() != tc.sampleRate {
 			t.Errorf("%s: %+v", tc.file, p)
 		}
-		if tc.bitDepth != 0 && p.BitDepth != tc.bitDepth {
+		if tc.bitDepth != 0 && p.BitDepth.OrZero() != tc.bitDepth {
 			t.Errorf("%s: bit depth = %v, want %v", tc.file, p.BitDepth, tc.bitDepth)
 		}
 		if p.Codec != tc.codec {
@@ -1109,11 +1109,11 @@ func TestTaglibMp4PropertiesWithoutBitrate(t *testing.T) {
 			t.Fatalf("%s: %v", tc.file, err)
 		}
 		p := mf.Properties
-		if ms(p.Duration) != tc.millis || p.AudioBitrate != tc.bitrate ||
-			p.Channels != 2 || p.SampleRate != 44100 {
+		if ms(p.Duration) != tc.millis || p.AudioBitrate.OrZero() != tc.bitrate ||
+			p.Channels.OrZero() != 2 || p.SampleRate.OrZero() != 44100 {
 			t.Errorf("%s: %+v", tc.file, p)
 		}
-		if p.BitDepth != tc.bitDepth {
+		if p.BitDepth.OrZero() != tc.bitDepth {
 			t.Errorf("%s: bit depth = %v, want %v", tc.file, p.BitDepth, tc.bitDepth)
 		}
 		if p.Codec != tc.codec {
@@ -2939,7 +2939,7 @@ func TestTaglibMp4ZeroLengthAtom(t *testing.T) {
 	if ms(mf.Properties.Duration) != 1115 {
 		t.Fatalf("duration = %v", ms(mf.Properties.Duration))
 	}
-	if mf.Properties.SampleRate != 22050 {
+	if mf.Properties.SampleRate.OrZero() != 22050 {
 		t.Fatalf("sample_rate = %v", mf.Properties.SampleRate)
 	}
 }

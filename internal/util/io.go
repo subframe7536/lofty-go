@@ -213,8 +213,8 @@ func (f *BytesFile) Read(b []byte) (int, error) {
 // Write implements [io.Writer]. Writing past the end zero-fills the gap.
 func (f *BytesFile) Write(b []byte) (int, error) {
 	end := f.pos + int64(len(b))
-	if end > int64(len(f.buf)) {
-		newLen := end
+	oldLen := int64(len(f.buf))
+	if end > oldLen {
 		if int64(cap(f.buf)) >= end {
 			f.buf = f.buf[:end]
 		} else {
@@ -222,7 +222,11 @@ func (f *BytesFile) Write(b []byte) (int, error) {
 			copy(nb, f.buf)
 			f.buf = nb
 		}
-		_ = newLen
+		// Rust `Cursor<Vec>` resizes with zeros — a resliced buffer may
+		// still hold stale bytes beyond the old length
+		for i := oldLen; i < f.pos; i++ {
+			f.buf[i] = 0
+		}
 	}
 	n := copy(f.buf[f.pos:], b)
 	f.pos += int64(n)

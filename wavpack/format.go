@@ -38,7 +38,7 @@ func (p WavPackProperties) FileProperties() meta.FileProperties {
 		meta.Some(p.SampleRate),
 		meta.Some(p.BitDepth),
 		meta.Some(p.Channels),
-		meta.None[meta.ChannelMask](),
+		p.ChannelMask,
 	)
 }
 
@@ -240,11 +240,9 @@ func wvReadProperties(reader io.ReadSeeker, streamLen, fileLen uint64, mode meta
 			if err != nil {
 				return err
 			}
+			// Rust propagates the block_contents read error unconditionally
 			if _, err := io.ReadFull(reader, contents); err != nil {
-				if strict {
-					return &WavPackParseError{Source: err}
-				}
-				break
+				return &WavPackParseError{Source: err}
 			}
 			if err := wvExtendedMetaInfo(contents, p, mode); err != nil {
 				if strict {
@@ -268,7 +266,14 @@ func wvReadProperties(reader io.ReadSeeker, streamLen, fileLen uint64, mode meta
 				break
 			}
 			totalSamples = total
-			p.BitDepth = uint8(((flags&3)+1)*8 - ((flags >> 13) & 0x1F))
+			// Rust uses saturating_sub for the bit-depth shift
+			bitDepth := ((flags & 3) + 1) * 8
+			if shift := (flags >> 13) & 0x1F; shift < bitDepth {
+				bitDepth -= shift
+			} else {
+				bitDepth = 0
+			}
+			p.BitDepth = uint8(bitDepth)
 			p.Version = version
 			p.IsLossless = flags&wvFlagHybridCompression == 0
 			if flags&wvFlagFinalBlock != 0 {
@@ -317,8 +322,9 @@ func wvExtendedMetaInfo(content []byte, p *WavPackProperties, mode meta.ParsingM
 		size := int(content[1]) << 1
 		content = content[2:]
 		if id&wvIDFlagLargeSize != 0 {
+			// Rust's `read_u8()?` propagates the short-read error
 			if len(content) < 2 {
-				break
+				return &WavPackParseError{Source: io.ErrUnexpectedEOF}
 			}
 			size += int(content[0]) << 9
 			size += int(content[1]) << 17
@@ -355,25 +361,39 @@ func wvExtendedMetaInfo(content []byte, p *WavPackProperties, mode meta.ParsingM
 			if size <= 1 {
 				return &WavPackParseError{Message: "unable to extract channel information"}
 			}
-			channels := uint32(content[0])
-			maskBytes := content[1 : 1+min(size-1, 5)]
+			// Rust keys off s = size - 2 (block size minus id and channel
+			// bytes); the mask layout depends on s.
+			channels := uint16(content[0])
 			var mask uint32
-			for i, b := range maskBytes {
-				if i >= 4 {
-					break
-				}
-				mask |= uint32(b) << (8 * i)
-			}
-			// High channel counts encode extra bits after the mask
-			if size >= 5 {
-				channels |= uint32(content[size-1]&0xF) << 8
+			s := size - 2
+			switch s {
+			case 0:
+				mask = uint32(content[1])
+				size -= 1
+			case 1:
+				mask = uint32(binary.LittleEndian.Uint16(content[1:]))
+				size -= 2
+			case 2:
+				mask = uint32(content[1]) | uint32(content[2])<<8 | uint32(content[3])<<16
+				size -= 3
+			case 3:
+				mask = binary.LittleEndian.Uint32(content[1:])
+				size -= 4
+			case 4:
+				channels |= uint16(content[1]&0xF) << 8
 				channels++
+				mask = uint32(content[2]) | uint32(content[3])<<8 | uint32(content[4])<<16
+				size -= 4
+			case 5:
+				channels |= uint16(content[1]&0xF) << 8
+				channels++
+				mask = binary.LittleEndian.Uint32(content[2:])
+				size -= 5
+			default:
+				return &WavPackParseError{Message: "encountered invalid channel info size"}
 			}
-			if channels > 0xFF {
-				p.Channels = 0xFF
-			} else {
-				p.Channels = uint8(channels)
-			}
+			// Rust stores channels as u16; FileProperties truncates to u8
+			p.Channels = uint8(channels)
 			if mask != 0 {
 				p.ChannelMask = meta.Some(meta.ChannelMask(mask))
 			}
@@ -382,7 +402,11 @@ func wvExtendedMetaInfo(content []byte, p *WavPackProperties, mode meta.ParsingM
 			return &WavPackParseError{Message: "metadata block size exceeds remaining content"}
 		}
 		content = content[size:]
-		if id&wvIDFlagOddSize != 0 && len(content) > 0 {
+		if id&wvIDFlagOddSize != 0 {
+			// Rust's `read_u8()?` propagates the missing-pad error
+			if len(content) == 0 {
+				return &WavPackParseError{Source: io.ErrUnexpectedEOF}
+			}
 			content = content[1:]
 		}
 	}

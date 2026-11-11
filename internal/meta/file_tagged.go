@@ -13,14 +13,7 @@ type TaggedFile struct {
 
 // NewTaggedFile creates a [TaggedFile] from a file type, tags, and properties.
 func NewTaggedFile(fileType FileType, tags []*Tag, properties FileProperties) *TaggedFile {
-	// Empty tags are not reported (matches Rust's retain(!is_empty)).
-	var kept []*Tag
-	for _, tag := range tags {
-		if tag != nil && !tag.IsEmpty() {
-			kept = append(kept, tag)
-		}
-	}
-	return &TaggedFile{fileType: fileType, tags: kept, properties: properties}
+	return &TaggedFile{fileType: fileType, tags: tags, properties: properties}
 }
 
 // FileType returns the [FileType].
@@ -210,5 +203,16 @@ func (b *BoundTaggedFile) IntoInner() FileLike { return b.file }
 
 // Save writes all tags to the bound file.
 func (b *BoundTaggedFile) Save(writeOptions WriteOptions) error {
-	return b.TaggedFile.Save(b.file, writeOptions)
+	if err := b.TaggedFile.Save(b.file, writeOptions); err != nil {
+		return err
+	}
+	// Rust `BoundTaggedFile::save` drops emptied tags afterwards.
+	kept := b.tags[:0]
+	for _, tag := range b.tags {
+		if !tag.IsEmpty() {
+			kept = append(kept, tag)
+		}
+	}
+	b.tags = kept
+	return nil
 }

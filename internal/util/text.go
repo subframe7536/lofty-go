@@ -132,7 +132,8 @@ func (e TextEncoding) Encode(text string, terminated, lossy bool) ([]byte, error
 	switch e {
 	case TextEncodingLatin1:
 		out := make([]byte, 0, len(text))
-		for i, c := range text {
+		i := 0 // Rust reports `valid_up_to` as a character index
+		for _, c := range text {
 			if c <= 255 {
 				out = append(out, byte(c))
 			} else if lossy {
@@ -140,6 +141,7 @@ func (e TextEncoding) Encode(text string, terminated, lossy bool) ([]byte, error
 			} else {
 				return nil, &TextEncodingError{Encoding: e, ValidUpTo: i}
 			}
+			i++
 		}
 		if terminated {
 			out = append(out, 0)
@@ -356,7 +358,9 @@ func Latin1Decode(bytes []byte) string {
 
 func Latin1Encode(s string, lossy bool) ([]byte, error) {
 	out := make([]byte, 0, len(s))
-	for i, c := range s {
+	// Rust reports `valid_up_to` as a character index, not a byte index
+	i := 0
+	for _, c := range s {
 		if c <= 255 {
 			out = append(out, byte(c))
 		} else if lossy {
@@ -364,6 +368,7 @@ func Latin1Encode(s string, lossy bool) ([]byte, error) {
 		} else {
 			return nil, &TextEncodingError{Encoding: TextEncodingLatin1, ValidUpTo: i}
 		}
+		i++
 	}
 	return out, nil
 }

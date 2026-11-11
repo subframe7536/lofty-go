@@ -6,7 +6,6 @@ import (
 	"io"
 	"time"
 
-	"github.com/subframe7536/lofty-go/ape"
 	"github.com/subframe7536/lofty-go/id3v1"
 	"github.com/subframe7536/lofty-go/id3v2"
 	meta "github.com/subframe7536/lofty-go/internal/meta"
@@ -39,7 +38,7 @@ func (p AacProperties) FileProperties() meta.FileProperties {
 		meta.Some(p.SampleRate),
 		meta.None[uint8](),
 		meta.Some(p.Channels),
-		meta.None[meta.ChannelMask](),
+		p.ChannelMask,
 	)
 }
 
@@ -80,23 +79,32 @@ func AacFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Aac
 		}
 		// Rust quirk: only the tag content size is subtracted, not the
 		// 10-byte header — leaving it counted in stream_len.
+		if streamLen < uint64(header.Size) {
+			return nil, &meta.FileParseError{Source: &meta.SizeMismatchError{}}
+		}
 		streamLen -= uint64(header.Size)
 		if header.Flags.Footer {
+			if streamLen < 10 {
+				return nil, &meta.FileParseError{Source: &meta.SizeMismatchError{}}
+			}
 			streamLen -= 10
 		}
 		if parseOptions.ReadTags {
 			if _, err := reader.Seek(pos+int64(header.FullTagSize()-header.Size), io.SeekStart); err != nil {
 				return nil, &meta.FileParseError{Source: err}
 			}
-			if t, err := id3v2.ParseId3v2Tag(reader, header, parseOptions); err == nil {
-				if id3v2Tag != nil {
-					// Merge duplicate tags' frames (issue #87)
-					for _, fr := range t.Frames.Frames() {
-						id3v2Tag.Frames.Insert(fr)
-					}
-				} else {
-					id3v2Tag = t
+			// Rust propagates ID3v2 parse errors via `?`
+			t, err := id3v2.ParseId3v2Tag(reader, header, parseOptions)
+			if err != nil {
+				return nil, &meta.FileParseError{Source: &meta.TagParseError{TagType: meta.TagTypeID3v2, HasTagType: true, Source: err}}
+			}
+			if id3v2Tag != nil {
+				// Merge duplicate tags' frames (issue #87)
+				for _, fr := range t.Frames.Frames() {
+					id3v2Tag.Frames.Insert(fr)
 				}
+			} else {
+				id3v2Tag = t
 			}
 		}
 		// Advance past the whole tag for the next header check.
@@ -109,11 +117,18 @@ func AacFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Aac
 		return nil, &meta.FileParseError{Source: err}
 	}
 
-	newLen, id3v1Tag, _, err := ape.ReadEndTags(reader, start, streamLen, parseOptions)
-	if err != nil {
-		return nil, &meta.FileParseError{Source: err}
+	// Rust's aac reader only searches for ID3v1 at the end — there is no
+	// APE scan (and no -32 seek) in `aac/read.rs`.
+	var id3v1Tag *id3v1.Id3v1Tag
+	if t, _, _, foundI, err := id3v1.FindId3v1(reader, parseOptions.ReadTags, parseOptions.ParsingMode); err != nil {
+		return nil, &meta.FileParseError{Source: &meta.TagParseError{TagType: meta.TagTypeID3v1, HasTagType: true, Source: err}}
+	} else if foundI {
+		if streamLen < 128 {
+			return nil, &meta.FileParseError{Source: &meta.SizeMismatchError{}}
+		}
+		streamLen -= 128
+		id3v1Tag = t
 	}
-	streamLen = newLen
 
 	// Scan ADTS frames from just after any ID3v2 tag.
 	// Rust: each frame is validated by comparing the next 4 bytes at

@@ -41,11 +41,11 @@ const (
 // Mp4Properties are the audio properties of an MP4 file.
 type Mp4Properties struct {
 	Duration       time.Duration
-	OverallBitrate uint32
-	AudioBitrate   uint32
-	SampleRate     uint32
-	BitDepth       uint8
-	Channels       uint8
+	OverallBitrate meta.Option[uint32]
+	AudioBitrate   meta.Option[uint32]
+	SampleRate     meta.Option[uint32]
+	BitDepth       meta.Option[uint8]
+	Channels       meta.Option[uint8]
 	Codec          Mp4Codec
 	// IsDrmProtected reports whether the stream is FairPlay-protected.
 	IsDrmProtected bool
@@ -78,11 +78,11 @@ const (
 func (p Mp4Properties) FileProperties() meta.FileProperties {
 	return meta.NewFileProperties(
 		p.Duration,
-		meta.Some(p.OverallBitrate),
-		meta.Some(p.AudioBitrate),
-		meta.Some(p.SampleRate),
-		meta.None[uint8](),
-		meta.Some(p.Channels),
+		p.OverallBitrate,
+		p.AudioBitrate,
+		p.SampleRate,
+		p.BitDepth,
+		p.Channels,
 		meta.None[meta.ChannelMask](),
 	)
 }
@@ -133,7 +133,10 @@ func mp4ReadBoxBound(reader io.ReadSeeker, avail uint64, mode meta.ParsingMode) 
 	size := uint64(binary.BigEndian.Uint32(hdr[:4]))
 	h := &mp4BoxHeader{hdr: 8, pos: pos + 8}
 	copy(h.name[:], hdr[4:])
-	var total uint64
+	// Rust's AtomInfo::read checks `(len - header_len) > reader_size`, where
+	// `len` for a size-0 atom is the payload-to-EOF span — the header is
+	// effectively subtracted twice. `rustLen` tracks that semantics.
+	var rustLen uint64
 	switch size {
 	case 0:
 		// extends to EOF
@@ -142,7 +145,7 @@ func mp4ReadBoxBound(reader io.ReadSeeker, avail uint64, mode meta.ParsingMode) 
 			return nil, err
 		}
 		size = uint64(end - h.pos)
-		total = size + 8
+		rustLen = size // Rust's len is already the payload span here
 		if _, err := reader.Seek(h.pos, io.SeekStart); err != nil {
 			return nil, err
 		}
@@ -151,7 +154,7 @@ func mp4ReadBoxBound(reader io.ReadSeeker, avail uint64, mode meta.ParsingMode) 
 		if _, err := io.ReadFull(reader, ls[:]); err != nil {
 			return nil, err
 		}
-		total = binary.BigEndian.Uint64(ls[:])
+		total := binary.BigEndian.Uint64(ls[:])
 		h.hdr = 16
 		h.pos = pos + 16
 		if total < 16 {
@@ -159,15 +162,18 @@ func mp4ReadBoxBound(reader io.ReadSeeker, avail uint64, mode meta.ParsingMode) 
 			return nil, &Mp4ParseError{Source: util.NewNotEnoughDataError(8)}
 		}
 		size = total - 16
+		rustLen = total
 	default:
-		total = size
-		if total < 8 {
+		if size < 8 {
 			_, _ = reader.Seek(0, io.SeekEnd)
 			return nil, &Mp4ParseError{Source: util.NewNotEnoughDataError(8)}
 		}
-		size = total - 8
+		size -= 8
+		rustLen = size + 8
 	}
-	if avail != math.MaxUint64 && total > avail {
+	// `avail` is measured from the atom's start like Rust's `reader_size`,
+	// so a payload may overshoot the bound by up to the header size.
+	if avail != math.MaxUint64 && rustLen-h.hdr > avail {
 		// Content extends past the reader bound.
 		skippable := (mode != meta.ParsingModeStrict && h.name == [4]byte{'f', 'r', 'e', 'e'}) || mode == meta.ParsingModeRelaxed
 		_, _ = reader.Seek(0, io.SeekEnd)
@@ -208,20 +214,20 @@ func (o *offsetReadSeeker) Seek(off int64, whence int) (int64, error) {
 // version+flags field before its children (Rust `meta_is_full`): if the
 // second four bytes of the payload are a known child ident, the `meta` is
 // non-full and children start immediately.
-func mp4MetaIsFull(reader io.ReadSeeker, h *mp4BoxHeader) bool {
+func mp4MetaIsFull(reader io.ReadSeeker, h *mp4BoxHeader) (bool, error) {
 	var b [8]byte
 	if _, err := reader.Seek(h.pos, io.SeekStart); err != nil {
-		return true
+		return false, err
 	}
 	if _, err := io.ReadFull(reader, b[:]); err != nil {
-		return true
+		return false, err
 	}
 	_, _ = reader.Seek(h.pos, io.SeekStart)
 	switch string(b[4:8]) {
 	case "hdlr", "ilst", "mhdr", "ctry", "lang":
-		return false
+		return false, nil
 	}
-	return true
+	return true, nil
 }
 
 // mp4FindDescendants walks a container box's children looking for a named box.
@@ -288,31 +294,33 @@ func Mp4FileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp4
 		return nil, &meta.FileParseError{Source: err}
 	}
 
-	// Find moov + mdat
+	// Find moov + mdat. Rust's `Moov::find` uses `while let Ok(Some(atom))`
+	// — next() errors just end the scan; skip_atom errors propagate.
 	var moov *mp4BoxHeader
 	var mdatSize uint64
+	mdatFound := false
 	for {
 		pos, _ := reader.Seek(0, io.SeekCurrent)
 		if pos >= streamEnd {
 			break
 		}
 		h, err := mp4ReadBoxBound(reader, uint64(streamEnd-pos), parseOptions.ParsingMode)
-		if err != nil {
-			return nil, &meta.FileParseError{Source: err}
-		}
-		if h == nil {
+		if err != nil || h == nil {
 			break
 		}
 		switch string(h.name[:]) {
 		case "moov":
 			moov = h
 		case "mdat":
-			if mdatSize == 0 {
+			if !mdatFound {
+				// Rust `mdat_length` returns the first mdat's data_len,
+				// which may legitimately be 0.
 				mdatSize = h.size
+				mdatFound = true
 			}
 		}
 		if err := mp4SkipBox(reader, h); err != nil {
-			break
+			return nil, &meta.FileParseError{Source: err}
 		}
 	}
 	if moov == nil {
@@ -344,7 +352,7 @@ func Mp4FileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp4
 		if pos >= moovEnd {
 			break
 		}
-		h, err := mp4ReadBox(mr)
+		h, err := mp4ReadBoxBound(mr, uint64(moovEnd-pos), parseOptions.ParsingMode)
 		if err != nil || h == nil {
 			break
 		}
@@ -353,9 +361,21 @@ func Mp4FileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp4
 		case "trak":
 			traks = append(traks, h)
 		case "udta":
-			// udta/meta/ilst
-			if t, err := mp4WalkUdta(mr, boxEnd, parseOptions); err == nil && t != nil {
+			// udta/meta/ilst — Rust `ilst_from_udta` propagates parse
+			// errors and merges the atoms of additional `ilst` atoms.
+			t, err := mp4WalkUdta(mr, boxEnd, parseOptions)
+			if err != nil {
+				return nil, &meta.FileParseError{Source: err}
+			}
+			if t == nil {
+				break
+			}
+			if ilstTag == nil {
 				ilstTag = t
+			} else {
+				for _, a := range t.atoms {
+					ilstTag.Insert(a)
+				}
 			}
 		}
 		if _, err := mr.Seek(boxEnd, io.SeekStart); err != nil {
@@ -364,7 +384,11 @@ func Mp4FileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp4
 	}
 
 	if parseOptions.ReadProperties {
-		if err := mp4ReadProperties(mr, traks, fileLen, mdatSize, parseOptions, &file.Properties); err != nil {
+		var mdatLen meta.Option[uint64]
+		if mdatFound {
+			mdatLen = meta.Some(mdatSize)
+		}
+		if err := mp4ReadProperties(mr, traks, fileLen, mdatLen, parseOptions, &file.Properties); err != nil {
 			return nil, &meta.FileParseError{Source: err}
 		}
 	}
@@ -374,26 +398,31 @@ func Mp4FileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp4
 	return &file, nil
 }
 
-// mp4Children calls fn for each child box of container h; fn returning false stops.
-func mp4Children(reader io.ReadSeeker, h *mp4BoxHeader, fn func(c *mp4BoxHeader) bool) {
+// mp4Children calls fn for each child box of container h; fn returning false
+// stops. Errors propagate like Rust's `reader.next()?`/`skip_atom?` scans;
+// an `Ok(None)`-style atom ends the walk.
+func mp4Children(reader io.ReadSeeker, h *mp4BoxHeader, mode meta.ParsingMode, fn func(c *mp4BoxHeader) bool) error {
 	end := h.pos + int64(h.size)
 	if _, err := reader.Seek(h.pos, io.SeekStart); err != nil {
-		return
+		return err
 	}
 	for {
 		pos, _ := reader.Seek(0, io.SeekCurrent)
 		if pos >= end {
-			return
+			return nil
 		}
-		c, err := mp4ReadBox(reader)
-		if err != nil || c == nil {
-			return
+		c, err := mp4ReadBoxBound(reader, uint64(end-pos), mode)
+		if err != nil {
+			return err
+		}
+		if c == nil {
+			return nil
 		}
 		if !fn(c) {
-			return
+			return nil
 		}
 		if _, err := reader.Seek(c.pos+int64(c.size), io.SeekStart); err != nil {
-			return
+			return err
 		}
 	}
 }
@@ -401,24 +430,28 @@ func mp4Children(reader io.ReadSeeker, h *mp4BoxHeader, fn func(c *mp4BoxHeader)
 // mp4ReadProperties mirrors Rust's mp4::read_properties: the duration comes
 // from the audio track's mdhd, the stream info from its stsd entry, and the
 // bitrate from mdat size + stts.
-func mp4ReadProperties(reader io.ReadSeeker, traks []*mp4BoxHeader, fileLen, mdatLen uint64, parseOptions meta.ParseOptions, p *Mp4Properties) error {
+func mp4ReadProperties(reader io.ReadSeeker, traks []*mp4BoxHeader, fileLen uint64, mdatLen meta.Option[uint64], parseOptions meta.ParseOptions, p *Mp4Properties) error {
 	var mdhd, minf *mp4BoxHeader
-	// Search all traks for the first audio track (hdlr == "soun")
+	// Search all traks for the first audio track (hdlr == "soun"). Rust's
+	// mdia scan propagates `next()?` errors in all modes.
 	for _, trak := range traks {
 		mdhd, minf = nil, nil
 		isAudio := false
 		var mdia *mp4BoxHeader
-		mp4Children(reader, trak, func(c *mp4BoxHeader) bool {
+		// Rust's trak→mdia find (`find_child_atom`) propagates errors.
+		if err := mp4Children(reader, trak, parseOptions.ParsingMode, func(c *mp4BoxHeader) bool {
 			if string(c.name[:]) == "mdia" {
 				mdia = c
 				return false
 			}
 			return true
-		})
+		}); err != nil {
+			return &Mp4ParseError{Source: err}
+		}
 		if mdia == nil {
 			continue
 		}
-		mp4Children(reader, mdia, func(c *mp4BoxHeader) bool {
+		scanErr := mp4Children(reader, mdia, parseOptions.ParsingMode, func(c *mp4BoxHeader) bool {
 			switch string(c.name[:]) {
 			case "mdhd":
 				mdhd = c
@@ -436,6 +469,9 @@ func mp4ReadProperties(reader io.ReadSeeker, traks []*mp4BoxHeader, fileLen, mda
 			}
 			return true
 		})
+		if scanErr != nil {
+			return &Mp4ParseError{Source: scanErr}
+		}
 		if isAudio {
 			break
 		}
@@ -475,50 +511,69 @@ func mp4ReadProperties(reader io.ReadSeeker, traks []*mp4BoxHeader, fileLen, mda
 		return nil
 	}
 
-	// minf → stbl → stsd + stts
+	// minf → stbl → stsd + stts (Rust `Minf::parse` propagates errors)
 	var stbl *mp4BoxHeader
-	mp4Children(reader, minf, func(c *mp4BoxHeader) bool {
+	if err := mp4Children(reader, minf, parseOptions.ParsingMode, func(c *mp4BoxHeader) bool {
 		if string(c.name[:]) == "stbl" {
 			stbl = c
 			return false
 		}
 		return true
-	})
+	}); err != nil {
+		return &Mp4ParseError{Source: err}
+	}
 	if stbl == nil {
 		return nil
 	}
 	var stsdData []byte
 	sttsPresent, sttsSpecifies := false, false
-	mp4Children(reader, stbl, func(c *mp4BoxHeader) bool {
+	var scanErr error
+	scanErr = mp4Children(reader, stbl, parseOptions.ParsingMode, func(c *mp4BoxHeader) bool {
 		switch string(c.name[:]) {
 		case "stsd":
 			var aerr error
-			if stsdData, aerr = util.TryByteSlice(int(c.size)); aerr == nil {
-				if _, err := reader.Seek(c.pos, io.SeekStart); err != nil {
-					stsdData = nil
-				} else if _, err := io.ReadFull(reader, stsdData); err != nil {
-					stsdData = nil
-				}
+			if stsdData, aerr = util.TryByteSlice(int(c.size)); aerr != nil {
+				scanErr = aerr
+				return false
+			}
+			if _, err := reader.Seek(c.pos, io.SeekStart); err != nil {
+				scanErr = err
+				return false
+			}
+			if _, err := io.ReadFull(reader, stsdData); err != nil {
+				scanErr = err
+				return false
 			}
 		case "stts":
 			sttsPresent = true
+			// Rust `Stts::parse` reads every entry; a short read errors.
 			var fb [8]byte
-			if _, err := reader.Seek(c.pos, io.SeekStart); err == nil {
-				if _, err := io.ReadFull(reader, fb[:]); err == nil {
-					count := binary.BigEndian.Uint32(fb[4:])
-					if count == 1 {
-						var eb [8]byte
-						if _, err := io.ReadFull(reader, eb[:]); err == nil && binary.BigEndian.Uint32(eb[4:]) == 1 {
-							sttsSpecifies = false
-							return true
-						}
-					}
-					sttsSpecifies = count > 0
-				}
+			if _, err := reader.Seek(c.pos, io.SeekStart); err != nil {
+				scanErr = err
+				return false
 			}
+			if _, err := io.ReadFull(reader, fb[:]); err != nil {
+				scanErr = err
+				return false
+			}
+			count := binary.BigEndian.Uint32(fb[4:])
+			entries, aerr := util.TryByteSlice(int(count) * 8)
+			if aerr != nil {
+				scanErr = aerr
+				return false
+			}
+			if _, err := io.ReadFull(reader, entries); err != nil {
+				scanErr = err
+				return false
+			}
+			// stts_specifies_duration = !(len==1 && entries[0].duration==1)
+			sttsSpecifies = count != 1 || binary.BigEndian.Uint32(entries[4:8]) != 1
 		}
 		return true
 	})
+	if scanErr != nil {
+		return &Mp4ParseError{Source: scanErr}
+	}
 	if stsdData == nil {
 		return nil
 	}
@@ -527,7 +582,8 @@ func mp4ReadProperties(reader io.ReadSeeker, traks []*mp4BoxHeader, fileLen, mda
 	}
 
 	if duration > 0 {
-		if mdatLen == 0 {
+		mdat, found := mdatLen.Get()
+		if !found {
 			// Rust: `mdat_length` errors in strict mode, warns otherwise
 			if parseOptions.ParsingMode == meta.ParsingModeStrict {
 				return &Mp4ParseError{Message: "no \"mdat\" atom found"}
@@ -536,15 +592,15 @@ func mp4ReadProperties(reader io.ReadSeeker, traks []*mp4BoxHeader, fileLen, mda
 		}
 		if sttsPresent && sttsSpecifies {
 			// Accurate audio bitrate: mdat*8*timescale/duration (bps) → kbps
-			p.AudioBitrate = uint32(mdatLen * 8 * timescale / duration / 1000)
+			p.AudioBitrate = meta.Some(uint32(mdat * 8 * timescale / duration / 1000))
 		}
 		durationMs := uint64(p.Duration.Milliseconds())
 		if durationMs == 0 {
 			return nil
 		}
-		p.OverallBitrate = uint32(fileLen * 8 / durationMs)
-		if p.AudioBitrate == 0 {
-			p.AudioBitrate = uint32(mdatLen * 8 / durationMs)
+		p.OverallBitrate = meta.Some(uint32(fileLen * 8 / durationMs))
+		if v, ok := p.AudioBitrate.Get(); !ok || v == 0 {
+			p.AudioBitrate = meta.Some(uint32(mdat * 8 / durationMs))
 		}
 	}
 	return nil
@@ -609,7 +665,7 @@ func mp4ParseStsd(stsd []byte, p *Mp4Properties) error {
 		if _, err := io.ReadFull(r, ch[:]); err != nil {
 			return &Mp4ParseError{Source: err}
 		}
-		p.Channels = uint8(binary.BigEndian.Uint16(ch[:]))
+		p.Channels = meta.Some(uint8(binary.BigEndian.Uint16(ch[:])))
 		if _, err := r.Seek(6, io.SeekCurrent); err != nil {
 			return &Mp4ParseError{Source: err}
 		}
@@ -617,7 +673,7 @@ func mp4ParseStsd(stsd []byte, p *Mp4Properties) error {
 		if _, err := io.ReadFull(r, sb[:]); err != nil {
 			return &Mp4ParseError{Source: err}
 		}
-		p.SampleRate = binary.BigEndian.Uint32(sb[:]) >> 16
+		p.SampleRate = meta.Some(binary.BigEndian.Uint32(sb[:]) >> 16)
 		switch stsdVersion {
 		case 1:
 			if _, err := r.Seek(16, io.SeekCurrent); err != nil {
@@ -726,11 +782,11 @@ func mp4aProperties(r *bytes.Reader, entryEnd int64, p *Mp4Properties) {
 						}
 					}
 					if sampleRate > 0 {
-						p.SampleRate = sampleRate
+						p.SampleRate = meta.Some(sampleRate)
 					}
 				}
 			case int(frequencyIndex) < len(mp4SampleRates):
-				p.SampleRate = mp4SampleRates[frequencyIndex]
+				p.SampleRate = meta.Some(mp4SampleRates[frequencyIndex])
 				if extended {
 					var c [1]byte
 					if _, err := io.ReadFull(r, c[:]); err == nil {
@@ -741,7 +797,7 @@ func mp4aProperties(r *bytes.Reader, entryEnd int64, p *Mp4Properties) {
 				}
 			}
 			if channelConf > 0 {
-				p.Channels = channelConf
+				p.Channels = meta.Some(channelConf)
 			}
 			if objectType == 36 {
 				var ident [5]byte
@@ -749,12 +805,12 @@ func mp4aProperties(r *bytes.Reader, entryEnd int64, p *Mp4Properties) {
 					bytes.Equal(ident[:], []byte{0, 'A', 'L', 'S', 0}) {
 					var rate uint32
 					if err := binary.Read(r, binary.BigEndian, &rate); err == nil {
-						p.SampleRate = rate
+						p.SampleRate = meta.Some(rate)
 					}
 					if _, err := r.Seek(4, io.SeekCurrent); err == nil {
 						var ch uint16
 						if err := binary.Read(r, binary.BigEndian, &ch); err == nil {
-							p.Channels = uint8(ch) + 1
+							p.Channels = meta.Some(uint8(ch) + 1)
 						}
 					}
 				}
@@ -762,7 +818,7 @@ func mp4aProperties(r *bytes.Reader, entryEnd int64, p *Mp4Properties) {
 		}
 	}
 	if avg > 0 || p.Duration == 0 {
-		p.AudioBitrate = avg / 1000
+		p.AudioBitrate = meta.Some(avg / 1000)
 	}
 	_ = entryEnd
 }
@@ -786,7 +842,7 @@ func mp4AlacProperties(r *bytes.Reader, stsdLen int64, p *Mp4Properties) {
 	if err != nil {
 		return
 	}
-	p.BitDepth = sampleSize
+	p.BitDepth = meta.Some(sampleSize)
 	// Rice history mult + initial history + parameter limit (3)
 	if _, err := r.Seek(3, io.SeekCurrent); err != nil {
 		return
@@ -795,7 +851,7 @@ func mp4AlacProperties(r *bytes.Reader, stsdLen int64, p *Mp4Properties) {
 	if err != nil {
 		return
 	}
-	p.Channels = ch
+	p.Channels = meta.Some(ch)
 	// Max run (2) + max frame size (4)
 	if _, err := r.Seek(6, io.SeekCurrent); err != nil {
 		return
@@ -804,11 +860,11 @@ func mp4AlacProperties(r *bytes.Reader, stsdLen int64, p *Mp4Properties) {
 	if err := binary.Read(r, binary.BigEndian, &br); err != nil {
 		return
 	}
-	p.AudioBitrate = br / 1000
+	p.AudioBitrate = meta.Some(br / 1000)
 	if err := binary.Read(r, binary.BigEndian, &rate); err != nil {
 		return
 	}
-	p.SampleRate = rate
+	p.SampleRate = meta.Some(rate)
 }
 
 // mp4FlacProperties parses the dfLa STREAMINFO of a fLaC sample entry.
@@ -835,28 +891,37 @@ func mp4FlacProperties(r *bytes.Reader, p *Mp4Properties) {
 		return
 	}
 	packed := binary.BigEndian.Uint64(si[10:])
-	p.SampleRate = uint32(packed >> 44)
-	p.Channels = uint8((packed>>41)&0x7) + 1
-	p.BitDepth = uint8((packed>>36)&0x1F) + 1
+	p.SampleRate = meta.Some(uint32(packed >> 44))
+	p.Channels = meta.Some(uint8((packed>>41)&0x7) + 1)
+	p.BitDepth = meta.Some(uint8((packed>>36)&0x1F) + 1)
 }
 
 // mp4WalkUdta descends udta → meta (fullbox) → ilst.
 func mp4WalkUdta(reader io.ReadSeeker, end int64, parseOptions meta.ParseOptions) (*Ilst, error) {
+	// Rust `ilst_from_udta`: `reader.next()?` errors propagate; `Ok(None)`
+	// ends the scan. next() enforces the parsing mode.
 	for {
 		pos, _ := reader.Seek(0, io.SeekCurrent)
 		if pos >= end {
 			return nil, nil
 		}
-		h, err := mp4ReadBox(reader)
-		if err != nil || h == nil {
+		h, err := mp4ReadBoxBound(reader, uint64(end-pos), parseOptions.ParsingMode)
+		if err != nil {
 			return nil, err
+		}
+		if h == nil {
+			return nil, nil
 		}
 		boxEnd := h.pos + int64(h.size)
 		if string(h.name[:]) == "meta" {
 			// meta is normally a fullbox (4-byte version+flags), but some
 			// encoders write it as a plain container — Rust `meta_is_full`
 			// decides by the first child ident.
-			if mp4MetaIsFull(reader, h) {
+			full, err := mp4MetaIsFull(reader, h)
+			if err != nil {
+				return nil, err
+			}
+			if full {
 				if _, err := reader.Seek(4, io.SeekCurrent); err != nil {
 					return nil, err
 				}
@@ -866,9 +931,12 @@ func mp4WalkUdta(reader io.ReadSeeker, end int64, parseOptions meta.ParseOptions
 				if pos >= boxEnd {
 					return nil, nil
 				}
-				mh, err := mp4ReadBox(reader)
-				if err != nil || mh == nil {
+				mh, err := mp4ReadBoxBound(reader, uint64(boxEnd-pos), parseOptions.ParsingMode)
+				if err != nil {
 					return nil, err
+				}
+				if mh == nil {
+					return nil, nil
 				}
 				if string(mh.name[:]) == "ilst" {
 					return ParseIlst(reader, mh.pos+int64(mh.size), parseOptions)
@@ -1280,12 +1348,101 @@ func mp4WriteIlstData(file meta.FileLike, ilst *Ilst, writeOptions meta.WriteOpt
 	return file.Truncate(int64(len(mem.buf)))
 }
 
+// mp4ImportantContainers mirrors Rust's `IMPORTANT_CONTAINERS` — the
+// containers `ContextualAtom::read` recurses into when building the write
+// tree. `meta` is intentionally absent: Rust leaves it a leaf (the
+// `META_ATOM_IDENT` check is unreachable upstream).
+var mp4ImportantContainers = map[[4]byte]bool{
+	{'m', 'o', 'o', 'v'}: true,
+	{'u', 'd', 't', 'a'}: true,
+	{'m', 'o', 'o', 'f'}: true,
+	{'t', 'r', 'a', 'k'}: true,
+	{'m', 'd', 'i', 'a'}: true,
+	{'m', 'i', 'n', 'f'}: true,
+	{'s', 't', 'b', 'l'}: true,
+}
+
+// mp4ValidateAtomTree mirrors `AtomWriter::new_from_file`: it walks every
+// atom under [start, end) and errors when a nested important container's
+// children fail to consume it exactly ("unable to read entire container").
+func mp4ValidateAtomTree(file meta.FileLike, end int64, mode meta.ParsingMode) error {
+	return mp4ValidateAtoms(file, end, mode, false)
+}
+
+func mp4ValidateAtoms(file meta.FileLike, end int64, mode meta.ParsingMode, container bool) error {
+	for {
+		pos, err := file.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return err
+		}
+		remaining := end - pos
+		if remaining <= 0 {
+			return nil
+		}
+		h, err := mp4ReadBoxBound(file, uint64(remaining), mode)
+		if err != nil {
+			return err
+		}
+		if h == nil {
+			if container {
+				return &Mp4ParseError{Message: "unable to read entire container"}
+			}
+			return nil
+		}
+		boxEnd := h.pos + int64(h.size)
+		if mp4ImportantContainers[h.name] {
+			if _, err := file.Seek(h.pos, io.SeekStart); err != nil {
+				return err
+			}
+			if err := mp4ValidateAtoms(file, boxEnd, mode, true); err != nil {
+				return err
+			}
+		}
+		if _, err := file.Seek(boxEnd, io.SeekStart); err != nil {
+			return err
+		}
+	}
+}
+
 func mp4WriteIlstDataInner(file meta.FileLike, ilst *Ilst, writeOptions meta.WriteOptions) error {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return &meta.FileEncodingError{Source: err}
 	}
 	streamEnd, err := file.Seek(0, io.SeekEnd)
 	if err != nil {
+		return &meta.FileEncodingError{Source: err}
+	}
+	mode := writeOptions.ParseOptions.ParsingMode
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return &meta.FileEncodingError{Source: err}
+	}
+
+	// Rust `write_to` runs `verify_mp4` first — the file must start with a
+	// valid `ftyp` atom.
+	first, err := mp4ReadBoxBound(file, uint64(streamEnd), mode)
+	if err != nil {
+		return &meta.FileEncodingError{Source: err}
+	}
+	if first == nil || string(first.name[:]) != "ftyp" {
+		return &meta.FileEncodingError{Source: &Mp4ParseError{Source: &meta.FakeTagError{}}}
+	}
+	if first.size < 4 {
+		return &meta.FileEncodingError{Source: util.NewNotEnoughDataError(12)}
+	}
+	var brand [4]byte
+	if _, err := io.ReadFull(file, brand[:]); err != nil {
+		return &meta.FileEncodingError{Source: err}
+	}
+	if _, err := util.Utf8DecodeStr(brand[:]); err != nil {
+		return &meta.FileEncodingError{Source: &Mp4ParseError{Message: "malformed ftyp major brand"}}
+	}
+
+	// Rust builds the ContextualAtom tree up front; malformed containers
+	// fail the write before anything is modified.
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return &meta.FileEncodingError{Source: err}
+	}
+	if err := mp4ValidateAtomTree(file, streamEnd, mode); err != nil {
 		return &meta.FileEncodingError{Source: err}
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
@@ -1299,8 +1456,11 @@ func mp4WriteIlstDataInner(file meta.FileLike, ilst *Ilst, writeOptions meta.Wri
 		if pos >= streamEnd {
 			break
 		}
-		h, err := mp4ReadBox(file)
-		if err != nil || h == nil {
+		h, err := mp4ReadBoxBound(file, uint64(streamEnd-pos), mode)
+		if err != nil {
+			return &meta.FileEncodingError{Source: err}
+		}
+		if h == nil {
 			break
 		}
 		switch string(h.name[:]) {
@@ -1334,12 +1494,17 @@ func mp4WriteIlstDataInner(file meta.FileLike, ilst *Ilst, writeOptions meta.Wri
 		if pos >= moovEnd {
 			break
 		}
-		h, err := mp4ReadBox(file)
-		if err != nil || h == nil {
+		h, err := mp4ReadBoxBound(file, uint64(moovEnd-pos), mode)
+		if err != nil {
+			return &meta.FileEncodingError{Source: err}
+		}
+		if h == nil {
 			break
 		}
 		if string(h.name[:]) == "udta" {
+			// Rust's `find_child_atom` uses the first matching child
 			udtaBox = h
+			break
 		}
 		if _, err := file.Seek(h.pos+int64(h.size), io.SeekStart); err != nil {
 			return &meta.FileEncodingError{Source: err}
@@ -1391,8 +1556,11 @@ func mp4WriteIlstDataInner(file meta.FileLike, ilst *Ilst, writeOptions meta.Wri
 		if pos >= udtaEnd {
 			break
 		}
-		h, err := mp4ReadBox(file)
-		if err != nil || h == nil {
+		h, err := mp4ReadBoxBound(file, uint64(udtaEnd-pos), mode)
+		if err != nil {
+			return &meta.FileEncodingError{Source: err}
+		}
+		if h == nil {
 			break
 		}
 		if string(h.name[:]) == "meta" {
@@ -1400,7 +1568,11 @@ func mp4WriteIlstDataInner(file meta.FileLike, ilst *Ilst, writeOptions meta.Wri
 			// A `meta` atom is usually "full" (version+flags precede its
 			// children), but a non-full `meta` nests children immediately
 			// (Rust `meta_is_full`).
-			if mp4MetaIsFull(file, h) {
+			full, err := mp4MetaIsFull(file, h)
+			if err != nil {
+				return &meta.FileEncodingError{Source: err}
+			}
+			if full {
 				if _, err := file.Seek(4, io.SeekCurrent); err != nil {
 					return &meta.FileEncodingError{Source: err}
 				}
@@ -1411,18 +1583,23 @@ func mp4WriteIlstDataInner(file meta.FileLike, ilst *Ilst, writeOptions meta.Wri
 				if pos >= metaEnd {
 					break
 				}
-				mh, err := mp4ReadBox(file)
-				if err != nil || mh == nil {
+				mh, err := mp4ReadBoxBound(file, uint64(metaEnd-pos), mode)
+				if err != nil {
+					return &meta.FileEncodingError{Source: err}
+				}
+				if mh == nil {
 					break
 				}
 				metaChildren = append(metaChildren, mh)
-				if string(mh.name[:]) == "ilst" {
+				if string(mh.name[:]) == "ilst" && ilstBox == nil {
+					// Rust's atom_tree uses the first `ilst` found
 					ilstBox = mh
 				}
 				if _, err := file.Seek(mh.pos+int64(mh.size), io.SeekStart); err != nil {
 					return &meta.FileEncodingError{Source: err}
 				}
 			}
+			break // Rust's `find_child_atom` uses the first `meta` found
 		}
 		if _, err := file.Seek(h.pos+int64(h.size), io.SeekStart); err != nil {
 			return &meta.FileEncodingError{Source: err}
@@ -1466,11 +1643,17 @@ func mp4WriteIlstDataInner(file meta.FileLike, ilst *Ilst, writeOptions meta.Wri
 			// same-size `free` atom so nothing shifts
 			// (Rust `save_to_existing`).
 			if writeOptions.PreferredPadding > 0 && availableSpace > 8 {
+				if availableSpace > math.MaxUint32 {
+					return &meta.FileEncodingError{Source: &meta.TooMuchDataError{}}
+				}
 				ilstData = mp4FreeAtom(uint32(availableSpace))
 			}
 		} else if diff := availableSpace - int64(len(ilstData)); diff >= 8 {
 			// Shrink by >= 8: a `free` atom fills the gap so the ancestor
 			// sizes (and chunk offsets) stay put — Rust's `pad_atom`.
+			if diff > math.MaxUint32 {
+				return &meta.FileEncodingError{Source: &meta.TooMuchDataError{}}
+			}
 			ilstData = append(ilstData, mp4FreeAtom(uint32(diff))...)
 		} else if diff > 0 && writeOptions.PreferredPadding > 0 {
 			// Shrink by < 8 with padding enabled: a `free` atom of the

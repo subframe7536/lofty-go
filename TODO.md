@@ -219,6 +219,137 @@ parse tests, `TestSpecialItemsRoundtrip` (RVA2), `TestReadSv5`
 - `Id3v2TagToTag`/`(*Id3v2Tag).Tag` is non-destructive (splits a cloned
   frame list) so repeated conversion can't drain `t.Frames`.
 
+## Semantic-parity fixes (audit round 4 — subagent-assisted diff vs lofty-rs)
+
+- **MPEG**: V2/V2.5 Layer-2 bitrate table corrected (was a copy of the V2
+  Layer-1 table — wrong bitrates/frame-lengths for all non-V1 L2 files);
+  `findNextFrame` resumes scanning at the end of a rejected candidate like
+  `cmp_header`; the Xing/VBRI probe propagates seek/`read_exact` errors;
+  CBR `audio_bitrate` is reported even when no last frame is found;
+  `FindLyrics3` passes the literal `true` read flag; `FindId3v1`,
+  `FindId3v2`, `ParseId3v2Tag`, and `ReadApeTag` errors propagate instead of
+  being swallowed; the APE tail subtracts via `checked_sub`
+  (`SizeMismatchError`) and accepts `pos == size`.
+- **Musepack**: SV8 frequency table extended to 8 entries (was an
+  index-out-of-range panic for sample-rate index ≥ 4); non-"MPCK" 4-byte
+  signatures fall back to the SV4-6 path (was `FakeTagError`); all property
+  parsing is gated on `ReadProperties` like Rust; SV7 reads only the 22
+  bytes it needs (29-byte read could fail on short files) and enforces
+  `version & 0x0F == 7`; `p.Version` comes from the SH packet's stored byte;
+  `streamLen - id3v2Size` is a checked subtraction (`SizeMismatchError`).
+- **WavPack**: `ID_MULTICHANNEL` decode matches Rust's `s = size - 2`
+  switch (was wrong mask/channels for size ≥ 5 and missing the size ≥ 6
+  error); channels store as u16→u8 truncation (not 0xFF saturation);
+  bit-depth uses `saturating_sub`; block-content `read_exact` errors and
+  short large-size/odd-pad reads propagate like Rust; `ChannelMask` is
+  surfaced in `FileProperties`.
+- **DSF**: `DSD ` chunk size must be 28 (read and write); `overall_bitrate`
+  uses the declared `total_file_size`; `audio_bitrate` uses the u8-truncated
+  bit depth; the ID3v2 metadata pointer path uses `FindId3v2` (junk scan)
+  and propagates parse errors; the write path mirrors Rust's
+  `write_to_dsf` (pointer/size bookkeeping, `ptr > total` error, no-op on
+  empty tag with no pointer, append at declared size).
+- **IFF/WAV**: `overall_bitrate` uses the chunk-walk end position (not
+  whole-file length); `fact` chunks < 4 bytes error; a zero-length `fmt `
+  no longer blocks a later valid one; channels truncate to u8 before the
+  zero check and the fallback bit depth uses `saturating_mul(8)`; empty
+  LIST/INFO and all-empty AIFF text yield `None` tags;
+  `RiffInfoTag.Tag()` trims NULs and `RiffInfoTagFromTag` drops
+  `ItemKeyUnknown` items like Rust's `merge_tag`.
+- **IFF writes**: all four chunk scans now use `iffCorrectPosition`'s pad
+  peek instead of blind `size&1` (a "pad" byte that starts a valid FourCC
+  is no longer eaten); `aiffWriteId3v2Chunk` matches `"id3 "` too, inserts
+  at the declared FORM end, and errors on `file_len < stream_size`;
+  `aiffWriteTextChunks` requires a `COMM` chunk (`missing_comm`) and
+  splices at `comm_end_pos`/the first existing text chunk like Rust.
+- **Vorbis comments**: vendor bytes are UTF-8-validated (strict errors,
+  relaxed recovers via UTF-16 code units); `METADATA_BLOCK_PICTURE` and
+  deprecated `COVERART` decode errors propagate in strict mode; `COVERART`
+  is case-insensitive, uses `PictureTypeOther`, guesses MIME with an
+  `"image/"` fallback, and stores default `PictureInformation`; generic
+  keys must satisfy `valid_vorbis_comments_key` (0x20–0x7D minus `=`),
+  values must be valid UTF-8, and `BINARY` gets no special handling (all
+  matching Rust's `read_comments`).
+- **Shared**: `ape.ReadEndTags` no longer scans for Lyrics3 (Rust's
+  aac/musepack/wavpack readers check only ID3v1 + APE); `BytesFile.Write`
+  zero-fills gaps like `Cursor<Vec<u8>>`; Latin-1 `ValidUpTo` reports char
+  indices.
+
+## Semantic-parity fixes (audit round 5 — Ogg duration + IFF/MPC gaps)
+
+- **Ogg**: `oggLastGranulePos` was rewritten as Rust's `find_last_page` —
+  an overlapping-chunk backward scan from EOF down to the position after
+  the codec header packets (captured before the Vorbis setup read), with
+  full page validation (`OggS`, version 0, ≥1 segment, complete lacing
+  table + body) and no serial filtering. Duration and bitrate now come
+  from the last valid page's granule position regardless of serial.
+- **IFF/WAV write**: `wavWriteRiffInfoTag` now walks chunks inside the
+  declared RIFF size like `write_riff_info` — `SizeMismatchError` when the
+  file is shorter than declared, `Chunks::next`-equivalent fourcc/oversize
+  strict-mode checks, pad bytes counted in `remaining`, and the replaced
+  LIST consumes exactly `8+size` (a pad byte is left in place like Rust).
+  `wavInsertChunk` errors `TooMuchDataError` when the new RIFF size
+  exceeds u32::MAX; `riffInfoListBytes` mirrors `create_riff_info`'s
+  u32::MAX check. `wavWriteId3v2Chunk`'s scan is bounded by the declared
+  RIFF size.
+- **RIFF INFO popularimeter**: `merge_tag` (`RiffInfoTagFromTag`) keeps the
+  raw popm text; the `mapped_value` u8 conversion applies only in the
+  generic-Tag write/dump paths via a new `tagitemsIntoRiff` (Rust
+  `tagitems_into_riff`) — fixing `TestPopmConversions` RiffInfo
+  round-trip and matching Rust's two-path semantics.
+- **AIFF**: `aiffParseComt` reads through a `LimitedReader` bounded by the
+  declared COMT size (overruns error in all modes like Rust's `Take`-based
+  `Chunk`); `aiffWriteTextChunks`'s scan has `Chunks::next` fourcc/oversize
+  strict-mode checks; the registered `AiffText` dumper emits full
+  `create_text_chunks` bytes; generic-Tag write/dump uses
+  `aiffTextFromGeneric` (`comments: None` like `AiffTextChunksRef`) so COMT
+  comments only survive concrete-tag writes.
+- **Musepack SV8**: packet-body reads go through a capacity-bounded
+  `LimitedReader` (Rust `PacketReader`); `RG`/`EI` bodies are parsed so
+  truncated packets error instead of silently skipping; all
+  `PacketReader::next` errors (bad key, bad varint, short read) just end
+  the scan like `while let Ok(...)` — no strict-mode error for bad keys;
+  strict missing-packet checks run in Rust's order (SH→RG→audio→SE) and
+  are fully gated on `ReadProperties`; `mpcReplayGain` computes in f32;
+  SV4-6 keeps the raw header `average_bitrate` when `frame_count == 0`.
+
+## Semantic-parity fixes (audit round 6 — internal/meta + internal/util diff)
+
+- `internal/meta/tag_itemkey.go`: Rust `gen_map!` semantics are now exact —
+  separate duplicate entries are last-wins on key lookup (`"TRCK"` →
+  `TrackTotal`, `"TPOS"` → `DiscTotal`, `"MVIN"` → `MovementTotal`,
+  `"TEXT"` → `Lyricist`, APE `"Track"`/`"Disc"` → totals, ilst
+  `"trkn"`/`"disk"` → totals), while `"K" => A|B|C` multi-variant entries
+  resolve to the first variant (`"TIPL"` → `Producer`, `"TPUB"` →
+  `Publisher`, `"TSSE"` → `EncoderSettings`, APE `"Year"` →
+  `RecordingDate`, ilst `"©lyr"` → `Lyrics`). `keyMapEntry` gained an
+  `aliases` field; `byKey` inserts overwrite like `HashMap::insert`.
+- `internal/meta/file_type.go`: committed `FORM`/`OggS`/`RIFF` buffers that
+  fail the inner signature check now yield undetermined like Rust's match
+  arms — the `ftyp`/`MPCK` fallback guesses are skipped.
+- `internal/meta/tag_write.go`: `UnsupportedTagError` failures now carry
+  the file format (Rust `.with_format`).
+- `internal/meta/picture.go`: unmapped APE "Cover Art" keys now produce
+  Rust's `Undefined(0)` equivalent — `AsApeKey` returns false so they're
+  skipped on write instead of being renamed to "Cover Art (Other)". APE
+  picture descriptions are Latin-1→UTF-8 transcoded like Rust's
+  `char::from(u8)`.
+- `internal/util/timestamp.go`: the first timestamp segment yielding 0
+  bytes now stops all further segment parsing (Rust `read_segment!`
+  `break`) — e.g. a bad month no longer leaves a parseable day.
+- New test: `TestItemKeyFromKeyLastWins` pins the duplicate-key outcomes.
+
+### Still-open parity gaps (documented)
+
+- MP4: no 32→64-bit extended-box promotion for >4 GiB writes (returns
+  `TooMuchDataError`). Rust promotes via `AtomWriter::insert`; Go's
+  splice-based writer would need a buffered rewrite — a clean error is
+  kept as the degradation.
+- Rust's WAV JUNK-chunk write optimization is a TODO upstream too
+  (Go rewrites — valid bytes, different layout).
+- Ogg `oggPackets` no longer returns the end position — callers never
+  used it.
+
 ## Not ported (Rust-internal, no portable equivalent)
 
 - MPC SV8 nested `StreamHeader`/`ReplayGain`/`EncoderInfo` property structs.
@@ -273,4 +404,59 @@ disk-bound (~120µs: temp file + splice rewrite of the audio tail).
   (`mp4UpdateChunkOffsets`). Created `udta`/`meta` atoms go at their
   parent's data start like Rust; `free`-atom padding (0x01-filled) absorbs
   shrinkage ≥8 or replaces a removed `ilst` when padding is enabled;
-  non-full `meta` atoms are detected (`mp4MetaIsFull`).
+  non-full `meta` atoms are detected (`mp4MetaIsFull`). The write path
+  runs Rust's `verify_mp4` (ftyp required) and the `ContextualAtom`
+  validation (`mp4ValidateAtomTree`): every important container
+  (moov/udta/moof/trak/mdia/minf/stbl) must tile exactly or the write
+  fails; all scans use the write options' parsing mode.
+- MP4 read parity: `ParseIlst` buffers the declared `ilst` body up front
+  (truncated body = hard error in all modes like Rust's `read_exact`),
+  parses over a bounded `offsetReadSeeker` cursor; header-level errors
+  end the outer scan (`while let Ok` semantics, freeform included) while
+  `data`-level errors propagate; u24 data-type codes; multiple `udta`
+  `ilst` atoms merge via `Insert`; stts `specifies_duration` matches
+  `!(len==1 && duration==1)` (0 entries → true); zero-length `mdat`
+  still yields `overall_bitrate`; moov/moov-child/udta/meta scans are
+  bound- and mode-aware (`mp4ReadBoxBound`) with Rust's
+  `(len - header_len) > reader_size` oversize tolerance.
+
+## Fixture differential run (Rust vs Go dumpers, 157 files)
+
+A Rust dumper (`lofty-rs/lofty/examples/dump.rs`, `Probe::open(path).read()`)
+and a Go equivalent were run over the whole fixture corpus
+(`tests/files/assets` + `tests/taglib/data`) and diffed. Fixes this round:
+
+- **MP4 `ParseIlst` no longer rewinds the cursor to the parent atom end**
+  after the `data`-child scan. Rust's `AtomReader` monotonically decrements
+  `remaining_size`; a `data` child declaring size 0 extends to the ilst
+  buffer end and permanently ends the outer atom scan
+  (`infloop.m4a`: Rust keeps only trkn/disk/tmpo + upgraded ©gen).
+- **MPEG `findNextFrame` rewritten** to Rust's two-step semantics: scan for
+  the raw 11-bit sync, then read the 4-byte header. An invalid candidate
+  resumes the scan at `sync+4` — a valid header overlapped by an invalid
+  candidate is skipped (`invalid-frames3.mp3`: first frame is at 0x7dd,
+  not 0x3c9 → 157 ms not 183 ms). `cmp_header` failure resumes at
+  `candidate+frameLen`; Undetermined ends the search.
+- **`ape.ReadEndTags` propagates the trailing `seek(-32)` error** like
+  Rust's `seek(Current(-32))?` — sub-32-byte files now fail the whole read
+  (`segfault2.mpc` → `EINVAL` parity).
+- **AAC no longer scans for APE/`-32`** — Rust's `aac/read.rs` only checks
+  ID3v1; the shared `ReadEndTags` call was wrong for it.
+- `NewTaggedFile` preserves empty tags (Rust only `retain(!is_empty)`s on
+  `BoundTaggedFile::save`); RIFF INFO lists merge across multiple
+  `LIST/INFO` chunks; channel masks propagate in MPEG/AAC/Ogg properties;
+  Opus reports `input_sample_rate` and validates channel-mapping family;
+  FLAC uses integer-ms math with `Some(0)` bitrates; `Mp4Properties` uses
+  `Option` fields for unset values.
+
+Remaining diffs are all *intentional*:
+
+- `empty_vorbis.oga` / `no-tags.3g2`: Rust's `read_from_path` has no
+  content-probe fallback and errors on unrecognized extensions; Go's
+  `ReadFromPath` sniffs and correctly reads both — a strict superset
+  (verified identical output when the files are renamed to `.ogg`/`.mp4`).
+- `longloop.ape`: documented APE `remaining_size` deviation — Rust's
+  accounting bug reads past the tag and errors; Go's accurate accounting
+  accepts the malformed file.
+- MP4 >4 GiB writes (`TooMuchDataError` instead of extended-box
+  promotion) and WAV JUNK-chunk optimization (Rust TODO upstream).

@@ -662,7 +662,9 @@ func FindLyrics3(reader io.ReadSeeker, read bool, parseOptions meta.ParseOptions
 		version = 2
 	}
 
-	// Search backwards for "LYRICSBEGIN" within the max tag size
+	// Search backwards for "LYRICSBEGIN" within the max tag size.
+	// A matching footer without a header is a corrupt tag — Rust's
+	// find_lyrics3 propagates a FakeTagError, it does not return None.
 	lowerBound := end - maxSize
 	if lowerBound < 0 {
 		lowerBound = 0
@@ -670,8 +672,14 @@ func FindLyrics3(reader io.ReadSeeker, read bool, parseOptions meta.ParseOptions
 	found, err := util.NewRevPatternSearcher(reader, lyrics3v2Header).
 		WithStart(util.RevSearchFromCurrent).
 		WithEnd(util.RevSearchEndAtPos(uint64(lowerBound))).Search()
-	if err != nil || !found {
-		return 0, 0, nil, false, nil
+	if err != nil {
+		return 0, 0, nil, false, err
+	}
+	if !found {
+		if version == 2 {
+			return 0, 0, nil, false, &Lyrics3v2ParseError{Source: &meta.FakeTagError{}}
+		}
+		return 0, 0, nil, false, &Lyrics3ParseError{Source: &meta.FakeTagError{}}
 	}
 	start, err := reader.Seek(0, io.SeekCurrent)
 	if err != nil {

@@ -33,7 +33,7 @@ func (e *FlacParseError) Unwrap() error { return e.Source }
 // FlacProperties are the audio properties of a FLAC file.
 type FlacProperties struct {
 	Duration       time.Duration
-	OverallBitrate meta.Option[uint32]
+	OverallBitrate uint32
 	AudioBitrate   uint32
 	SampleRate     uint32
 	BitDepth       uint8
@@ -46,7 +46,7 @@ type FlacProperties struct {
 func (p FlacProperties) FileProperties() meta.FileProperties {
 	return meta.NewFileProperties(
 		p.Duration,
-		p.OverallBitrate,
+		meta.Some(p.OverallBitrate),
 		meta.Some(p.AudioBitrate),
 		meta.Some(p.SampleRate),
 		meta.Some(p.BitDepth),
@@ -150,6 +150,13 @@ func FlacFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Fl
 				if vc != nil && parseOptions.ParsingMode == meta.ParsingModeStrict {
 					return nil, &meta.FileParseError{Source: &FlacParseError{Message: "FLAC file contains multiple VORBIS_COMMENT blocks"}}
 				}
+				// Vendor string length (4) + field count (4)
+				if len(block.Data) < 8 {
+					if parseOptions.ParsingMode == meta.ParsingModeStrict {
+						return nil, &meta.FileParseError{Source: util.NewNotEnoughDataError(8)}
+					}
+					continue
+				}
 				t, err := vorbis.ParseVorbisComments(block.Data, parseOptions)
 				if err != nil {
 					return nil, &meta.FileParseError{Source: &vorbis.VorbisCommentsParseError{Source: err}}
@@ -157,11 +164,24 @@ func FlacFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Fl
 				vc = t
 			}
 		case flac.Picture:
-			if parseOptions.ReadTags && parseOptions.ReadCoverArt {
-				pic, info, err := meta.PictureFromFlacBytes(block.Data, false, parseOptions.ParsingMode)
-				if err == nil {
-					pictures = append(pictures, meta.PictureInfoPair{Picture: pic, Info: info})
+			// Pictures are stored on the file, not the tag — gated on
+			// `read_cover_art` only (Rust `flac::read`).
+			if parseOptions.ReadCoverArt {
+				// Picture header fields total 28 bytes
+				if len(block.Data) < 28 {
+					if parseOptions.ParsingMode == meta.ParsingModeStrict {
+						return nil, &meta.FileParseError{Source: util.NewNotEnoughDataError(28)}
+					}
+					continue
 				}
+				pic, info, err := meta.PictureFromFlacBytes(block.Data, false, parseOptions.ParsingMode)
+				if err != nil {
+					if parseOptions.ParsingMode == meta.ParsingModeStrict {
+						return nil, &meta.FileParseError{Source: err}
+					}
+					continue
+				}
+				pictures = append(pictures, meta.PictureInfoPair{Picture: pic, Info: info})
 			}
 		}
 	}
@@ -176,11 +196,14 @@ func FlacFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Fl
 		p.BitDepth = uint8(si.BitDepth)
 		p.Channels = uint8(si.ChannelCount)
 		copy(p.Signature[:], si.AudioMD5)
-		if si.SampleRate > 0 {
-			p.Duration = util.DurationFromSeconds(float64(si.SampleCount) / float64(si.SampleRate))
-			if secs := float64(si.SampleCount) / float64(si.SampleRate); secs > 0 {
-				p.AudioBitrate = uint32(float64(streamLen) * 8 / secs / 1000)
-				p.OverallBitrate = meta.Some(uint32(float64(fileLength) * 8 / secs / 1000))
+		if si.SampleRate > 0 && si.SampleCount > 0 {
+			// Rust: `(total_samples * 1000) / sample_rate` in whole ms;
+			// bitrates only when the ms duration is nonzero.
+			lengthMs := uint64(si.SampleCount) * 1000 / uint64(si.SampleRate)
+			p.Duration = time.Duration(lengthMs) * time.Millisecond
+			if lengthMs > 0 && fileLength > 0 && streamLen > 0 {
+				p.AudioBitrate = uint32(streamLen * 8 / lengthMs)
+				p.OverallBitrate = uint32(fileLength * 8 / lengthMs)
 			}
 		}
 	}
@@ -362,9 +385,10 @@ func flacWriteTagPics(file meta.FileLike, tag *meta.Tag, pics []meta.PictureInfo
 		return &meta.FileEncodingError{Source: err}
 	}
 
-	// Build new tag blocks
+	// Build new tag blocks. Rust's `has_comments` counts only the item
+	// iterator — a tag containing only pictures writes no VC block.
 	vc := vorbis.VorbisCommentsTagForWritePics(tag, vendor, false)
-	return flacWriteBlocksAt(file, metaStart, metaEnd, kept, hasPadding, vc, !tag.IsEmpty(), pics, writeOptions)
+	return flacWriteBlocksAt(file, metaStart, metaEnd, kept, hasPadding, vc, len(vc.Items()) > 0, pics, writeOptions)
 }
 
 // flacWriteVorbisComments writes a concrete [vorbis.VorbisCommentsTag] into a FLAC
@@ -421,7 +445,7 @@ func flacWriteVorbisComments(file meta.FileLike, vc *vorbis.VorbisCommentsTag, w
 	if err != nil {
 		return &meta.FileEncodingError{Source: err}
 	}
-	return flacWriteBlocksAt(file, metaStart, metaEnd, kept, hasPadding, vc, !vc.IsEmpty(), vc.Pictures(), writeOptions)
+	return flacWriteBlocksAt(file, metaStart, metaEnd, kept, hasPadding, vc, len(vc.Items()) > 0, vc.Pictures(), writeOptions)
 }
 
 func flacWriteBlocksAt(file meta.FileLike, metaStart, metaEnd int64, kept [][]byte, hasPadding bool, vc *vorbis.VorbisCommentsTag, writeVC bool, pics []meta.PictureInfoPair, writeOptions meta.WriteOptions) error {

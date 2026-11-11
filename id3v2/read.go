@@ -458,7 +458,8 @@ func id3v2MinContentSize(id string, version Id3v2Version) uint32 {
 	case "UFID", "RVA2", "ETCO", "PRIV":
 		return 1
 	}
-	if len(id) == 4 && (id[0] == 'T' || id[0] == 'W' || id == "GRP1" || id == "MVNM" || id == "MVIN") {
+	// Rust matches on `starts_with`, which also covers outdated (3-char) IDs
+	if len(id) > 0 && (id[0] == 'T' || id[0] == 'W' || id == "GRP1" || id == "MVNM" || id == "MVIN") {
 		return 1
 	}
 	return 0
@@ -536,10 +537,10 @@ func parseFrame(reader io.Reader, id FrameId, size uint32, flags FrameFlags, ver
 	default:
 		s := id.String()
 		switch {
-		case len(s) == 4 && (s[0] == 'T' || s == "GRP1" || s == "MVNM" || s == "MVIN"):
+		case len(s) > 0 && (s[0] == 'T' || s == "GRP1" || s == "MVNM" || s == "MVIN"):
 			f, e := parseTextInformationFrame(reader, id, flags, version)
 			optional(f, e)
-		case len(s) == 4 && s[0] == 'W':
+		case len(s) > 0 && s[0] == 'W':
 			f, e := parseUrlLinkFrame(reader, id, flags)
 			optional(f, e)
 		default:

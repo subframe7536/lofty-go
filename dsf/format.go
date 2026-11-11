@@ -86,6 +86,11 @@ func DsfFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Dsf
 	if !bytes.Equal(dsd[:4], dsdPreamble) {
 		return nil, &meta.FileParseError{Source: &meta.FakeTagError{}}
 	}
+	// Rust `verify_dsf` requires the declared chunk size to be 28
+	if binary.LittleEndian.Uint64(dsd[4:]) != 28 {
+		return nil, &meta.FileParseError{Source: errors.New(`file has invalid "DSD " chunk size`)}
+	}
+	totalFileSize := binary.LittleEndian.Uint64(dsd[12:])
 	metadataPtr := binary.LittleEndian.Uint64(dsd[20:])
 
 	var channels, sampleFreq, bitsPerSample, formatId, channelType, blockSize uint32
@@ -140,24 +145,42 @@ func DsfFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Dsf
 		p.Channels = uint8(channels)
 		p.SampleRate = sampleFreq
 		p.BitDepth = uint8(bitsPerSample)
-		p.AudioBitrate = uint32(util.DivRound(uint64(channels)*uint64(sampleFreq)*uint64(bitsPerSample), 1000))
+		// Rust truncates bit_depth to u8 before the bitrate calculation
+		p.AudioBitrate = uint32(util.DivRound(uint64(channels)*uint64(sampleFreq)*uint64(p.BitDepth), 1000))
 		if sampleFreq > 0 && sampleCount > 0 {
 			millis := util.DivRound(sampleCount*1000, uint64(sampleFreq))
 			p.Duration = time.Duration(millis) * time.Millisecond
 			if millis > 0 {
-				p.OverallBitrate = uint32(util.DivRound(streamLen*8, millis))
+				// Rust uses the declared total_file_size, not the actual
+				// stream length
+				p.OverallBitrate = uint32(util.DivRound(totalFileSize*8, millis))
 			}
 		}
 	}
 
-	// ID3v2 tag at metadata pointer (usually EOF)
+	// ID3v2 tag at metadata pointer (usually EOF) — Rust seeks there
+	// unconditionally and runs find_id3v2 (which scans for the "ID3" magic).
 	if parseOptions.ReadTags && metadataPtr > 0 && metadataPtr < streamLen {
-		if _, err := reader.Seek(start+int64(metadataPtr), io.SeekStart); err == nil {
-			if header, err := id3v2.ParseId3v2HeaderRaw(reader); err == nil {
-				if t, err := id3v2.ParseId3v2Tag(reader, header, parseOptions); err == nil {
-					file.ID3v2 = meta.Some(t)
-				}
+		if _, err := reader.Seek(start+int64(metadataPtr), io.SeekStart); err != nil {
+			return nil, &meta.FileParseError{Source: err}
+		}
+		header, end, found, err := id3v2.FindId3v2(reader, true, parseOptions)
+		if err != nil {
+			return nil, &meta.FileParseError{Source: &meta.TagParseError{TagType: meta.TagTypeID3v2, HasTagType: true, Source: err}}
+		}
+		if found {
+			contentStart := end - int64(header.Size)
+			if header.Flags.Footer {
+				contentStart -= 10
 			}
+			if _, err := reader.Seek(contentStart, io.SeekStart); err != nil {
+				return nil, &meta.FileParseError{Source: err}
+			}
+			tag, err := id3v2.ParseId3v2Tag(reader, header, parseOptions)
+			if err != nil {
+				return nil, &meta.FileParseError{Source: &meta.TagParseError{TagType: meta.TagTypeID3v2, HasTagType: true, Source: err}}
+			}
+			file.ID3v2 = meta.Some(tag)
 		}
 	}
 	return &file, nil
@@ -234,59 +257,52 @@ func dsfWriteId3v2Chunk(file meta.FileLike, encoded []byte) error {
 	if !bytes.Equal(dsd[:4], dsdPreamble) {
 		return &meta.FileEncodingError{Source: &meta.FakeTagError{}}
 	}
-	metadataPtr := binary.LittleEndian.Uint64(dsd[20:])
-	if metadataPtr > 0 {
-		end, err := file.Seek(0, io.SeekEnd)
-		if err != nil {
-			return &meta.FileEncodingError{Source: err}
-		}
-		if err := meta.Splice(file, metadataPtr, uint64(end), encoded); err != nil {
-			return &meta.FileEncodingError{Source: err}
-		}
-		// Update metadata ptr
-		newPtr := metadataPtr
-		if len(encoded) == 0 {
-			newPtr = 0
-		}
-		if _, err := file.Seek(20, io.SeekStart); err != nil {
-			return &meta.FileEncodingError{Source: err}
-		}
-		var pb [8]byte
-		binary.LittleEndian.PutUint64(pb[:], newPtr)
-		if _, err := file.Write(pb[:]); err != nil {
-			return &meta.FileEncodingError{Source: err}
-		}
-	} else if len(encoded) > 0 {
-		end, err := file.Seek(0, io.SeekEnd)
-		if err != nil {
-			return &meta.FileEncodingError{Source: err}
-		}
-		if _, err := file.Write(encoded); err != nil {
-			return &meta.FileEncodingError{Source: err}
-		}
-		if _, err := file.Seek(20, io.SeekStart); err != nil {
-			return &meta.FileEncodingError{Source: err}
-		}
-		var pb [8]byte
-		binary.LittleEndian.PutUint64(pb[:], uint64(end))
-		if _, err := file.Write(pb[:]); err != nil {
-			return &meta.FileEncodingError{Source: err}
-		}
+	if binary.LittleEndian.Uint64(dsd[4:]) != 28 {
+		return &meta.FileEncodingError{Source: errors.New(`file has invalid "DSD " chunk size`)}
 	}
-	// Fix file size in DSD chunk
+	totalFileSize := binary.LittleEndian.Uint64(dsd[12:])
+	metadataPtr := binary.LittleEndian.Uint64(dsd[20:])
+
+	var newTotalFileSize, newMetadataPtr uint64
+	if metadataPtr > 0 {
+		if metadataPtr > totalFileSize {
+			return &meta.FileEncodingError{Source: errors.New("existing metadata ptr is invalid")}
+		}
+		if len(encoded) == 0 {
+			// Drop the pointer and shrink the size
+			newTotalFileSize = metadataPtr
+			newMetadataPtr = 0
+		} else {
+			newTotalFileSize = metadataPtr + uint64(len(encoded))
+			newMetadataPtr = metadataPtr
+		}
+	} else {
+		if len(encoded) == 0 {
+			// No tag to overwrite, nothing to do
+			return nil
+		}
+		newTotalFileSize = totalFileSize + uint64(len(encoded))
+		newMetadataPtr = totalFileSize
+	}
+
+	if _, err := file.Seek(12, io.SeekStart); err != nil {
+		return &meta.FileEncodingError{Source: err}
+	}
+	var fb [16]byte
+	binary.LittleEndian.PutUint64(fb[:], newTotalFileSize)
+	binary.LittleEndian.PutUint64(fb[8:], newMetadataPtr)
+	if _, err := file.Write(fb[:]); err != nil {
+		return &meta.FileEncodingError{Source: err}
+	}
+
+	if newMetadataPtr == 0 {
+		return file.Truncate(int64(newTotalFileSize))
+	}
 	end, err := file.Seek(0, io.SeekEnd)
 	if err != nil {
 		return &meta.FileEncodingError{Source: err}
 	}
-	if _, err := file.Seek(12, io.SeekStart); err != nil {
-		return &meta.FileEncodingError{Source: err}
-	}
-	var fb [8]byte
-	binary.LittleEndian.PutUint64(fb[:], uint64(end))
-	if _, err := file.Write(fb[:]); err != nil {
-		return &meta.FileEncodingError{Source: err}
-	}
-	return nil
+	return meta.Splice(file, newMetadataPtr, uint64(end), encoded)
 }
 
 func channelMaskFromDsfChannelType(channelType uint32) meta.Option[meta.ChannelMask] {

@@ -98,14 +98,19 @@ func (l *FrameList) RemoveUserText(description string) Frame {
 // equal (same ID for most types; identifying field for others).
 func (l *FrameList) Insert(frame Frame) Frame {
 	if onePerTagFrameIDs[frame.ID().String()] {
+		// Rust `remove` drains every frame with the ID; only the first is returned
 		var ret Frame
-		for i, f := range l.frames {
+		kept := l.frames[:0]
+		for _, f := range l.frames {
 			if f.ID() == frame.ID() {
-				ret = f
-				l.frames = append(l.frames[:i], l.frames[i+1:]...)
-				break
+				if ret == nil {
+					ret = f
+				}
+				continue
 			}
+			kept = append(kept, f)
 		}
+		l.frames = kept
 		l.Push(frame)
 		return ret
 	}
