@@ -94,6 +94,7 @@ type (
 	TimestampParseErrorKind    = meta.TimestampParseErrorKind
 	Id3v2Version               = meta.Id3v2Version
 	Tag                        = meta.Tag
+	CompanionCloner            = meta.CompanionCloner
 	SplitTagRemainder          = meta.SplitTagRemainder
 	Lang                       = meta.Lang
 	ItemValue                  = meta.ItemValue
@@ -131,6 +132,7 @@ type (
 type (
 	Id3v2ParseError               = id3v2.Id3v2ParseError
 	Id3v2EncodingError            = id3v2.Id3v2EncodingError
+	Id3v2HeaderErrorKind          = id3v2.Id3v2HeaderErrorKind
 	Id3v2HeaderError              = id3v2.Id3v2HeaderError
 	FrameIdParseError             = id3v2.FrameIdParseError
 	FrameParseError               = id3v2.FrameParseError
@@ -181,6 +183,7 @@ type (
 	TagRestrictions               = id3v2.TagRestrictions
 	Id3v2Header                   = id3v2.Id3v2Header
 	Id3v2Tag                      = id3v2.Id3v2Tag
+	Id3v2FindResult               = id3v2.Id3v2FindResult
 )
 
 // from vorbis
@@ -521,79 +524,84 @@ const (
 
 // from id3v2
 const (
-	EmptyContentDescriptor          = id3v2.EmptyContentDescriptor
-	EventTypePadding                = id3v2.EventTypePadding
-	EventTypeEndOfInitialSilence    = id3v2.EventTypeEndOfInitialSilence
-	EventTypeIntroStart             = id3v2.EventTypeIntroStart
-	EventTypeMainPartStart          = id3v2.EventTypeMainPartStart
-	EventTypeOutroStart             = id3v2.EventTypeOutroStart
-	EventTypeOutroEnd               = id3v2.EventTypeOutroEnd
-	EventTypeVerseStart             = id3v2.EventTypeVerseStart
-	EventTypeRefrainStart           = id3v2.EventTypeRefrainStart
-	EventTypeInterludeStart         = id3v2.EventTypeInterludeStart
-	EventTypeThemeStart             = id3v2.EventTypeThemeStart
-	EventTypeVariationStart         = id3v2.EventTypeVariationStart
-	EventTypeKeyChange              = id3v2.EventTypeKeyChange
-	EventTypeTimeChange             = id3v2.EventTypeTimeChange
-	EventTypeMomentaryUnwantedNoise = id3v2.EventTypeMomentaryUnwantedNoise
-	EventTypeSustainedNoise         = id3v2.EventTypeSustainedNoise
-	EventTypeSustainedNoiseEnd      = id3v2.EventTypeSustainedNoiseEnd
-	EventTypeIntroEnd               = id3v2.EventTypeIntroEnd
-	EventTypeMainPartEnd            = id3v2.EventTypeMainPartEnd
-	EventTypeVerseEnd               = id3v2.EventTypeVerseEnd
-	EventTypeRefrainEnd             = id3v2.EventTypeRefrainEnd
-	EventTypeThemeEnd               = id3v2.EventTypeThemeEnd
-	EventTypeProfanity              = id3v2.EventTypeProfanity
-	EventTypeProfanityEnd           = id3v2.EventTypeProfanityEnd
-	EventTypeNotPredefinedSynch0    = id3v2.EventTypeNotPredefinedSynch0
-	EventTypeNotPredefinedSynch1    = id3v2.EventTypeNotPredefinedSynch1
-	EventTypeNotPredefinedSynch2    = id3v2.EventTypeNotPredefinedSynch2
-	EventTypeNotPredefinedSynch3    = id3v2.EventTypeNotPredefinedSynch3
-	EventTypeNotPredefinedSynch4    = id3v2.EventTypeNotPredefinedSynch4
-	EventTypeNotPredefinedSynch5    = id3v2.EventTypeNotPredefinedSynch5
-	EventTypeNotPredefinedSynch6    = id3v2.EventTypeNotPredefinedSynch6
-	EventTypeNotPredefinedSynch7    = id3v2.EventTypeNotPredefinedSynch7
-	EventTypeNotPredefinedSynch8    = id3v2.EventTypeNotPredefinedSynch8
-	EventTypeNotPredefinedSynch9    = id3v2.EventTypeNotPredefinedSynch9
-	EventTypeNotPredefinedSynchA    = id3v2.EventTypeNotPredefinedSynchA
-	EventTypeNotPredefinedSynchB    = id3v2.EventTypeNotPredefinedSynchB
-	EventTypeNotPredefinedSynchC    = id3v2.EventTypeNotPredefinedSynchC
-	EventTypeNotPredefinedSynchD    = id3v2.EventTypeNotPredefinedSynchD
-	EventTypeNotPredefinedSynchE    = id3v2.EventTypeNotPredefinedSynchE
-	EventTypeNotPredefinedSynchF    = id3v2.EventTypeNotPredefinedSynchF
-	EventTypeAudioEnd               = id3v2.EventTypeAudioEnd
-	EventTypeAudioFileEnds          = id3v2.EventTypeAudioFileEnds
-	EventTypeReserved               = id3v2.EventTypeReserved
-	ChannelTypeOther                = id3v2.ChannelTypeOther
-	ChannelTypeMasterVolume         = id3v2.ChannelTypeMasterVolume
-	ChannelTypeFrontRight           = id3v2.ChannelTypeFrontRight
-	ChannelTypeFrontLeft            = id3v2.ChannelTypeFrontLeft
-	ChannelTypeBackRight            = id3v2.ChannelTypeBackRight
-	ChannelTypeBackLeft             = id3v2.ChannelTypeBackLeft
-	ChannelTypeFrontCentre          = id3v2.ChannelTypeFrontCentre
-	ChannelTypeBackCentre           = id3v2.ChannelTypeBackCentre
-	ChannelTypeSubwoofer            = id3v2.ChannelTypeSubwoofer
-	TimestampFormatMPEG             = id3v2.TimestampFormatMPEG
-	TimestampFormatMS               = id3v2.TimestampFormatMS
-	SyncTextOther                   = id3v2.SyncTextOther
-	SyncTextLyrics                  = id3v2.SyncTextLyrics
-	SyncTextTranscription           = id3v2.SyncTextTranscription
-	SyncTextPartName                = id3v2.SyncTextPartName
-	SyncTextEvents                  = id3v2.SyncTextEvents
-	SyncTextChord                   = id3v2.SyncTextChord
-	SyncTextTrivia                  = id3v2.SyncTextTrivia
-	SyncTextWebpageURL              = id3v2.SyncTextWebpageURL
-	SyncTextImageURL                = id3v2.SyncTextImageURL
-	TagSizeS128F1M                  = id3v2.TagSizeS128F1M
-	TagSizeS64F128K                 = id3v2.TagSizeS64F128K
-	TagSizeS32F40K                  = id3v2.TagSizeS32F40K
-	TagSizeS32F4K                   = id3v2.TagSizeS32F4K
-	TextSizeC1024                   = id3v2.TextSizeC1024
-	TextSizeC128                    = id3v2.TextSizeC128
-	TextSizeC30                     = id3v2.TextSizeC30
-	ImageSizeP256                   = id3v2.ImageSizeP256
-	ImageSizeP64                    = id3v2.ImageSizeP64
-	ImageSizeP6464                  = id3v2.ImageSizeP6464
+	Id3v2HeaderErrorOther             = id3v2.Id3v2HeaderErrorOther
+	Id3v2HeaderBadVersion             = id3v2.Id3v2HeaderBadVersion
+	Id3v2HeaderV2Compression          = id3v2.Id3v2HeaderV2Compression
+	Id3v2HeaderBadExtendedHeaderSize  = id3v2.Id3v2HeaderBadExtendedHeaderSize
+	Id3v2HeaderBadExtendedHeaderFlags = id3v2.Id3v2HeaderBadExtendedHeaderFlags
+	EmptyContentDescriptor            = id3v2.EmptyContentDescriptor
+	EventTypePadding                  = id3v2.EventTypePadding
+	EventTypeEndOfInitialSilence      = id3v2.EventTypeEndOfInitialSilence
+	EventTypeIntroStart               = id3v2.EventTypeIntroStart
+	EventTypeMainPartStart            = id3v2.EventTypeMainPartStart
+	EventTypeOutroStart               = id3v2.EventTypeOutroStart
+	EventTypeOutroEnd                 = id3v2.EventTypeOutroEnd
+	EventTypeVerseStart               = id3v2.EventTypeVerseStart
+	EventTypeRefrainStart             = id3v2.EventTypeRefrainStart
+	EventTypeInterludeStart           = id3v2.EventTypeInterludeStart
+	EventTypeThemeStart               = id3v2.EventTypeThemeStart
+	EventTypeVariationStart           = id3v2.EventTypeVariationStart
+	EventTypeKeyChange                = id3v2.EventTypeKeyChange
+	EventTypeTimeChange               = id3v2.EventTypeTimeChange
+	EventTypeMomentaryUnwantedNoise   = id3v2.EventTypeMomentaryUnwantedNoise
+	EventTypeSustainedNoise           = id3v2.EventTypeSustainedNoise
+	EventTypeSustainedNoiseEnd        = id3v2.EventTypeSustainedNoiseEnd
+	EventTypeIntroEnd                 = id3v2.EventTypeIntroEnd
+	EventTypeMainPartEnd              = id3v2.EventTypeMainPartEnd
+	EventTypeVerseEnd                 = id3v2.EventTypeVerseEnd
+	EventTypeRefrainEnd               = id3v2.EventTypeRefrainEnd
+	EventTypeThemeEnd                 = id3v2.EventTypeThemeEnd
+	EventTypeProfanity                = id3v2.EventTypeProfanity
+	EventTypeProfanityEnd             = id3v2.EventTypeProfanityEnd
+	EventTypeNotPredefinedSynch0      = id3v2.EventTypeNotPredefinedSynch0
+	EventTypeNotPredefinedSynch1      = id3v2.EventTypeNotPredefinedSynch1
+	EventTypeNotPredefinedSynch2      = id3v2.EventTypeNotPredefinedSynch2
+	EventTypeNotPredefinedSynch3      = id3v2.EventTypeNotPredefinedSynch3
+	EventTypeNotPredefinedSynch4      = id3v2.EventTypeNotPredefinedSynch4
+	EventTypeNotPredefinedSynch5      = id3v2.EventTypeNotPredefinedSynch5
+	EventTypeNotPredefinedSynch6      = id3v2.EventTypeNotPredefinedSynch6
+	EventTypeNotPredefinedSynch7      = id3v2.EventTypeNotPredefinedSynch7
+	EventTypeNotPredefinedSynch8      = id3v2.EventTypeNotPredefinedSynch8
+	EventTypeNotPredefinedSynch9      = id3v2.EventTypeNotPredefinedSynch9
+	EventTypeNotPredefinedSynchA      = id3v2.EventTypeNotPredefinedSynchA
+	EventTypeNotPredefinedSynchB      = id3v2.EventTypeNotPredefinedSynchB
+	EventTypeNotPredefinedSynchC      = id3v2.EventTypeNotPredefinedSynchC
+	EventTypeNotPredefinedSynchD      = id3v2.EventTypeNotPredefinedSynchD
+	EventTypeNotPredefinedSynchE      = id3v2.EventTypeNotPredefinedSynchE
+	EventTypeNotPredefinedSynchF      = id3v2.EventTypeNotPredefinedSynchF
+	EventTypeAudioEnd                 = id3v2.EventTypeAudioEnd
+	EventTypeAudioFileEnds            = id3v2.EventTypeAudioFileEnds
+	EventTypeReserved                 = id3v2.EventTypeReserved
+	ChannelTypeOther                  = id3v2.ChannelTypeOther
+	ChannelTypeMasterVolume           = id3v2.ChannelTypeMasterVolume
+	ChannelTypeFrontRight             = id3v2.ChannelTypeFrontRight
+	ChannelTypeFrontLeft              = id3v2.ChannelTypeFrontLeft
+	ChannelTypeBackRight              = id3v2.ChannelTypeBackRight
+	ChannelTypeBackLeft               = id3v2.ChannelTypeBackLeft
+	ChannelTypeFrontCentre            = id3v2.ChannelTypeFrontCentre
+	ChannelTypeBackCentre             = id3v2.ChannelTypeBackCentre
+	ChannelTypeSubwoofer              = id3v2.ChannelTypeSubwoofer
+	TimestampFormatMPEG               = id3v2.TimestampFormatMPEG
+	TimestampFormatMS                 = id3v2.TimestampFormatMS
+	SyncTextOther                     = id3v2.SyncTextOther
+	SyncTextLyrics                    = id3v2.SyncTextLyrics
+	SyncTextTranscription             = id3v2.SyncTextTranscription
+	SyncTextPartName                  = id3v2.SyncTextPartName
+	SyncTextEvents                    = id3v2.SyncTextEvents
+	SyncTextChord                     = id3v2.SyncTextChord
+	SyncTextTrivia                    = id3v2.SyncTextTrivia
+	SyncTextWebpageURL                = id3v2.SyncTextWebpageURL
+	SyncTextImageURL                  = id3v2.SyncTextImageURL
+	TagSizeS128F1M                    = id3v2.TagSizeS128F1M
+	TagSizeS64F128K                   = id3v2.TagSizeS64F128K
+	TagSizeS32F40K                    = id3v2.TagSizeS32F40K
+	TagSizeS32F4K                     = id3v2.TagSizeS32F4K
+	TextSizeC1024                     = id3v2.TextSizeC1024
+	TextSizeC128                      = id3v2.TextSizeC128
+	TextSizeC30                       = id3v2.TextSizeC30
+	ImageSizeP256                     = id3v2.ImageSizeP256
+	ImageSizeP64                      = id3v2.ImageSizeP64
+	ImageSizeP6464                    = id3v2.ImageSizeP6464
 )
 
 // from mp4
@@ -764,8 +772,8 @@ var (
 // --- funcs ---
 
 // from meta
-func SaveToPath(path string, f AudioFile, tagType TagType, writeOptions WriteOptions) error {
-	return meta.SaveToPath(path, f, tagType, writeOptions)
+func SaveToPath(path string, f AudioFile, writeOptions WriteOptions) error {
+	return meta.SaveToPath(path, f, writeOptions)
 }
 
 func RemoveTagFromPath(path string, tagType TagType) error {
@@ -1018,6 +1026,10 @@ func NewVerifiedFile(file FileLike, parseOptions ParseOptions) (*VerifiedFile, e
 
 func VerifiedFileFromPath(path string, parseOptions ParseOptions) (*VerifiedFile, *os.File, error) {
 	return meta.VerifiedFileFromPath(path, parseOptions)
+}
+
+func VerifiedFileFromPathByExtension(path string) (*VerifiedFile, *os.File, error) {
+	return meta.VerifiedFileFromPathByExtension(path)
 }
 
 func NewVerifiedFileOf(format FileType, file FileLike) *VerifiedFile {
@@ -1520,6 +1532,10 @@ func WriteId3v2(file meta.FileLike, tag *meta.Tag, writeOptions meta.WriteOption
 	return id3v2.WriteId3v2(file, tag, writeOptions)
 }
 
+func LocateId3v2(reader io.ReadSeeker, read bool, parseOptions meta.ParseOptions) (*Id3v2FindResult, error) {
+	return id3v2.LocateId3v2(reader, read, parseOptions)
+}
+
 func FindId3v2(reader io.ReadSeeker, read bool, parseOptions meta.ParseOptions) (Id3v2Header, int64, bool, error) {
 	return id3v2.FindId3v2(reader, read, parseOptions)
 }
@@ -1557,12 +1573,24 @@ func EncodeVorbisComments(tag *VorbisCommentsTag) ([]byte, error) {
 	return vorbis.EncodeVorbisComments(tag)
 }
 
+func EncodeVorbisCommentsItems(tag *VorbisCommentsTag) ([]byte, error) {
+	return vorbis.EncodeVorbisCommentsItems(tag)
+}
+
+func PadMetadataPacket(packet []byte, preferredPadding uint32) []byte {
+	return vorbis.PadMetadataPacket(packet, preferredPadding)
+}
+
 func VorbisCommentsTagForWrite(input *meta.Tag, vendor string) *VorbisCommentsTag {
 	return vorbis.VorbisCommentsTagForWrite(input, vendor)
 }
 
 func VorbisCommentsTagForWritePics(input *meta.Tag, vendor string, withPics bool) *VorbisCommentsTag {
 	return vorbis.VorbisCommentsTagForWritePics(input, vendor, withPics)
+}
+
+func VorbisCommentsTagForWriteRef(input *meta.Tag, withPics bool) *VorbisCommentsTag {
+	return vorbis.VorbisCommentsTagForWriteRef(input, withPics)
 }
 
 // from ape

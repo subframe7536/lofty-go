@@ -347,8 +347,8 @@ parse tests, `TestSpecialItemsRoundtrip` (RVA2), `TestReadSv5`
   kept as the degradation.
 - Rust's WAV JUNK-chunk write optimization is a TODO upstream too
   (Go rewrites — valid bytes, different layout).
-- Ogg `oggPackets` no longer returns the end position — callers never
-  used it.
+- Ogg `oggPackets` was removed — superseded by `OggReadCountPackets`
+  (round 7).
 
 ## Not ported (Rust-internal, no portable equivalent)
 
@@ -460,3 +460,48 @@ Remaining diffs are all *intentional*:
   accepts the malformed file.
 - MP4 >4 GiB writes (`TooMuchDataError` instead of extended-box
   promotion) and WAV JUNK-chunk optimization (Rust TODO upstream).
+
+## Semantic-parity fixes (audit round 7 — Ogg + VorbisComments read/write)
+
+- **Ogg header read** (`oggReadTagged`): single `OggReadCountPackets` call
+  for all header packets after a one-packet codec sniff + rewind (3
+  Vorbis, 2 Opus/Speex) — matching `Packets::read_count` and Rust's
+  `header_end` bound for `find_last_page`. `oggPackets` deleted.
+  `verify_signature` is a hard error in every mode; the comment signature
+  is checked only under `ReadTags`.
+- **`OggReadCountPackets`**: a page-header failure (`oggHeaderError`) ends
+  the packet scan like `while let Ok(header)`; body errors still
+  propagate; fewer than `count` packets → "not enough data"
+  (`PageError::NotEnoughData`).
+- **`readOggPage`**: rejects `nsegs < 1` (`BadSegmentCount`); header vs
+  body failures are distinguished so `oggLastGranulePos` retries only on
+  MissingMagic/InvalidVersion/BadSegmentCount (a truncated last-page body
+  aborts the search → 1000ms bitrate fallback, duration unset).
+- **Speex validation**: fixed 80-byte header, `version <= 1`, mono/stereo
+  only, `vbr` requires field `== 1` (Rust `read_properties`).
+- **Vorbis ident**: ≥28 bytes, error only under `ReadProperties`.
+- **Ogg write vendor**: truncated vendor is a hard error (Rust's
+  unconditional `read_u32` + `read_exact`); an invalid-UTF-8 vendor
+  becomes "" (`String::from_utf8` fallback); the file's retained vendor
+  always wins (`tag.vendor = vendor_str`) — applied via `WithVendor` so
+  the concrete `SaveFile` path doesn't mutate the caller's tag.
+- **Vorbis values**: trailing NULs trimmed like `utf8_decode_str` — item
+  values and TRACKNUMBER/DISCNUMBER before the `n/total` split.
+- **`VorbisCommentsTag.InsertPicture`**: `PictureInformation` extraction
+  errors now propagate. Extraction runs before the Icon/OtherIcon removal,
+  so a failure leaves the tag unchanged — deliberate deviation from Rust's
+  remove-then-error order.
+- **Generic→concrete conversion**: `VorbisCommentsTagFromTag` /
+  `VorbisCommentsTagForWriteRef` drop `ItemKeyUnknown` items (Rust
+  `map_key -> None => continue`) instead of storing them under their
+  description; new `pushMapped` helper. `Push`/`Insert` keep the
+  description fallback as public conveniences.
+- **FLAC ID3v2**: `SaveTo`/`SaveToPath` gate on `checkTagSupport` (Rust
+  `TagExt::save_to`); `SaveToVerified` is the ungated internal path
+  (`TagWriteExt::save_to`); the generic FLAC ID3v2 writer always writes an
+  empty tag — stripping any existing one (Rust `create_tag` empty →
+  splice-removal).
+- New synthesized-byte tests: `ogg/format_test.go` (shared-page header
+  read, truncated/bogus last page, Speex validation, short ident, vendor
+  write rules) and `vorbis/tag_test.go` (NUL trim, picture-info error,
+  unknown-item drop).

@@ -27,18 +27,22 @@ func SearchForFrameSync(reader io.Reader) (int64, error) {
 	var prev byte
 	idx := int64(0)
 	for {
-		_, err := reader.Read(buf[:])
+		// A reader may return a byte together with io.EOF; process it before
+		// looking at the error.
+		n, err := scanReadFull(reader, buf[:])
+		if n == 1 {
+			if prev == 0xFF && (buf[0]&0xE0) == 0xE0 {
+				return idx - 1, nil
+			}
+			prev = buf[0]
+			idx++
+		}
 		if err != nil {
 			if err == io.EOF {
 				return -1, nil
 			}
 			return 0, err
 		}
-		if prev == 0xFF && (buf[0]&0xE0) == 0xE0 {
-			return idx - 1, nil
-		}
-		prev = buf[0]
-		idx++
 	}
 }
 

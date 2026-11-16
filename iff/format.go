@@ -877,7 +877,7 @@ func (f *WavFile) TaggedFile() *meta.TaggedFile {
 
 // SavePath implements meta.AudioFile.
 func (f *WavFile) SavePath(path string, wo meta.WriteOptions) error {
-	return meta.SaveToPath(path, f, meta.FileTypeWav.PrimaryTagType(), wo)
+	return meta.SaveToPath(path, f, wo)
 }
 
 // SaveFile implements meta.AudioFile.
@@ -1567,7 +1567,7 @@ func (f *AiffFile) TaggedFile() *meta.TaggedFile {
 
 // SavePath implements meta.AudioFile.
 func (f *AiffFile) SavePath(path string, wo meta.WriteOptions) error {
-	return meta.SaveToPath(path, f, meta.FileTypeAiff.PrimaryTagType(), wo)
+	return meta.SaveToPath(path, f, wo)
 }
 
 // SaveFile implements meta.AudioFile.

@@ -3,7 +3,6 @@ package util
 import (
 	"bytes"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -49,9 +48,17 @@ func OptionFromPtr[T any](p *T) Option[*T] {
 	return Some(p)
 }
 
-// U32FromString parses a u32 from a string.
+// U32FromString parses a u32 like Rust's `str::parse::<u32>()`.
+//
+// Exactly one leading '+' is accepted. A '-' is not a sign for an unsigned
+// type, so "-5" and "-0" are rejected. Whitespace, an empty string, a lone "+",
+// and values above u32::MAX are rejected.
 func U32FromString(s string) (uint32, bool) {
-	n, err := strconv.ParseUint(s, 10, 32)
+	digits := s
+	if len(digits) > 0 && digits[0] == '+' {
+		digits = digits[1:]
+	}
+	n, err := strconv.ParseUint(digits, 10, 32)
 	if err != nil {
 		return 0, false
 	}
@@ -59,8 +66,10 @@ func U32FromString(s string) (uint32, bool) {
 }
 
 // FlagItem normalizes a flag item value ("0"/"1"/"true"/"false"), -1 if invalid.
+//
+// Like Rust's `flag_item`, the match is exact: no trimming and no case folding.
 func FlagItem(s string) int {
-	switch strings.ToLower(strings.TrimSpace(s)) {
+	switch s {
 	case "1", "true":
 		return 1
 	case "0", "false":

@@ -146,7 +146,16 @@ func (m MimeType) Ext() (string, bool) {
 func (m MimeType) String() string { return m.AsStr() }
 
 // PictureType is the picture type, according to ID3v2 APIC.
-type PictureType uint8
+//
+// The low byte is the APIC type byte. Values 0..=20 are the named types and
+// 21..=255 are Rust's `Undefined(n)`. [PictureTypeUndefined] additionally
+// produces a flagged variant for `Undefined(0..=20)`, which Rust can represent
+// but a plain byte cannot; it keeps its byte value ([PictureType.AsU8]) but is
+// distinct from the named type and has no APE key.
+type PictureType uint16
+
+// pictureTypeUndefinedFlag marks `Undefined(n)` for n in 0..=20.
+const pictureTypeUndefinedFlag PictureType = 0x100
 
 const (
 	// PictureTypeOther is a picture type not covered by the remaining variants.
@@ -194,10 +203,15 @@ const (
 )
 
 // PictureTypeUndefined is an undefined picture type.
-func PictureTypeUndefined(i uint8) PictureType { return PictureType(i) }
+func PictureTypeUndefined(i uint8) PictureType {
+	if int(i) < len(ApePictureTypes) {
+		return pictureTypeUndefinedFlag | PictureType(i)
+	}
+	return PictureType(i)
+}
 
 // AsU8 returns the u8 for a [PictureType] according to ID3v2 APIC.
-func (p PictureType) AsU8() uint8 { return uint8(p) }
+func (p PictureType) AsU8() uint8 { return uint8(p & 0xFF) }
 
 // PictureTypeFromU8 gets a [PictureType] from a u8 according to ID3v2 APIC.
 func PictureTypeFromU8(b uint8) PictureType { return PictureType(b) }
@@ -210,14 +224,6 @@ func (p PictureType) AsApeKey() (string, bool) {
 	return "", false
 }
 
-// apePictureTypeUnknown stands in for Rust's `PictureType::Undefined(0)`,
-// which `from_ape_key` produces for unmapped "Cover Art" keys. Go's
-// [PictureType] is a plain u8 and cannot distinguish `Undefined(0)` from
-// `Other`; an out-of-range value keeps [PictureType.AsApeKey] returning
-// false like Rust (`Undefined(_) => None`), so such pictures are skipped
-// on write instead of being renamed to "Cover Art (Other)".
-const apePictureTypeUnknown = PictureType(21)
-
 // PictureTypeFromApeKey gets a [PictureType] from an APE item key.
 func PictureTypeFromApeKey(key string) PictureType {
 	for i, k := range ApePictureTypes {
@@ -225,7 +231,8 @@ func PictureTypeFromApeKey(key string) PictureType {
 			return PictureType(i)
 		}
 	}
-	return apePictureTypeUnknown
+	// Rust: `_ => Self::Undefined(0)`
+	return PictureTypeUndefined(0)
 }
 
 // PictureInformation describes a [Picture].
@@ -614,7 +621,13 @@ func (p *Picture) AsFlacBytes(pictureInformation PictureInformation, encode bool
 // [PictureInformation] is also returned.
 func PictureFromFlacBytes(b []byte, encoded bool, parseMode ParsingMode) (Picture, PictureInformation, error) {
 	if encoded {
-		data, err := base64.StdEncoding.DecodeString(string(b))
+		// Like `data_encoding::BASE64`: canonical standard base64 only. Go's
+		// decoder silently skips '\r' and '\n', and non-strict mode ignores
+		// non-zero trailing bits; reject both.
+		if bytes.ContainsAny(b, "\r\n") {
+			return Picture{}, PictureInformation{}, pictureParseError(base64.CorruptInputError(bytes.IndexAny(b, "\r\n")))
+		}
+		data, err := base64.StdEncoding.Strict().DecodeString(string(b))
 		if err != nil {
 			return Picture{}, PictureInformation{}, pictureParseError(err)
 		}

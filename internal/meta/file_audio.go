@@ -22,35 +22,19 @@ type AudioFile interface {
 	RemoveFromPath(path string, tagType TagType) error
 }
 
-// SaveToPath opens `path` and writes `tag` of `tagType` via the file's write path.
-func SaveToPath(path string, f AudioFile, tagType TagType, writeOptions WriteOptions) error {
+// SaveToPath opens `path` and saves every tag of `f` to it, mirroring Rust's
+// `AudioFile::save_to_path`.
+func SaveToPath(path string, f AudioFile, writeOptions WriteOptions) error {
 	osFile, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		return &FileEncodingError{Source: err}
 	}
 	defer osFile.Close()
-	verified, err := NewVerifiedFile(NewOSFile(osFile), writeOptions.ParseOptions)
-	if err != nil {
-		return &FileEncodingError{Source: err}
-	}
-	tf := f.TaggedFile()
-	tag := tf.Tag(tagType)
-	if tag == nil {
-		tag = NewTag(tagType)
-	}
-	return WriteTag(tag, verified, writeOptions)
+	return f.SaveFile(NewOSFile(osFile), writeOptions)
 }
 
-// RemoveTagFromPath removes `tagType` from the file at `path`.
+// RemoveTagFromPath removes `tagType` from the file at `path`, taking the file's
+// format from the path's extension like Rust's `TagType::remove_from_path`.
 func RemoveTagFromPath(path string, tagType TagType) error {
-	osFile, err := os.OpenFile(path, os.O_RDWR, 0)
-	if err != nil {
-		return &FileEncodingError{Source: err}
-	}
-	defer osFile.Close()
-	verified, err := NewVerifiedFile(NewOSFile(osFile), NewParseOptions())
-	if err != nil {
-		return &FileEncodingError{Source: err}
-	}
-	return RemoveTag(tagType, verified, NewWriteOptions())
+	return tagType.RemoveFromPath(path, NewWriteOptions())
 }

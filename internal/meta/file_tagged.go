@@ -84,10 +84,32 @@ func (t *TaggedFile) ContainsTag(tagType TagType) bool { return t.Tag(tagType) !
 
 // InsertTag inserts a [Tag] into the file.
 //
-// This will replace any tag of the same type.
-func (t *TaggedFile) InsertTag(tag *Tag) {
-	t.RemoveTagType(tag.tagType)
+// This will replace any tag of the same type, and the replaced tag is
+// returned. The tag is appended after the remaining tags.
+//
+// NOTE: This does nothing (and returns nil) if the [FileType] cannot read the
+// [TagType]. See [FileType.TagSupport].
+func (t *TaggedFile) InsertTag(tag *Tag) *Tag {
+	if !t.fileType.TagSupport(tag.tagType).IsReadable() {
+		return nil
+	}
+	replaced := t.removeFirst(tag.tagType)
 	t.tags = append(t.tags, tag)
+	return replaced
+}
+
+// removeFirst removes and returns the first tag of the given type.
+func (t *TaggedFile) removeFirst(tagType TagType) *Tag {
+	for i, tag := range t.tags {
+		if tag.tagType == tagType {
+			kept := make([]*Tag, 0, len(t.tags)-1)
+			kept = append(kept, t.tags[:i]...)
+			kept = append(kept, t.tags[i+1:]...)
+			t.tags = kept
+			return tag
+		}
+	}
+	return nil
 }
 
 // Remove removes the provided tag, returning true if it was found.
@@ -103,12 +125,7 @@ func (t *TaggedFile) Remove(target *Tag) bool {
 
 // RemoveTagType removes the first tag of the specified [TagType].
 func (t *TaggedFile) RemoveTagType(tagType TagType) {
-	for i, tag := range t.tags {
-		if tag.tagType == tagType {
-			t.tags = append(t.tags[:i], t.tags[i+1:]...)
-			return
-		}
-	}
+	t.removeFirst(tagType)
 }
 
 // RemoveTags removes all tags of the specified [TagType].
@@ -132,17 +149,29 @@ func (t *TaggedFile) SupportsTagType(tagType TagType) bool {
 
 // ChangeFileType changes the [FileType] of the [TaggedFile].
 //
-// NOTE: This is a no-op for [FileType]s that don't support the tags present.
-func (t *TaggedFile) ChangeFileType(fileType FileType) { t.fileType = fileType }
+// NOTES:
+//   - This removes any tag the new format cannot read. See [FileType.TagSupport].
+//   - This resets the [FileProperties].
+func (t *TaggedFile) ChangeFileType(fileType FileType) {
+	t.fileType = fileType
+	t.properties = FileProperties{}
+	kept := make([]*Tag, 0, len(t.tags))
+	for _, tag := range t.tags {
+		if fileType.TagSupport(tag.tagType).IsReadable() {
+			kept = append(kept, tag)
+		}
+	}
+	t.tags = kept
+}
 
 // Conflicts returns all pairs of conflicting [TagType]s present in the file.
+//
+// Each conflicting pair is reported once, with the tag that comes first in the
+// file first.
 func (t *TaggedFile) Conflicts() [][2]TagType {
 	var conflicts [][2]TagType
 	for i, tag := range t.tags {
-		for j, other := range t.tags {
-			if i == j {
-				continue
-			}
+		for _, other := range t.tags[i+1:] {
 			if tag.tagType.ConflictsWith(other.tagType) {
 				conflicts = append(conflicts, [2]TagType{tag.tagType, other.tagType})
 			}
@@ -152,26 +181,34 @@ func (t *TaggedFile) Conflicts() [][2]TagType {
 }
 
 // Save writes all tags to the file.
+//
+// Like Rust's `TaggedFile::save_to`, the destination's format is determined
+// from its content for every tag, so a tag is only written if the real
+// destination format supports it (otherwise an [UnsupportedTagError] is
+// returned).
 func (t *TaggedFile) Save(file FileLike, writeOptions WriteOptions) error {
 	// Rust's save_to refuses to write when conflicting tag types are present
 	if conflicts := t.Conflicts(); len(conflicts) > 0 {
 		return &FileEncodingError{Source: &ConflictingTagError{First: conflicts[0][0], Second: conflicts[0][1]}}
 	}
-	// The file type is already known; no need to re-verify
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return &FileEncodingError{Source: err}
-	}
-	vf := &VerifiedFile{format: t.fileType, file: file}
 	for _, tag := range t.tags {
 		// Users aren't necessarily aware of any read-only tags they happen to
 		// read; skip them rather than error (Rust `save_to`).
 		if !t.fileType.TagSupport(tag.tagType).IsWritable() {
 			continue
 		}
+		// NewVerifiedFile rewinds the file and probes its real format.
+		vf, err := NewVerifiedFile(file, writeOptions.ParseOptions)
+		if err != nil {
+			return &FileEncodingError{Source: err}
+		}
 		if err := WriteTag(tag, vf, writeOptions); err != nil {
 			return err
 		}
-		if _, err := vf.file.Seek(0, io.SeekStart); err != nil {
+		// Rewind so the next iteration starts from the beginning, and so the
+		// caller's handle is left in a usable state (Rust consumes the handle,
+		// so this is unobservable there).
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
 			return &FileEncodingError{Source: err}
 		}
 	}
@@ -194,6 +231,15 @@ func BoundTaggedFileFrom(file FileLike, parseOptions ParseOptions) (*BoundTagged
 	taggedFile, err := readTaggedFileFromFileLike(file, parseOptions)
 	if err != nil {
 		return nil, err
+	}
+	return newBoundTaggedFile(file, taggedFile)
+}
+
+// newBoundTaggedFile rewinds `file` (like Rust's `BoundTaggedFile::read_from`)
+// and binds it to `taggedFile`.
+func newBoundTaggedFile(file FileLike, taggedFile *TaggedFile) (*BoundTaggedFile, error) {
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return nil, &FileParseError{FileType: taggedFile.fileType, Source: err}
 	}
 	return &BoundTaggedFile{TaggedFile: *taggedFile, file: file}, nil
 }

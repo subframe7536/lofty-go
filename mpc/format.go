@@ -151,26 +151,30 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 	}
 
 	var id3v2Tag *id3v2.Id3v2Tag
-	// ID3v2 at the start
-	header, _, found2, err := id3v2.FindId3v2(reader, parseOptions.ReadTags, parseOptions)
+	// ID3v2 at the start (Rust musepack/read.rs: find_id3v2 with read_tags).
+	res, err := id3v2.LocateId3v2(reader, parseOptions.ReadTags, parseOptions)
 	if err != nil {
 		return nil, &meta.FileParseError{Source: err}
 	}
-	var id3v2Size uint64
-	if found2 {
-		id3v2Size = uint64(header.FullTagSize())
-		if id3v2Size > streamLen {
+	if res != nil {
+		// Rust: stream_length.checked_sub(header.full_tag_size())
+		fullTagSize := uint64(res.Header.FullTagSize())
+		if fullTagSize > streamLen {
 			return nil, &meta.FileParseError{Source: &meta.SizeMismatchError{}}
 		}
-		streamLen -= id3v2Size
+		streamLen -= fullTagSize
 		if parseOptions.ReadTags {
-			if _, err := reader.Seek(start+int64(header.FullTagSize()-header.Size), io.SeekStart); err != nil {
-				return nil, &meta.FileParseError{Source: err}
+			t, err := res.Parse(parseOptions)
+			if err != nil {
+				return nil, &meta.FileParseError{Source: &meta.TagParseError{TagType: meta.TagTypeID3v2, HasTagType: true, Source: err}}
 			}
-			if t, err := id3v2.ParseId3v2Tag(reader, header, parseOptions); err == nil {
-				id3v2Tag = t
-			}
+			id3v2Tag = t
 		}
+	}
+	// Rust: pos_past_id3v2 = reader.stream_position() after the ID3v2 search.
+	posPastId3v2, err := reader.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return nil, &meta.FileParseError{Source: err}
 	}
 
 	// End tags
@@ -181,7 +185,7 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 	streamLen = newLen
 
 	// Read MPC stream info
-	if _, err := reader.Seek(start+int64(id3v2Size), io.SeekStart); err != nil {
+	if _, err := reader.Seek(posPastId3v2, io.SeekStart); err != nil {
 		return nil, &meta.FileParseError{Source: err}
 	}
 
@@ -221,10 +225,6 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 		// Rust's `while let Ok(...)` swallows all PacketReader::next errors —
 		// invalid keys, failed varints, and short reads just end the scan.
 		for parseOptions.ReadProperties {
-			pktStart, err := reader.Seek(0, io.SeekCurrent)
-			if err != nil {
-				break
-			}
 			var key [2]byte
 			if _, err := io.ReadFull(reader, key[:]); err != nil {
 				break
@@ -286,7 +286,9 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 					return nil, &meta.FileParseError{Source: err}
 				}
 			}
-			if _, err := reader.Seek(pktStart+int64(size), io.SeekStart); err != nil {
+			// Rust's PacketReader discards the packet remainder from the current
+			// position on the next `next()`; the cursor only ever moves forward.
+			if _, err := reader.Seek(bounded.N, io.SeekCurrent); err != nil {
 				break
 			}
 			if foundSE {
@@ -526,7 +528,7 @@ func (f *MusepackFile) TaggedFile() *meta.TaggedFile {
 
 // SavePath implements AudioFile.
 func (f *MusepackFile) SavePath(path string, wo meta.WriteOptions) error {
-	return meta.SaveToPath(path, f, meta.TagTypeApe, wo)
+	return meta.SaveToPath(path, f, wo)
 }
 
 // SaveFile implements AudioFile.

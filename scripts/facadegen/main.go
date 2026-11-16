@@ -50,6 +50,14 @@ func main() {
 		{"mpc", "mpc"},
 		{"aac", "aac"},
 	}
+	if msgs := findCollisions(pkgs); len(msgs) > 0 {
+		fmt.Fprintln(os.Stderr, "facadegen: exported name collision(s) between different symbols; the facade can only re-export one of them.")
+		fmt.Fprintln(os.Stderr, "Rename one symbol, or make the later declaration an alias/forwarder of the first:")
+		for _, m := range msgs {
+			fmt.Fprintln(os.Stderr, "  - "+m)
+		}
+		os.Exit(1)
+	}
 	seen := map[string]bool{}
 	var types, consts, vars_, funcs []entry
 	skip := map[string]bool{"init": true}
@@ -315,4 +323,179 @@ func main() {
 		panic(err)
 	}
 	fmt.Println("wrote facade_gen.go:", len(types), "types,", len(consts), "consts,", len(vars_), "vars,", len(funcs), "funcs")
+}
+
+const modulePrefix = "github.com/subframe7536/lofty-go/"
+
+// symID identifies a package-level symbol by package directory and name.
+type symID struct{ dir, name string }
+
+type symDecl struct {
+	id      symID
+	file    string
+	forward *symID // non-nil if the declaration merely re-exports another symbol
+}
+
+// findCollisions reports exported names declared by more than one facade
+// package where the declarations are different symbols. Declarations that are
+// type aliases, `const/var X = pkg.X` copies or one-call function wrappers
+// that resolve to the same underlying symbol are fine. It mirrors the
+// generator's package order: the first declaration wins in the facade.
+func findCollisions(pkgs []struct{ dir, name string }) []string {
+	var order []symID
+	decls := map[symID]symDecl{}
+	byName := map[string][]symID{}
+
+	add := func(d symDecl) {
+		if _, dup := decls[d.id]; dup {
+			return
+		}
+		decls[d.id] = d
+		order = append(order, d.id)
+		byName[d.id.name] = append(byName[d.id.name], d.id)
+	}
+
+	for _, p := range pkgs {
+		fset := token.NewFileSet()
+		des, err := os.ReadDir(p.dir)
+		if err != nil {
+			panic(err)
+		}
+		var files []string
+		for _, de := range des {
+			n := de.Name()
+			if !de.IsDir() && strings.HasSuffix(n, ".go") && !strings.HasSuffix(n, "_test.go") {
+				files = append(files, filepath.Join(p.dir, n))
+			}
+		}
+		sort.Strings(files)
+		for _, fname := range files {
+			f, err := parser.ParseFile(fset, fname, nil, 0)
+			if err != nil {
+				panic(err)
+			}
+			qualDir := map[string]string{}
+			for _, im := range f.Imports {
+				path := strings.Trim(im.Path.Value, "\"")
+				if !strings.HasPrefix(path, modulePrefix) {
+					continue
+				}
+				q := filepath.Base(path)
+				if im.Name != nil {
+					q = im.Name.Name
+				}
+				qualDir[q] = strings.TrimPrefix(path, modulePrefix)
+			}
+			// target resolves `q.Name` (possibly instantiated/indexed) to a symID.
+			target := func(e ast.Expr) *symID {
+				for {
+					switch x := e.(type) {
+					case *ast.IndexExpr:
+						e = x.X
+						continue
+					case *ast.IndexListExpr:
+						e = x.X
+						continue
+					case *ast.ParenExpr:
+						e = x.X
+						continue
+					}
+					break
+				}
+				sel, ok := e.(*ast.SelectorExpr)
+				if !ok {
+					return nil
+				}
+				id, ok := sel.X.(*ast.Ident)
+				if !ok {
+					return nil
+				}
+				dir, ok := qualDir[id.Name]
+				if !ok {
+					return nil
+				}
+				return &symID{dir, sel.Sel.Name}
+			}
+			for _, d := range f.Decls {
+				switch decl := d.(type) {
+				case *ast.GenDecl:
+					for _, sp := range decl.Specs {
+						switch s := sp.(type) {
+						case *ast.TypeSpec:
+							if !s.Name.IsExported() {
+								continue
+							}
+							var fwd *symID
+							if s.Assign.IsValid() {
+								fwd = target(s.Type)
+							}
+							add(symDecl{symID{p.dir, s.Name.Name}, fname, fwd})
+						case *ast.ValueSpec:
+							for i, n := range s.Names {
+								if !n.IsExported() {
+									continue
+								}
+								var fwd *symID
+								if len(s.Values) == len(s.Names) {
+									fwd = target(s.Values[i])
+								}
+								add(symDecl{symID{p.dir, n.Name}, fname, fwd})
+							}
+						}
+					}
+				case *ast.FuncDecl:
+					if decl.Recv != nil || !decl.Name.IsExported() || decl.Name.Name == "init" {
+						continue
+					}
+					var fwd *symID
+					if decl.Body != nil && len(decl.Body.List) == 1 {
+						var call ast.Expr
+						switch st := decl.Body.List[0].(type) {
+						case *ast.ReturnStmt:
+							if len(st.Results) == 1 {
+								call = st.Results[0]
+							}
+						case *ast.ExprStmt:
+							call = st.X
+						}
+						if c, ok := call.(*ast.CallExpr); ok {
+							fwd = target(c.Fun)
+						}
+					}
+					add(symDecl{symID{p.dir, decl.Name.Name}, fname, fwd})
+				}
+			}
+		}
+	}
+
+	canonical := func(id symID) symID {
+		for i := 0; i < 16; i++ {
+			d, ok := decls[id]
+			if !ok || d.forward == nil {
+				return id
+			}
+			id = *d.forward
+		}
+		return id
+	}
+
+	var msgs []string
+	seenName := map[string]bool{}
+	for _, id := range order {
+		name := id.name
+		if seenName[name] || len(byName[name]) < 2 {
+			continue
+		}
+		seenName[name] = true
+		ids := byName[name]
+		first := canonical(ids[0])
+		for _, other := range ids[1:] {
+			if c := canonical(other); c != first {
+				msgs = append(msgs, fmt.Sprintf("%s: %s (%s, kept) vs %s (%s, hidden)",
+					name, ids[0].dir, decls[ids[0]].file, other.dir, decls[other].file))
+			}
+		}
+	}
+	sort.Strings(msgs)
+	return msgs
 }

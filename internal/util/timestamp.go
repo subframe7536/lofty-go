@@ -151,7 +151,11 @@ func (e *TimestampParseError) Unwrap() error { return e.Source }
 func TimestampParse(reader io.Reader, parseMode ParsingMode) (Option[Timestamp], error) {
 	var c [1]byte
 	var first byte
-	if _, err := reader.Read(c[:]); err != nil {
+	if _, err := io.ReadFull(reader, c[:]); err != nil {
+		// Only end-of-input means "empty"; any other read error is reported.
+		if err != io.EOF {
+			return None[Timestamp](), &TimestampParseError{Kind: TimestampParseErrorIo, Source: err}
+		}
 		if parseMode == ParsingModeStrict {
 			return None[Timestamp](), &TimestampParseError{Kind: TimestampParseErrorEmpty}
 		}
@@ -161,7 +165,7 @@ func TimestampParse(reader io.Reader, parseMode ParsingMode) (Option[Timestamp],
 
 	if parseMode != ParsingModeStrict {
 		for isASCIIWhitespace(first) {
-			if _, err := reader.Read(c[:]); err != nil {
+			if _, err := io.ReadFull(reader, c[:]); err != nil {
 				return None[Timestamp](), &TimestampParseError{Kind: TimestampParseErrorIo, Source: err}
 			}
 			first = c[0]
@@ -385,8 +389,10 @@ func (t Timestamp) Verify() error {
 	return verify(TimestampFieldSecond, t.Second, 59, minSet)
 }
 
+// isASCIIWhitespace matches Rust's `u8::is_ascii_whitespace`: space, tab, LF,
+// form feed, and CR. Vertical tab (0x0B) is not included.
 func isASCIIWhitespace(b byte) bool {
-	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == 0x0B || b == 0x0C
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == 0x0C
 }
 
 // TryParseTimestamp attempts to parse `input` as a [Timestamp] in relaxed mode.

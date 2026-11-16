@@ -80,6 +80,10 @@ func (p *Probe) GuessFileType() (*Probe, error) {
 	if o, ok := p.options.Get(); ok {
 		maxJunkBytes = o.MaxJunkBytes
 	}
+	// Rust's `max_junk_bytes` is a usize; a negative Go value means "no junk".
+	if maxJunkBytes < 0 {
+		maxJunkBytes = 0
+	}
 
 	fTy, err := p.guessInner(maxJunkBytes)
 	if err != nil {
@@ -238,9 +242,31 @@ type formatReader = FormatReader
 var formatReaders = map[fileTypeKind]formatReader{}
 
 // ReadBound attempts to extract a [BoundTaggedFile] from a [FileLike].
+//
+// Like Rust's `Probe::read_bound`, the probe's file type (set with
+// [Probe.SetFileType], [ProbeWithFileType] or [NewProbeFromPath], or found by
+// [Probe.GuessFileType]) is used as-is and nothing is sniffed. Only when no file
+// type is set is it guessed from `file`'s content. `file` is used as the reader
+// (when nil, the probe's own reader is used if it is a [FileLike]), read from
+// its current position, and rewound afterwards.
 func (p *Probe) ReadBound(file FileLike) (*BoundTaggedFile, error) {
 	options := p.options.OrElse(NewParseOptions())
-	return BoundTaggedFileFrom(file, options)
+	if file == nil {
+		fl, ok := p.inner.(FileLike)
+		if !ok {
+			return nil, &FileParseError{Source: &UnknownFormatError{}}
+		}
+		file = fl
+	}
+	fTy, ok := p.fTy.Get()
+	if !ok {
+		return BoundTaggedFileFrom(file, options)
+	}
+	taggedFile, err := ReadFormat(fTy, file, options)
+	if err != nil {
+		return nil, err
+	}
+	return newBoundTaggedFile(file, taggedFile)
 }
 
 // ReadFromPath reads a [TaggedFile] from a path.

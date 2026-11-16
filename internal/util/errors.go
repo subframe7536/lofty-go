@@ -77,6 +77,9 @@ func (e *AllocationError) Error() string {
 	if e.Kind == AllocationLimitExceeded {
 		return "attempted allocation would exceed global limits"
 	}
+	if e.Err == nil {
+		return "failed to reserve memory for allocation"
+	}
 	return e.Err.Error()
 }
 

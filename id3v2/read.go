@@ -243,6 +243,11 @@ func parseFrameHeader(reader io.Reader, synchsafe bool, parseOptions meta.ParseO
 	}
 
 	idStr, err := utf8DecodeStrChecked(header[:idEnd])
+	if err == nil {
+		// Rust's `utf8_decode_str` also trims trailing NULs, so a v2.4 ID such
+		// as "ABC\0" becomes the outdated 3-character ID "ABC".
+		idStr = util.TrimEndNulls(idStr)
+	}
 	if err != nil {
 		// size is still returned so the caller can skip the frame content
 		return FrameId{}, FrameFlags{}, size, false, &FrameIdParseError{IdBytes: append([]byte(nil), header[:idEnd]...)}
@@ -385,12 +390,17 @@ func parsedFrameRead(reader io.Reader, version Id3v2Version, tagFlags Id3v2TagFl
 		return nil, 0, frameParseUndersized(id)
 	}
 
-	// Read the frame content
-	content, err := util.TryByteSlice(int(size))
-	if err != nil {
-		return nil, 0, frameParseError(meta.Some(id), err)
+	// Encrypted frames need a data length indicator; check before reading
+	// (Rust `handle_encryption`).
+	if flags.Encryption.IsSome() && flags.DataLengthIndicator.IsNone() {
+		return nil, 0, frameParseMissingDLI(id)
 	}
-	if _, err := io.ReadFull(reader, content); err != nil {
+
+	// Restrict to the frame content. Like Rust's `reader.take(size)`, a frame
+	// whose declared size runs past the end of the tag is truncated rather
+	// than rejected: only what the tag actually contains is read.
+	content, err := readFrameContent(reader, size)
+	if err != nil {
 		return nil, 0, frameParseError(meta.Some(id), err)
 	}
 
@@ -398,26 +408,120 @@ func parsedFrameRead(reader io.Reader, version Id3v2Version, tagFlags Id3v2TagFl
 	if flags.Unsynchronisation {
 		content = Id3v2Deunsync(content)
 	}
+	var contentReader io.Reader = bytes.NewReader(content)
 	if flags.Compression {
-		zr, err := zlib.NewReader(bytes.NewReader(content))
-		if err != nil {
-			return nil, 0, frameParseError(meta.Some(id), err)
-		}
-		content, err = io.ReadAll(zr)
-		zr.Close()
-		if err != nil {
-			return nil, 0, frameParseError(meta.Some(id), err)
-		}
+		// Decompression is lazy, like Rust's `ZlibDecoder`: a corrupt stream
+		// surfaces as a read error, which parsers that tolerate a short read
+		// keep tolerating.
+		contentReader = &lazyZlibReader{src: content}
 	}
 	if flags.Encryption.IsSome() {
-		if flags.DataLengthIndicator.IsNone() {
-			return nil, 0, frameParseMissingDLI(id)
+		// Nothing further we can do with encrypted frames. Rust reads exactly
+		// `size` bytes here (`read_exact`), so a short frame is an error.
+		data, err := util.TryByteSlice(int(size))
+		if err != nil {
+			return nil, 0, frameParseError(meta.Some(id), err)
 		}
-		// Nothing further we can do with encrypted frames
-		return NewBinaryFrame(id, content).withFlags(flags), parsedFrameNext, nil
+		if _, err := io.ReadFull(contentReader, data); err != nil {
+			return nil, 0, frameParseError(meta.Some(id), err)
+		}
+		return NewBinaryFrame(id, data).withFlags(flags), parsedFrameNext, nil
 	}
 
-	return parseFrame(bytes.NewReader(content), id, size, flags, version, parseOptions)
+	frame, result, err := parseFrame(contentReader, id, size, flags, version, parseOptions)
+	if err == nil && result == parsedFrameSkip {
+		// Rust's `skip_frame(None, reader, size)?`: draining can only fail for
+		// a corrupt compressed stream.
+		if _, derr := io.Copy(io.Discard, contentReader); derr != nil {
+			return nil, 0, frameParseError(meta.None[FrameId](), derr)
+		}
+	}
+	return frame, result, err
+}
+
+// upperBoundReader is implemented by readers that can cheaply tell how many
+// bytes at most remain.
+type upperBoundReader interface {
+	remainingUpperBound() int64
+}
+
+func (u *unsyncReader) remainingUpperBound() int64 {
+	if n, ok := readerUpperBound(u.r); ok {
+		return n
+	}
+	return -1
+}
+
+// readerUpperBound returns an upper bound on the bytes left in r, if known.
+func readerUpperBound(r io.Reader) (int64, bool) {
+	switch v := r.(type) {
+	case *bytes.Reader:
+		return int64(v.Len()), true
+	case *strings.Reader:
+		return int64(v.Len()), true
+	case *io.LimitedReader:
+		// The limit alone says nothing about how much data really exists
+		// (it may come from a forged header), so it is only a bound when the
+		// wrapped reader knows its own length.
+		if n, ok := readerUpperBound(v.R); ok {
+			if v.N < n {
+				n = v.N
+			}
+			return n, true
+		}
+	case upperBoundReader:
+		if n := v.remainingUpperBound(); n >= 0 {
+			return n, true
+		}
+	}
+	return 0, false
+}
+
+// readFrameContent reads up to size bytes, stopping early at the end of the
+// available data. It never allocates more than the data actually available.
+func readFrameContent(r io.Reader, size uint32) ([]byte, error) {
+	n := int64(size)
+	if avail, ok := readerUpperBound(r); ok {
+		if avail < n {
+			n = avail
+		}
+		buf := make([]byte, n)
+		m, err := io.ReadFull(r, buf)
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			err = nil
+		}
+		return buf[:m], err
+	}
+	return io.ReadAll(io.LimitReader(r, n))
+}
+
+// lazyZlibReader decompresses src on first read, mirroring Rust's lazily
+// initialized `flate2::read::ZlibDecoder`.
+type lazyZlibReader struct {
+	src  []byte
+	r    io.Reader
+	err  error
+	init bool
+}
+
+func (z *lazyZlibReader) Read(p []byte) (int, error) {
+	if !z.init {
+		z.init = true
+		zr, err := zlib.NewReader(bytes.NewReader(z.src))
+		if err != nil {
+			z.err = err
+		} else {
+			z.r = zr
+		}
+	}
+	if z.err != nil {
+		return 0, z.err
+	}
+	n, err := z.r.Read(p)
+	if err != nil && err != io.EOF {
+		z.err = err
+	}
+	return n, err
 }
 
 func (f *BinaryFrame) withFlags(flags FrameFlags) *BinaryFrame {
@@ -467,11 +571,11 @@ func id3v2MinContentSize(id string, version Id3v2Version) uint32 {
 
 // parseFrame mirrors `parse_frame` + `parse_content` dispatch.
 func parseFrame(reader io.Reader, id FrameId, size uint32, flags FrameFlags, version Id3v2Version, parseOptions meta.ParseOptions) (Frame, parsedFrameResult, error) {
-	if size < id3v2MinContentSize(id.String(), version) {
+	if minSize := id3v2MinContentSize(id.String(), version); size < minSize {
 		if parseOptions.ParsingMode == meta.ParsingModeRelaxed {
 			return nil, parsedFrameSkip, nil
 		}
-		return nil, 0, setFrameErrID(frameParseError(meta.None[FrameId](), &NotEnoughDataError{}), id)
+		return nil, 0, setFrameErrID(frameParseError(meta.None[FrameId](), util.NewNotEnoughDataError(int(minSize))), id)
 	}
 
 	var frame Frame
@@ -555,13 +659,4 @@ func parseFrame(reader io.Reader, id FrameId, size uint32, flags FrameFlags, ver
 		return nil, parsedFrameSkip, nil
 	}
 	return frame, parsedFrameNext, nil
-}
-
-// NotEnoughDataError mirrors Rust's error of the same name.
-type NotEnoughDataError struct {
-	Needed meta.Option[int]
-}
-
-func (e *NotEnoughDataError) Error() string {
-	return "not enough data was provided"
 }

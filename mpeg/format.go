@@ -97,28 +97,39 @@ type mpegHeader struct {
 	emphasis      meta.Option[Emphasis]
 }
 
-// Bitrate lookup tables [version!=1][layer][index].
-// Layer index 0=L1, 1=L2, 2=L3.
-var mpegBitrateL1 = [2][16]uint32{
-	{0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 0},
-	{0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 0},
+// mpegBitrates mirrors Rust's `BITRATES`: [version (V1 / V2+V2.5)][layer
+// (L1, L2, L3)][bitrate index], in kbps.
+var mpegBitrates = [2][3][16]uint32{
+	// Version 1
+	{
+		{0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 0},
+		{0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 0},
+		{0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0},
+	},
+	// Version 2/2.5
+	{
+		{0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256, 0},
+		{0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0},
+		{0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0},
+	},
 }
 
-var mpegBitrateL2 = [2][16]uint32{
-	{0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 0},
-	{0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0},
-}
-
-var mpegBitrateL3 = [2][16]uint32{
-	{0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0},
-	{0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0},
-}
-
+// mpegSampleRates mirrors Rust's `SAMPLE_RATES` (index 3 is invalid).
 var mpegSampleRates = [3][4]uint32{
 	{44100, 48000, 32000, 0}, // V1
 	{22050, 24000, 16000, 0}, // V2
 	{11025, 12000, 8000, 0},  // V2.5
 }
+
+// mpegSamples mirrors Rust's `SAMPLES`: [layer][version index (V1, V2+V2.5)].
+var mpegSamples = [3][2]uint32{
+	{384, 384},
+	{1152, 1152},
+	{1152, 576},
+}
+
+// mpegPaddingSizes mirrors Rust's `PADDING_SIZES`, indexed by layer.
+var mpegPaddingSizes = [3]uint32{4, 1, 1}
 
 var errBadHeader = &MpegParseError{Message: "invalid MPEG header"}
 
@@ -164,14 +175,8 @@ func parseMpegHeader(b []byte, firstHeader *mpegHeader) (*mpegHeader, error) {
 	if h2.version != MpegVersion1 {
 		vIdx = 1
 	}
-	switch h2.layer {
-	case MpegLayer1:
-		h2.bitrate = mpegBitrateL1[vIdx][bitrateIdx]
-	case MpegLayer2:
-		h2.bitrate = mpegBitrateL2[vIdx][bitrateIdx]
-	default:
-		h2.bitrate = mpegBitrateL3[vIdx][bitrateIdx]
-	}
+	layerIdx := int(h2.layer) - 1
+	h2.bitrate = mpegBitrates[vIdx][layerIdx][bitrateIdx]
 	if h2.bitrate == 0 {
 		return nil, errBadHeader
 	}
@@ -189,7 +194,10 @@ func parseMpegHeader(b []byte, firstHeader *mpegHeader) (*mpegHeader, error) {
 		return nil, errBadHeader
 	}
 
-	padding := (h >> 9) & 1
+	var padding uint32
+	if (h>>9)&1 == 1 {
+		padding = mpegPaddingSizes[layerIdx]
+	}
 	h2.channelMode = ChannelMode((h >> 6) & 3)
 	if h2.channelMode == ChannelModeJointStereo {
 		h2.modeExtension = meta.Some(uint8((h >> 4) & 3))
@@ -202,26 +210,9 @@ func parseMpegHeader(b []byte, firstHeader *mpegHeader) (*mpegHeader, error) {
 	h2.copyrighted = h&(1<<3) != 0
 	h2.original = h&(1<<2) != 0
 
-	// frame length and samples per frame
-	switch h2.layer {
-	case MpegLayer1:
-		h2.frameLen = (12*h2.bitrate*1000/h2.sampleRate + padding) * 4
-		h2.samples = 384
-	case MpegLayer2:
-		h2.frameLen = 144*h2.bitrate*1000/h2.sampleRate + padding
-		h2.samples = 1152
-	default:
-		var coeff uint32 = 144
-		if h2.version != MpegVersion1 {
-			coeff = 72
-		}
-		h2.frameLen = coeff*h2.bitrate*1000/h2.sampleRate + padding
-		if h2.version == MpegVersion1 {
-			h2.samples = 1152
-		} else {
-			h2.samples = 576
-		}
-	}
+	// Rust: samples * bitrate * 125 / sample_rate + padding (all layers)
+	h2.samples = mpegSamples[layerIdx][vIdx]
+	h2.frameLen = h2.samples*h2.bitrate*125/h2.sampleRate + padding
 	if h2.frameLen == 0 {
 		return nil, errBadHeader
 	}
@@ -277,6 +268,11 @@ func parseXing(data []byte) (*vbrHeader, error) {
 		return nil, errBadHeader
 	}
 	flags := binary.BigEndian.Uint32(data[4:8])
+	// Rust: both the frames (0x01) and bytes (0x02) flags are required,
+	// otherwise this is not treated as a VBR header at all.
+	if flags&0x03 != 0x03 {
+		return nil, errBadHeader
+	}
 	off := 8
 	h := &vbrHeader{ty: vbrTypeXing}
 	if bytes.Equal(data[:4], []byte("Info")) {
@@ -598,7 +594,6 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp
 		return nil, &meta.FileParseError{Source: err}
 	}
 
-	var id3v2End uint64
 	var headerBuf [4]byte
 	for {
 		if _, err := io.ReadFull(reader, headerBuf[:]); err != nil {
@@ -608,7 +603,8 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp
 			if _, err := reader.Seek(-4, io.SeekCurrent); err != nil {
 				return nil, &meta.FileParseError{Source: err}
 			}
-			header, err := id3v2.ParseId3v2HeaderRaw(reader)
+			// Rust `Id3v2Header::parse`: includes the extended header
+			header, err := id3v2.ParseId3v2Header(reader, parseOptions)
 			if err != nil {
 				return nil, &meta.FileParseError{Source: &meta.TagParseError{TagType: meta.TagTypeID3v2, HasTagType: true, Source: err}}
 			}
@@ -626,7 +622,11 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp
 				}
 				file.ID3v2 = meta.Some(tag)
 			} else {
-				if _, err := reader.Seek(int64(header.Size), io.SeekCurrent); err != nil {
+				// The extended header has already been consumed by the header
+				// parse; `Size` counts it, so skip only the remainder (Rust
+				// seeks the full `size` here and overshoots by the extended
+				// header's length).
+				if _, err := reader.Seek(int64(header.Size-header.ExtendedSize), io.SeekCurrent); err != nil {
 					return nil, &meta.FileParseError{Source: err}
 				}
 			}
@@ -681,13 +681,16 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp
 			if _, err := reader.Seek(0, io.SeekStart); err != nil {
 				return nil, &meta.FileParseError{Source: err}
 			}
-			if _, junkEnd, found, err := id3v2.FindId3v2(reader, parseOptions.ReadTags, parseOptions); err != nil {
+			res, err := id3v2.LocateId3v2(reader, parseOptions.ReadTags, parseOptions)
+			if err != nil {
 				return nil, &meta.FileParseError{Source: &meta.TagParseError{TagType: meta.TagTypeID3v2, HasTagType: true, Source: err}}
-			} else if found {
-				id3v2End = uint64(junkEnd)
 			}
-			if _, err := reader.Seek(int64(firstFrameOffset), io.SeekStart); err != nil {
-				return nil, &meta.FileParseError{Source: err}
+			if res != nil && res.Content != nil {
+				tag, err := res.Parse(parseOptions)
+				if err != nil {
+					return nil, &meta.FileParseError{Source: &meta.TagParseError{TagType: meta.TagTypeID3v2, HasTagType: true, Source: err}}
+				}
+				file.ID3v2 = meta.Some(tag)
 			}
 		}
 		break
@@ -698,34 +701,6 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp
 			return nil, &meta.FileParseError{Source: &MpegParseError{Message: "no MPEG frames found"}}
 		}
 		// No frames and no properties: still collect trailing tags below.
-	}
-
-	// Re-parse buried ID3v2 if found in junk
-	if id3v2End > 0 && parseOptions.ReadTags && file.ID3v2.IsNone() {
-		if _, err := reader.Seek(0, io.SeekStart); err != nil {
-			return nil, &meta.FileParseError{Source: err}
-		}
-		header, end, found, err := id3v2.FindId3v2(reader, false, parseOptions)
-		if err != nil {
-			return nil, &meta.FileParseError{Source: &meta.TagParseError{TagType: meta.TagTypeID3v2, HasTagType: true, Source: err}}
-		}
-		if found {
-			contentStart := end - int64(header.Size)
-			if header.Flags.Footer {
-				contentStart -= 10
-			}
-			if _, err := reader.Seek(contentStart, io.SeekStart); err != nil {
-				return nil, &meta.FileParseError{Source: err}
-			}
-			tag, err := id3v2.ParseId3v2Tag(reader, header, parseOptions)
-			if err != nil {
-				return nil, &meta.FileParseError{Source: &meta.TagParseError{TagType: meta.TagTypeID3v2, HasTagType: true, Source: err}}
-			}
-			file.ID3v2 = meta.Some(tag)
-		}
-		if _, err := reader.Seek(int64(firstFrameOffset), io.SeekStart); err != nil {
-			return nil, &meta.FileParseError{Source: err}
-		}
 	}
 
 	// Find the end of the stream: skip ID3v1/Lyrics3/APE at the end
@@ -749,9 +724,11 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp
 		return nil, &meta.FileParseError{Source: err}
 	}
 
+	lyricsOpts := parseOptions
+	lyricsOpts.ReadTags = true
 	// Lyrics3 — Rust propagates find errors via `?` and always reads the
 	// tag content (literal `true`), independent of read_tags.
-	if start, _, t, found, err := lyrics3.FindLyrics3(reader, true, parseOptions); err != nil {
+	if start, _, t, found, err := lyrics3.FindLyrics3(reader, true, lyricsOpts); err != nil {
 		return nil, &meta.FileParseError{Source: err}
 	} else if found {
 		switch v := t.(type) {
@@ -801,7 +778,8 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp
 		}
 		properties = props
 	} else {
-		properties = &MpegProperties{}
+		// Rust: `MpegProperties::default()` (version V1, layer 3)
+		properties = &MpegProperties{Layer: MpegLayer3}
 	}
 	file.Properties = *properties
 	file.ID3v1 = util.OptionFromPtr(id3v1Tag)
@@ -864,20 +842,7 @@ func (f *MpegFile) TaggedFile() *meta.TaggedFile {
 
 // SavePath saves the file's tags back to the path.
 func (f *MpegFile) SavePath(path string, writeOptions meta.WriteOptions) error {
-	return meta.SaveToPath(path, f, f.primaryTagType(), writeOptions)
-}
-
-func (f *MpegFile) primaryTagType() meta.TagType {
-	if f.ID3v2.IsSome() {
-		return meta.TagTypeID3v2
-	}
-	if f.APE.IsSome() {
-		return meta.TagTypeApe
-	}
-	if f.ID3v1.IsSome() {
-		return meta.TagTypeID3v1
-	}
-	return meta.TagTypeID3v2
+	return meta.SaveToPath(path, f, writeOptions)
 }
 
 // SaveFile writes tags to an open file.

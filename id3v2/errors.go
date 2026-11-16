@@ -34,17 +34,54 @@ func (e *Id3v2EncodingError) Error() string {
 }
 func (e *Id3v2EncodingError) Unwrap() error { return e.Source }
 
+// Id3v2HeaderErrorKind is the kind of an [Id3v2HeaderError], mirroring the
+// variants of Rust's `Id3v2HeaderError`.
+type Id3v2HeaderErrorKind int
+
+const (
+	// Id3v2HeaderErrorOther is an unclassified header error described by Message.
+	Id3v2HeaderErrorOther Id3v2HeaderErrorKind = iota
+	// Id3v2HeaderBadVersion is an invalid ID3v2 version (`BadId3v2Version`);
+	// Major and Minor hold the version bytes.
+	Id3v2HeaderBadVersion
+	// Id3v2HeaderV2Compression is a compressed ID3v2.2 tag (`V2Compression`).
+	Id3v2HeaderV2Compression
+	// Id3v2HeaderBadExtendedHeaderSize is an extended header with an invalid size.
+	Id3v2HeaderBadExtendedHeaderSize
+	// Id3v2HeaderBadExtendedHeaderFlags is an extended header with reserved flags.
+	Id3v2HeaderBadExtendedHeaderFlags
+)
+
 // Id3v2HeaderError is the kind of error that can occur while parsing an ID3v2 header.
 type Id3v2HeaderError struct {
+	Kind Id3v2HeaderErrorKind
+	// Major and Minor are the version bytes for [Id3v2HeaderBadVersion].
+	Major, Minor uint8
+	// Message overrides the default text for the kind, if set.
 	Message string
 }
 
-func (e *Id3v2HeaderError) Error() string { return e.Message }
+func (e *Id3v2HeaderError) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	switch e.Kind {
+	case Id3v2HeaderBadVersion:
+		return fmt.Sprintf("found an invalid version (v%d.%d), expected any major revision in: (2, 3, 4)", e.Major, e.Minor)
+	case Id3v2HeaderV2Compression:
+		return "encountered a compressed ID3v2.2 tag"
+	case Id3v2HeaderBadExtendedHeaderSize:
+		return "encountered an extended header with an invalid size"
+	case Id3v2HeaderBadExtendedHeaderFlags:
+		return "encountered an extended header with a invalid flags"
+	}
+	return "invalid ID3v2 header"
+}
 
 var (
-	errBadExtendedHeaderSize  = &Id3v2HeaderError{Message: "encountered an extended header with an invalid size"}
-	errBadExtendedHeaderFlags = &Id3v2HeaderError{Message: "encountered an extended header with a invalid flags"}
-	errV2Compression          = &Id3v2HeaderError{Message: "encountered a compressed ID3v2.2 tag"}
+	errBadExtendedHeaderSize  = &Id3v2HeaderError{Kind: Id3v2HeaderBadExtendedHeaderSize}
+	errBadExtendedHeaderFlags = &Id3v2HeaderError{Kind: Id3v2HeaderBadExtendedHeaderFlags}
+	errV2Compression          = &Id3v2HeaderError{Kind: Id3v2HeaderV2Compression}
 )
 
 // FrameIdParseError is returned when converting a string to a [FrameId] fails.

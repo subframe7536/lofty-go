@@ -98,8 +98,11 @@ func (t TagType) ConflictsWith(other TagType) bool {
 }
 
 // RemoveFromPath removes a tag of this type from a path.
+//
+// Like Rust's `TagType::remove_from_path`, the file's format is taken from the
+// path's extension (no content sniffing).
 func (t TagType) RemoveFromPath(path string, writeOptions WriteOptions) error {
-	vf, f, err := VerifiedFileFromPath(path, writeOptions.ParseOptions)
+	vf, f, err := VerifiedFileFromPathByExtension(path)
 	if err != nil {
 		return &FileEncodingError{Source: err}
 	}

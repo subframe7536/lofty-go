@@ -16,6 +16,9 @@ import (
 
 var flacPreamble = []byte("fLaC")
 
+// flacMaxBlockSize is Rust's `Block::MAX_CONTENT_SIZE` (a 24-bit length).
+const flacMaxBlockSize = 0xFFFFFF
+
 // FlacParseError is returned when a FLAC file fails to parse.
 type FlacParseError struct {
 	Message string
@@ -133,6 +136,14 @@ func FlacFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Fl
 	ffile, err := flac.ParseMetadata(reader)
 	if err != nil {
 		return nil, &meta.FileParseError{Source: &FlacParseError{Source: err}}
+	}
+	// Rust's `verify_flac` requires STREAMINFO to be the first metadata block
+	// and rejects a block shorter than 18 bytes (content + 4-byte header).
+	if len(ffile.Meta) == 0 || ffile.Meta[0].Type != flac.StreamInfo {
+		return nil, &meta.FileParseError{Source: &FlacParseError{Message: "file missing mandatory STREAMINFO block"}}
+	}
+	if len(ffile.Meta[0].Data)+4 < 18 {
+		return nil, &meta.FileParseError{Source: &meta.SizeMismatchError{}}
 	}
 	metaEnd, err := reader.Seek(0, io.SeekCurrent)
 	if err != nil {
@@ -264,7 +275,7 @@ func (f *FlacFile) TaggedFile() *meta.TaggedFile {
 
 // SavePath saves the file's tags back to the path.
 func (f *FlacFile) SavePath(path string, writeOptions meta.WriteOptions) error {
-	return meta.SaveToPath(path, f, meta.TagTypeVorbisComments, writeOptions)
+	return meta.SaveToPath(path, f, writeOptions)
 }
 
 // SaveFile writes tags to an open file.
@@ -274,33 +285,121 @@ func (f *FlacFile) SaveFile(file meta.FileLike, writeOptions meta.WriteOptions) 
 			return err
 		}
 	}
-	var g *meta.Tag
-	if t, ok := f.VorbisComments.Get(); ok {
-		g = t.Tag()
-	} else if len(f.pictures) == 0 {
+	if vc, ok := f.VorbisComments.Get(); ok {
+		// Rust's `FlacFile::write_to` writes the stored (key, value) pairs
+		// verbatim (vendor separate, no synthesized ENCODER comment) and
+		// chains the tag's pictures with the file's pictures.
+		pics := make([]meta.PictureInfoPair, 0, len(vc.Pictures())+len(f.pictures))
+		pics = append(pics, vc.Pictures()...)
+		pics = append(pics, f.pictures...)
+		return flacWriteVorbisCommentsPics(file, vc, pics, writeOptions)
+	}
+	if len(f.pictures) == 0 {
 		// Rust's write_to is a no-op when the tag is absent and there are no
 		// pictures to store; it does not strip the existing VC block.
 		return nil
-	} else {
-		g = meta.NewTag(meta.TagTypeVorbisComments)
 	}
-	// The Vorbis comments' own pictures chain with the file's pictures,
-	// mirroring Rust's `FlacFile::write_to`.
-	pics := make([]meta.PictureInfoPair, 0, len(f.pictures)+len(g.Pictures()))
-	for _, p := range g.Pictures() {
-		info, err := meta.PictureInformationFromPicture(&p)
-		if err != nil {
-			info = meta.PictureInformation{}
-		}
-		pics = append(pics, meta.PictureInfoPair{Picture: p, Info: info})
-	}
-	pics = append(pics, f.pictures...)
-	return flacWriteTagPics(file, g, pics, writeOptions)
+	// A dummy VC tag carrying only the file's pictures (vendor "").
+	return flacWriteVorbisCommentsPics(file, vorbis.NewVorbisCommentsTag(), f.pictures, writeOptions)
 }
 
 // RemoveFromPath removes a tag type.
 func (f *FlacFile) RemoveFromPath(path string, tagType meta.TagType) error {
 	return meta.RemoveTagFromPath(path, tagType)
+}
+
+// flacScanMetadata rewinds the file past any leading ID3v2 tag and scans the
+// FLAC metadata blocks, keeping every block except VORBIS_COMMENT and PICTURE
+// verbatim. It mirrors the shared preamble of Rust's `flac::write::write_to_inner`.
+type flacScanMetadata struct {
+	metaStart         int64
+	metaEnd           int64
+	kept              [][]byte // raw marshaled blocks to preserve (without last flag)
+	hasPadding        bool
+	hasBlocksToRemove bool
+	vendor            string
+	foundVC           bool
+}
+
+func flacWriteScan(file meta.FileLike, parseOptions meta.ParseOptions) (*flacScanMetadata, error) {
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return nil, &meta.FileEncodingError{Source: err}
+	}
+	// Skip a leading ID3v2 tag if present
+	if _, _, found, err := id3v2.FindId3v2(file, false, parseOptions); err != nil {
+		return nil, &meta.FileEncodingError{Source: err}
+	} else if !found {
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return nil, &meta.FileEncodingError{Source: err}
+		}
+	}
+
+	var marker [4]byte
+	if _, err := io.ReadFull(file, marker[:]); err != nil || !bytes.Equal(marker[:], flacPreamble) {
+		return nil, &meta.FileEncodingError{Source: &FlacParseError{Source: &meta.FakeTagError{}}}
+	}
+
+	scan := &flacScanMetadata{}
+	scan.metaStart, _ = file.Seek(0, io.SeekCurrent)
+	for {
+		var hdr [4]byte
+		if _, err := io.ReadFull(file, hdr[:]); err != nil {
+			return nil, &meta.FileEncodingError{Source: err}
+		}
+		last := hdr[0]&0x80 != 0
+		blockType := hdr[0] & 0x7F
+		size := int(hdr[1])<<16 | int(hdr[2])<<8 | int(hdr[3])
+		data, err := util.TryByteSlice(size)
+		if err != nil {
+			return nil, &meta.FileEncodingError{Source: err}
+		}
+		if _, err := io.ReadFull(file, data); err != nil {
+			return nil, &meta.FileEncodingError{Source: err}
+		}
+		switch blockType {
+		case byte(flac.Padding):
+			scan.hasPadding = true
+		case byte(flac.VorbisComment):
+			scan.hasBlocksToRemove = true
+			scan.foundVC = true
+			// Retain the original vendor string (Rust errors on a truncated
+			// or out-of-range vendor length and ignores invalid UTF-8).
+			if len(data) < 4 {
+				return nil, &meta.FileEncodingError{Source: io.ErrUnexpectedEOF}
+			}
+			vlen := int(binary.LittleEndian.Uint32(data))
+			if vlen > len(data)-4 {
+				return nil, &meta.FileEncodingError{Source: &meta.SizeMismatchError{}}
+			}
+			raw := data[4 : 4+vlen]
+			if v, verr := util.Utf8Decode(raw); verr == nil {
+				scan.vendor = v
+			} else {
+				// TODO: Error on strict? (Rust warning only)
+				scan.vendor = ""
+			}
+		case byte(flac.Picture):
+			scan.hasBlocksToRemove = true
+		}
+		// Keep non-tag blocks verbatim (STREAMINFO, SEEKTABLE, PADDING, etc.)
+		if blockType != byte(flac.VorbisComment) && blockType != byte(flac.Picture) {
+			var hdrB [4]byte
+			hdrB[0] = blockType
+			hdrB[1] = byte(size >> 16)
+			hdrB[2] = byte(size >> 8)
+			hdrB[3] = byte(size)
+			scan.kept = append(scan.kept, append(hdrB[:], data...))
+		}
+		if last {
+			break
+		}
+	}
+	var err error
+	scan.metaEnd, err = file.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return nil, &meta.FileEncodingError{Source: err}
+	}
+	return scan, nil
 }
 
 // flacWriteTag replaces the VORBIS_COMMENT + PICTURE blocks in a FLAC file,
@@ -320,140 +419,60 @@ func flacWriteTag(file meta.FileLike, tag *meta.Tag, writeOptions meta.WriteOpti
 // flacWriteTagPics is [flacWriteTag] with explicit [meta.PictureInformation] for
 // each picture block.
 func flacWriteTagPics(file meta.FileLike, tag *meta.Tag, pics []meta.PictureInfoPair, writeOptions meta.WriteOptions) error {
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return &meta.FileEncodingError{Source: err}
-	}
-	// Skip a leading ID3v2 tag if present
-	if _, _, found, err := id3v2.FindId3v2(file, false, writeOptions.ParseOptions); err != nil {
-		return &meta.FileEncodingError{Source: err}
-	} else if !found {
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			return &meta.FileEncodingError{Source: err}
-		}
-	}
-
-	var marker [4]byte
-	if _, err := io.ReadFull(file, marker[:]); err != nil || !bytes.Equal(marker[:], flacPreamble) {
-		return &meta.FileEncodingError{Source: &FlacParseError{Source: &meta.FakeTagError{}}}
-	}
-
-	// Read the metadata blocks manually so we know their extent
-	metaStart, _ := file.Seek(0, io.SeekCurrent)
-	var kept [][]byte // raw marshaled blocks to preserve (without last flag)
-	hasPadding := false
-	var vendor string
-	for {
-		var hdr [4]byte
-		if _, err := io.ReadFull(file, hdr[:]); err != nil {
-			return &meta.FileEncodingError{Source: err}
-		}
-		last := hdr[0]&0x80 != 0
-		blockType := hdr[0] & 0x7F
-		size := int(hdr[1])<<16 | int(hdr[2])<<8 | int(hdr[3])
-		data, err := util.TryByteSlice(size)
-		if err != nil {
-			return &meta.FileEncodingError{Source: err}
-		}
-		if _, err := io.ReadFull(file, data); err != nil {
-			return &meta.FileEncodingError{Source: err}
-		}
-		if blockType == byte(flac.Padding) {
-			hasPadding = true
-		}
-		// Retain the original vendor string
-		if blockType == byte(flac.VorbisComment) && len(data) >= 4 {
-			vlen := int(binary.LittleEndian.Uint32(data))
-			if vlen <= len(data)-4 {
-				vendor = string(data[4 : 4+vlen])
-			}
-		}
-		// Keep non-tag blocks verbatim (STREAMINFO, SEEKTABLE, PADDING, etc.)
-		if blockType != byte(flac.VorbisComment) && blockType != byte(flac.Picture) {
-			var hdrB [4]byte
-			hdrB[0] = blockType
-			hdrB[1] = byte(size >> 16)
-			hdrB[2] = byte(size >> 8)
-			hdrB[3] = byte(size)
-			kept = append(kept, append(hdrB[:], data...))
-		}
-		if last {
-			break
-		}
-	}
-	metaEnd, err := file.Seek(0, io.SeekCurrent)
+	scan, err := flacWriteScan(file, writeOptions.ParseOptions)
 	if err != nil {
-		return &meta.FileEncodingError{Source: err}
+		return err
 	}
-
-	// Build new tag blocks. Rust's `has_comments` counts only the item
-	// iterator — a tag containing only pictures writes no VC block.
-	vc := vorbis.VorbisCommentsTagForWritePics(tag, vendor, false)
-	return flacWriteBlocksAt(file, metaStart, metaEnd, kept, hasPadding, vc, len(vc.Items()) > 0, pics, writeOptions)
+	vc := vorbis.VorbisCommentsTagForWritePics(tag, "", false)
+	// Rust's `write_to_inner` replaces the given vendor with the file's own
+	// when a VORBIS_COMMENT block already exists.
+	if scan.foundVC {
+		vc = vc.WithVendor(scan.vendor)
+	}
+	// Rust's `has_comments` counts only the item iterator — a tag containing
+	// only pictures writes no VC block.
+	writeVC := len(vc.Items()) > 0
+	if !scan.hasBlocksToRemove && !writeVC && len(pics) == 0 {
+		return nil
+	}
+	return flacWriteBlocksAt(file, scan, vc, writeVC, pics, writeOptions)
 }
 
 // flacWriteVorbisComments writes a concrete [vorbis.VorbisCommentsTag] into a FLAC
 // file, mirroring Rust `flac::write::write_to_inner`.
 func flacWriteVorbisComments(file meta.FileLike, vc *vorbis.VorbisCommentsTag, writeOptions meta.WriteOptions) error {
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return &meta.FileEncodingError{Source: err}
-	}
-	if _, _, found, err := id3v2.FindId3v2(file, false, writeOptions.ParseOptions); err != nil {
-		return &meta.FileEncodingError{Source: err}
-	} else if !found {
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			return &meta.FileEncodingError{Source: err}
-		}
-	}
-	var marker [4]byte
-	if _, err := io.ReadFull(file, marker[:]); err != nil || !bytes.Equal(marker[:], flacPreamble) {
-		return &meta.FileEncodingError{Source: &FlacParseError{Source: &meta.FakeTagError{}}}
-	}
-	metaStart, _ := file.Seek(0, io.SeekCurrent)
-	var kept [][]byte
-	hasPadding := false
-	for {
-		var hdr [4]byte
-		if _, err := io.ReadFull(file, hdr[:]); err != nil {
-			return &meta.FileEncodingError{Source: err}
-		}
-		last := hdr[0]&0x80 != 0
-		blockType := hdr[0] & 0x7F
-		size := int(hdr[1])<<16 | int(hdr[2])<<8 | int(hdr[3])
-		data, err := util.TryByteSlice(size)
-		if err != nil {
-			return &meta.FileEncodingError{Source: err}
-		}
-		if _, err := io.ReadFull(file, data); err != nil {
-			return &meta.FileEncodingError{Source: err}
-		}
-		if blockType == byte(flac.Padding) {
-			hasPadding = true
-		}
-		if blockType != byte(flac.VorbisComment) && blockType != byte(flac.Picture) {
-			var hdrB [4]byte
-			hdrB[0] = blockType
-			hdrB[1] = byte(size >> 16)
-			hdrB[2] = byte(size >> 8)
-			hdrB[3] = byte(size)
-			kept = append(kept, append(hdrB[:], data...))
-		}
-		if last {
-			break
-		}
-	}
-	metaEnd, err := file.Seek(0, io.SeekCurrent)
-	if err != nil {
-		return &meta.FileEncodingError{Source: err}
-	}
-	return flacWriteBlocksAt(file, metaStart, metaEnd, kept, hasPadding, vc, len(vc.Items()) > 0, vc.Pictures(), writeOptions)
+	return flacWriteVorbisCommentsPics(file, vc, vc.Pictures(), writeOptions)
 }
 
-func flacWriteBlocksAt(file meta.FileLike, metaStart, metaEnd int64, kept [][]byte, hasPadding bool, vc *vorbis.VorbisCommentsTag, writeVC bool, pics []meta.PictureInfoPair, writeOptions meta.WriteOptions) error {
-	vcData, err := vorbis.EncodeVorbisComments(vc)
+// flacWriteVorbisCommentsPics is [flacWriteVorbisComments] with an explicit
+// picture list (the stored comments are written verbatim, pictures separately).
+func flacWriteVorbisCommentsPics(file meta.FileLike, vc *vorbis.VorbisCommentsTag, pics []meta.PictureInfoPair, writeOptions meta.WriteOptions) error {
+	scan, err := flacWriteScan(file, writeOptions.ParseOptions)
+	if err != nil {
+		return err
+	}
+	if scan.foundVC {
+		vc = vc.WithVendor(scan.vendor)
+	}
+	writeVC := len(vc.Items()) > 0
+	if !scan.hasBlocksToRemove && !writeVC && len(pics) == 0 {
+		return nil
+	}
+	return flacWriteBlocksAt(file, scan, vc, writeVC, pics, writeOptions)
+}
+
+func flacWriteBlocksAt(file meta.FileLike, scan *flacScanMetadata, vc *vorbis.VorbisCommentsTag, writeVC bool, pics []meta.PictureInfoPair, writeOptions meta.WriteOptions) error {
+	// FLAC stores its comments in a block whose body excludes pictures (those
+	// get their own PICTURE blocks), unlike Ogg's METADATA_BLOCK_PICTURE.
+	vcData, err := vorbis.EncodeVorbisCommentsItems(vc)
 	if err != nil {
 		return &meta.FileEncodingError{Source: &meta.TagEncodingError{TagType: meta.TagTypeVorbisComments, HasTagType: true, Source: err}}
 	}
+	kept := scan.kept
 	if writeVC {
+		if len(vcData) > flacMaxBlockSize {
+			return &meta.FileEncodingError{Source: &meta.TooMuchDataError{}}
+		}
 		var hdrB [4]byte
 		hdrB[0] = byte(flac.VorbisComment)
 		hdrB[1] = byte(len(vcData) >> 16)
@@ -463,6 +482,9 @@ func flacWriteBlocksAt(file meta.FileLike, metaStart, metaEnd int64, kept [][]by
 	}
 	for _, pic := range pics {
 		data := pic.Picture.AsFlacBytes(pic.Info, false)
+		if len(data) > flacMaxBlockSize {
+			return &meta.FileEncodingError{Source: &meta.TooMuchDataError{}}
+		}
 		var hdrB [4]byte
 		hdrB[0] = byte(flac.Picture)
 		hdrB[1] = byte(len(data) >> 16)
@@ -472,12 +494,12 @@ func flacWriteBlocksAt(file meta.FileLike, metaStart, metaEnd int64, kept [][]by
 	}
 
 	// If the file lacks a PADDING block and padding is preferred, add one last
-	if !hasPadding && writeOptions.PreferredPadding > 0 {
+	if !scan.hasPadding && writeOptions.PreferredPadding > 0 {
 		var blocksLen uint64
 		for _, b := range kept {
 			blocksLen += uint64(len(b))
 		}
-		oldMetaLen := uint64(metaEnd - metaStart)
+		oldMetaLen := uint64(scan.metaEnd - scan.metaStart)
 		var available uint64
 		if oldMetaLen > blocksLen+4 {
 			available = oldMetaLen - blocksLen - 4
@@ -486,8 +508,8 @@ func flacWriteBlocksAt(file meta.FileLike, metaStart, metaEnd int64, kept [][]by
 		if uint64(writeOptions.PreferredPadding) > padLen {
 			padLen = uint64(writeOptions.PreferredPadding)
 		}
-		if padLen > 0xFFFFFF {
-			padLen = 0xFFFFFF
+		if padLen > flacMaxBlockSize {
+			padLen = flacMaxBlockSize
 		}
 		var hdrB [4]byte
 		hdrB[0] = byte(flac.Padding)
@@ -506,7 +528,7 @@ func flacWriteBlocksAt(file meta.FileLike, metaStart, metaEnd int64, kept [][]by
 		metaBuf.Write(block)
 	}
 
-	return meta.Splice(file, uint64(metaStart), uint64(metaEnd), metaBuf.Bytes())
+	return meta.Splice(file, uint64(scan.metaStart), uint64(scan.metaEnd), metaBuf.Bytes())
 }
 
 // readVorbisCommentBlock parses a raw VORBIS_COMMENT block into a tag.
@@ -527,7 +549,9 @@ func init() {
 		case meta.TagTypeVorbisComments:
 			return flacWriteTag(f, tag, writeOptions)
 		case meta.TagTypeID3v2:
-			return id3v2.WriteId3v2(f, tag, writeOptions)
+			// Rust's FLAC writer treats ID3v2 as removable-only: it writes an
+			// empty tag, which strips any existing one.
+			return id3v2.WriteId3v2(f, meta.NewTag(meta.TagTypeID3v2), writeOptions)
 		}
 		return &meta.FileEncodingError{Source: &meta.UnsupportedTagError{}}
 	})

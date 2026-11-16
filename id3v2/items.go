@@ -434,7 +434,7 @@ func parseExtendedTextFrame(reader io.Reader, frameFlags FrameFlags, version Id3
 				// Reuse the BOM from the description as a fallback if the text
 				// doesn't specify one.
 				bom := descRes.BOM
-				if (rawText[0] == 0xFF && rawText[1] == 0xFE) || (rawText[0] == 0xFE && rawText[1] == 0xFF) {
+				if len(rawText) >= 2 && ((rawText[0] == 0xFF && rawText[1] == 0xFE) || (rawText[0] == 0xFE && rawText[1] == 0xFF)) {
 					bom = [2]byte{rawText[0], rawText[1]}
 				}
 				var order util.ByteOrder

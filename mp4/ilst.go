@@ -8,7 +8,6 @@ import (
 	"io"
 	"math"
 	"strings"
-	"unicode/utf8"
 
 	meta "github.com/subframe7536/lofty-go/internal/meta"
 	"github.com/subframe7536/lofty-go/internal/util"
@@ -293,9 +292,8 @@ func (l *Ilst) Tag() *meta.Tag {
 			switch d.Kind {
 			case AtomDataSignedInt:
 				raw, hasRaw = byte(d.Int), true
-			case AtomDataUnsignedInt:
-				raw, hasRaw = byte(d.Uint), true
 			case AtomDataUnknown:
+				// Rust's `advisory_rating` ignores `AtomData::UnsignedInt`.
 				if len(d.Data) > 0 {
 					raw, hasRaw = d.Data[0], true
 				}
@@ -324,7 +322,11 @@ func IlstFromTag(tag *meta.Tag) *Ilst {
 	merged := &Ilst{}
 	if util.GetGlobalOptions().PreserveFormatSpecificItems {
 		if comp, ok := tag.CompanionTag().(*Ilst); ok && comp != nil {
-			merged = comp
+			// Rust's `From<Tag> for Ilst` takes (moves) the companion, so the
+			// caller's tag no longer references it. Copy the atoms instead of
+			// aliasing the companion's slices, otherwise repeated merges would
+			// accumulate duplicate atoms in the source tag.
+			merged.atoms = cloneAtoms(comp.atoms)
 		}
 	}
 
@@ -376,13 +378,9 @@ func IlstFromTag(tag *meta.Tag) *Ilst {
 			}
 			continue
 		default:
-			if item.Key() == meta.ItemKeyUnknown {
-				if _, ok := item.Value().IntoBinary(); ok {
-					data, _ := item.Value().IntoBinary()
-					merged.atoms = append(merged.atoms, Atom{ident, []AtomData{{Kind: AtomDataUnknown, Code: 0, Data: data}}})
-					continue
-				}
-			}
+			// Rust's `merge_tag` bails on any non-text value
+			// (`let ItemValue::Text(text) = ... else { continue }`), so binary
+			// unknown items only survive through the companion `Ilst`.
 			merged.atoms = append(merged.atoms, Atom{ident, []AtomData{{Kind: AtomDataUTF8, Text: text}}})
 		}
 	}
@@ -414,6 +412,19 @@ func IlstFromTag(tag *meta.Tag) *Ilst {
 	return merged
 }
 
+// cloneAtoms copies atoms and their data slices so a merge can't mutate the
+// source tag's atoms.
+func cloneAtoms(atoms []Atom) []Atom {
+	if atoms == nil {
+		return nil
+	}
+	out := make([]Atom, len(atoms))
+	for i, a := range atoms {
+		out[i] = Atom{Ident: a.Ident, Data: append([]AtomData(nil), a.Data...)}
+	}
+	return out
+}
+
 // DumpTo writes the encoded `ilst` atom (with header) to a writer.
 func (l *Ilst) DumpTo(writer io.Writer, writeOptions meta.WriteOptions) error {
 	data, err := encodeIlst(l)
@@ -428,46 +439,58 @@ func (l *Ilst) DumpTo(writer io.Writer, writeOptions meta.WriteOptions) error {
 func encodeIlst(ilst *Ilst) ([]byte, error) {
 	var atoms bytes.Buffer
 
-	writeDataAtom := func(buf *bytes.Buffer, dataType uint8, payload []byte) {
+	writeDataAtom := func(buf *bytes.Buffer, dataType uint32, payload []byte) {
 		var sz [4]byte
 		binary.BigEndian.PutUint32(sz[:], uint32(16+len(payload)))
 		buf.Write(sz[:])
 		buf.WriteString("data")
-		buf.Write([]byte{0, 0, 0, dataType})
+		// version (1), then the 24-bit type code
+		buf.Write([]byte{0, byte(dataType >> 16), byte(dataType >> 8), byte(dataType)})
 		buf.Write([]byte{0, 0, 0, 0})
 		buf.Write(payload)
 	}
 
-	dataTypeFor := func(d AtomData) (uint8, []byte) {
+	dataTypeFor := func(d AtomData) (uint32, []byte, error) {
 		switch d.Kind {
 		case AtomDataUTF8:
-			return 1, []byte(d.Text)
+			return 1, []byte(d.Text), nil
 		case AtomDataUTF16:
-			return 2, utf16BEEncode(d.Text)
+			return 2, utf16BEEncode(d.Text), nil
 		case AtomDataBool:
+			// Rust's `write_bool` stores a 1-byte signed integer (21).
 			var b byte
 			if d.Bool {
 				b = 1
 			}
-			return 21, []byte{b}
+			return 21, []byte{b}, nil
 		case AtomDataPicture:
-			mt, _ := d.Pic.MimeType().Get()
-			code := uint8(13)
-			switch mt {
-			case meta.MimeTypePng:
-				code = 14
-			case meta.MimeTypeBmp:
-				code = 27
-			case meta.MimeTypeGif:
-				code = 12
+			code := uint32(0) // no MIME → implicit/reserved
+			if mt, ok := d.Pic.MimeType().Get(); ok {
+				switch mt {
+				case meta.MimeTypeGif:
+					code = 12
+				case meta.MimeTypeJpeg:
+					code = 13
+				case meta.MimeTypePng:
+					code = 14
+				case meta.MimeTypeBmp:
+					code = 27
+				default:
+					return 0, nil, &Mp4ParseError{Message: "attempted to write a picture with an unsupported MIME type"}
+				}
 			}
-			return code, d.Pic.Data()
+			return code, d.Pic.Data(), nil
 		case AtomDataSignedInt:
-			return intPayload(d.Int, true)
+			code, payload := intPayload(d.Int, true)
+			return code, payload, nil
 		case AtomDataUnsignedInt:
-			return intPayload(int64(d.Uint), false)
+			code, payload := uintPayload(uint32(d.Uint))
+			return code, payload, nil
 		default:
-			return uint8(d.Code), d.Data
+			if uint32(d.Code) > 0xFFFFFF {
+				return 0, nil, &Mp4ParseError{Message: "attempted to write a code that cannot fit in 24 bits"}
+			}
+			return uint32(d.Code), d.Data, nil
 		}
 	}
 
@@ -486,7 +509,10 @@ func encodeIlst(ilst *Ilst) ([]byte, error) {
 			writeSub("name", []byte(atom.Ident.Name))
 		}
 		for _, d := range atom.Data {
-			code, payload := dataTypeFor(d)
+			code, payload, err := dataTypeFor(d)
+			if err != nil {
+				return nil, err
+			}
 			writeDataAtom(&a, code, payload)
 		}
 		var sz [4]byte
@@ -514,7 +540,7 @@ func encodeIlst(ilst *Ilst) ([]byte, error) {
 // intPayload packs a big-endian integer following Rust's writers: signed ints
 // are always 4 bytes (`write_signed_int`), unsigned ints occupy the smallest
 // of 1/2/4 bytes (`bytes_to_occupy_uint` — 3-byte values round up to 4).
-func intPayload(v int64, signed bool) (uint8, []byte) {
+func intPayload(v int64, signed bool) (uint32, []byte) {
 	var b [8]byte
 	binary.BigEndian.PutUint64(b[:], uint64(v))
 	if signed {
@@ -524,14 +550,23 @@ func intPayload(v int64, signed bool) (uint8, []byte) {
 		}
 		return 21, append([]byte(nil), b[4:]...)
 	}
+	return 22, uintPayloadBytes(uint32(v))
+}
+
+// uintPayload packs a u32 like Rust's `write_unsigned_int`.
+func uintPayload(v uint32) (uint32, []byte) { return 22, uintPayloadBytes(v) }
+
+func uintPayloadBytes(v uint32) []byte {
+	var b [4]byte
+	binary.BigEndian.PutUint32(b[:], v)
 	out := b[:]
 	for len(out) > 1 && out[0] == 0 {
 		out = out[1:]
 	}
 	if len(out) == 3 {
-		out = b[4:]
+		out = b[:]
 	}
-	return 22, append([]byte(nil), out...)
+	return append([]byte(nil), out...)
 }
 
 func u16FromStringOpt(s string) meta.Option[uint16] {
@@ -543,9 +578,9 @@ func u16FromStringOpt(s string) meta.Option[uint16] {
 
 func flagItemFromText(s string) (bool, bool) {
 	switch s {
-	case "0":
+	case "0", "false":
 		return false, true
-	case "1":
+	case "1", "true":
 		return true, true
 	}
 	return false, false
@@ -747,8 +782,11 @@ func ParseIlst(reader io.ReadSeeker, end int64, parseOptions meta.ParseOptions) 
 					if parseOptions.ParsingMode == meta.ParsingModeStrict {
 						return nil, &Mp4ParseError{Message: "unknown covr data type"}
 					}
-					// Rust discards the whole atom on an unknown covr type
+					// Rust discards the whole atom on an unknown covr type. It has
+					// already consumed every `data` child, so skip the rest of the
+					// atom before ending it.
 					datas = nil
+					_, _ = cursor.Seek(atomEnd, io.SeekStart)
 					goto atomDone
 				}
 				b := meta.PictureUnchecked(payload).PicType(meta.PictureTypeOther)
@@ -841,10 +879,11 @@ func ilstInterpretAtomContent(code uint32, payload []byte, fourcc [4]byte, parse
 	}
 	switch code {
 	case 1:
-		if !utf8.Valid(payload) {
+		text, err := util.Utf8Decode(payload)
+		if err != nil {
 			return AtomData{}, &Mp4ParseError{Message: "invalid UTF-8 in data atom"}
 		}
-		return AtomData{Kind: AtomDataUTF8, Text: string(payload)}, nil
+		return AtomData{Kind: AtomDataUTF8, Text: text}, nil
 	case 2:
 		text, err := util.Utf16DecodeBytes(payload, util.BigEndian)
 		if err != nil {
@@ -862,7 +901,8 @@ func ilstInterpretAtomContent(code uint32, payload []byte, fourcc [4]byte, parse
 		if err != nil {
 			return AtomData{}, err
 		}
-		return AtomData{Kind: AtomDataUnsignedInt, Uint: uint64(v)}, nil
+		// Rust's `parse_uint` returns a u32: don't sign-extend through int32.
+		return AtomData{Kind: AtomDataUnsignedInt, Uint: uint64(uint32(v))}, nil
 	default:
 		return AtomData{Kind: AtomDataUnknown, Code: DataType(code), Data: payload}, nil
 	}

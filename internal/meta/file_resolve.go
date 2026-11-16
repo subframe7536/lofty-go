@@ -62,6 +62,11 @@ func lookupResolver(name string) FileResolver {
 func lookupResolverByExtension(ext string) (FileType, bool) {
 	customResolversMu.RLock()
 	defer customResolversMu.RUnlock()
+	if ext == "" {
+		// Rust's `FileResolver::extension()` is an `Option`; an empty
+		// extension means "none" and never matches.
+		return FileType{}, false
+	}
 	for name, r := range customResolvers {
 		if r.Extension() == ext {
 			return FileTypeCustom(name), true

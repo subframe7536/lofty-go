@@ -117,17 +117,37 @@ func ReadApeHeader(reader io.ReadSeeker, footer bool) (*ApeHeader, error) {
 		}
 		// Version 1 doesn't include a header
 		if version == 2000 && h.Flags&apeHeaderContainsHeader != 0 {
-			h.Size += 32
+			h.Size = saturatingAdd32(h.Size, 32)
 		}
 	} else if version == 2000 && h.Flags&apeHeaderContainsFooter != 0 {
-		h.Size += 32
+		h.Size = saturatingAdd32(h.Size, 32)
 	}
-	if streamLength, err := util.StreamLen(reader); err == nil {
-		if uint64(h.Size) > streamLength {
-			return nil, &ApeTagParseError{Source: &meta.SizeMismatchError{}}
-		}
+	streamLength, err := util.StreamLen(reader)
+	if err != nil {
+		return nil, err
+	}
+	if uint64(h.Size) > streamLength {
+		return nil, &ApeTagParseError{Source: &meta.SizeMismatchError{}}
 	}
 	return h, nil
+}
+
+func saturatingAdd32(a, b uint32) uint32 {
+	if a > math.MaxUint32-b {
+		return math.MaxUint32
+	}
+	return a + b
+}
+
+// rustParseU32 mirrors Rust's `str::parse::<u32>`: an optional single leading
+// '+', then ASCII digits only.
+func rustParseU32(s string) (uint32, bool) {
+	s = strings.TrimPrefix(s, "+")
+	n, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return uint32(n), true
 }
 
 // ApeItem is a single item in an [ApeTag].
@@ -242,6 +262,20 @@ func (t *ApeTag) Insert(item meta.TagItem) error {
 					t.SetDiskTotal(uint32(n))
 				}
 			}
+		}
+		return nil
+	}
+	// Normalize flag items (Rust `insert_item`)
+	if item.Key() == meta.ItemKeyFlagCompilation {
+		text, ok := item.Value().Text()
+		if !ok {
+			return nil
+		}
+		switch text {
+		case "1", "true":
+			t.insert(&ApeItem{Key: "Compilation", Value: meta.ItemValueText("1")})
+		case "0", "false":
+			t.insert(&ApeItem{Key: "Compilation", Value: meta.ItemValueText("0")})
 		}
 		return nil
 	}
@@ -362,14 +396,19 @@ func (t *ApeTag) splitNumPair(key string) (meta.Option[uint32], meta.Option[uint
 	if !ok {
 		return meta.None[uint32](), meta.None[uint32]()
 	}
+	// Rust: `text.split('/').flat_map(str::parse::<u32>)` — unparsable parts
+	// are skipped, and the first two parsable ones are (number, total).
 	var num, total meta.Option[uint32]
-	parts := strings.SplitN(text, "/", 3)
-	if n, ok := util.U32FromString(parts[0]); ok {
-		num = meta.Some(n)
-	}
-	if len(parts) > 1 {
-		if n, ok := util.U32FromString(parts[1]); ok {
+	for _, part := range strings.Split(text, "/") {
+		n, ok := rustParseU32(part)
+		if !ok {
+			continue
+		}
+		if num.IsNone() {
+			num = meta.Some(n)
+		} else {
 			total = meta.Some(n)
+			break
 		}
 	}
 	return num, total
@@ -483,6 +522,7 @@ func (t *ApeTag) RemoveDate() { t.Remove("Year") }
 // Tag converts the [ApeTag] to a generic [Tag].
 func (t *ApeTag) Tag() *meta.Tag {
 	tag := meta.NewTag(meta.TagTypeApe)
+	remainder := &ApeTag{ReadOnly: t.ReadOnly}
 	for _, item := range t.items {
 		isPic := false
 		var picType meta.PictureType
@@ -499,8 +539,14 @@ func (t *ApeTag) Tag() *meta.Tag {
 			}
 			continue
 		}
-		ik := meta.ItemKeyOrUnknown(meta.TagTypeApe, item.Key)
-		if ik != meta.ItemKeyUnknown {
+		ik, mapped := meta.ItemKeyFromKey(meta.TagTypeApe, item.Key)
+		if !mapped {
+			// Format-specific item: hidden in the companion tag (Rust
+			// `split_tag` retains these in the remainder).
+			remainder.items = append(remainder.items, item)
+			continue
+		}
+		{
 			if text, ok := item.Value.IntoString(); ok {
 				var curKey, totKey meta.ItemKey
 				switch ik {
@@ -527,11 +573,10 @@ func (t *ApeTag) Tag() *meta.Tag {
 				}
 			}
 		}
-		tagItem := meta.NewTagItem(ik, item.Value)
-		if ik == meta.ItemKeyUnknown {
-			tagItem.Description = item.Key
-		}
-		tag.PushUnchecked(tagItem)
+		tag.PushUnchecked(meta.NewTagItem(ik, item.Value))
+	}
+	if util.GetGlobalOptions().PreserveFormatSpecificItems && !remainder.IsEmpty() {
+		tag.SetCompanionTag(remainder)
 	}
 	return tag
 }
@@ -586,6 +631,16 @@ var apeNumberPairKeys = map[meta.ItemKey]bool{
 // TagFromApe converts a generic [Tag] to an [ApeTag].
 func ApeTagFromTag(input *meta.Tag) *ApeTag {
 	apeTag := NewApeTag()
+	// Rust `From<Tag> for ApeTag`: start from the companion tag when present.
+	if util.GetGlobalOptions().PreserveFormatSpecificItems {
+		if comp, ok := input.CompanionTag().(*ApeTag); ok && comp != nil {
+			apeTag.ReadOnly = comp.ReadOnly
+			for _, it := range comp.items {
+				c := *it
+				apeTag.items = append(apeTag.items, &c)
+			}
+		}
+	}
 	for _, item := range input.Items() {
 		// Number pairs are merged below
 		if apeNumberPairKeys[item.Key()] {
@@ -622,7 +677,8 @@ func ApeTagFromTag(input *meta.Tag) *ApeTag {
 	for _, pic := range input.Pictures() {
 		if key, ok := pic.PicType().AsApeKey(); ok {
 			picCopy := pic
-			apeTag.Push(&ApeItem{Key: key, Value: meta.ItemValueBinary(picCopy.AsApeBytes())})
+			// Rust `merge_tag` uses `insert` (replace by key), not `push`
+			apeTag.insert(&ApeItem{Key: key, Value: meta.ItemValueBinary(picCopy.AsApeBytes())})
 		}
 	}
 	return apeTag
@@ -634,6 +690,16 @@ func ApeTagFromTag(input *meta.Tag) *ApeTag {
 func ReadApeTagWithHeader(reader io.ReadSeeker, header *ApeHeader, parseOptions meta.ParseOptions) (*ApeTag, error) {
 	tag := NewApeTag()
 	remainingSize := header.Size
+	// consume subtracts the real size of a piece of the item from the
+	// remaining tag size (deliberate deviation from Rust, which subtracts only
+	// the value size field); it never wraps.
+	consume := func(n uint64) error {
+		if n > uint64(remainingSize) {
+			return &ApeTagParseError{Source: &meta.SizeMismatchError{}}
+		}
+		remainingSize -= uint32(n)
+		return nil
+	}
 
 	parseItemWithKey := func(key string, flags, valueSize uint32) (*ApeItem, error) {
 		readOnly := flags&1 == 1
@@ -684,13 +750,17 @@ func ReadApeTagWithHeader(reader io.ReadSeeker, header *ApeHeader, parseOptions 
 		if valueSize > remainingSize {
 			return nil, &ApeTagParseError{Source: &meta.SizeMismatchError{}}
 		}
-		remainingSize -= 4
+		if err := consume(4); err != nil {
+			return nil, err
+		}
 		var flagsBuf [4]byte
 		if _, err := io.ReadFull(reader, flagsBuf[:]); err != nil {
 			return nil, &ApeTagParseError{Source: err}
 		}
 		flags := binary.LittleEndian.Uint32(flagsBuf[:])
-		remainingSize -= 4
+		if err := consume(4); err != nil {
+			return nil, err
+		}
 
 		var key []byte
 		var kbuf [64]byte
@@ -707,11 +777,15 @@ func ReadApeTagWithHeader(reader io.ReadSeeker, header *ApeHeader, parseOptions 
 						return nil, &ApeTagParseError{Source: serr}
 					}
 				}
-				remainingSize -= uint32(z + 1)
+				if err := consume(uint64(z + 1)); err != nil {
+					return nil, err
+				}
 				break
 			}
 			key = append(key, kbuf[:n]...)
-			remainingSize -= uint32(n)
+			if err := consume(uint64(n)); err != nil {
+				return nil, err
+			}
 			if err == io.ErrUnexpectedEOF || n == 0 {
 				return nil, &ApeTagParseError{Source: io.ErrUnexpectedEOF}
 			}
@@ -722,17 +796,23 @@ func ReadApeTagWithHeader(reader io.ReadSeeker, header *ApeHeader, parseOptions 
 		}
 
 		if util.IndexOfStr(meta.ApePictureTypes[:], keyStr) >= 0 && !parseOptions.ReadCoverArt {
+			if err := consume(uint64(valueSize)); err != nil {
+				return nil, err
+			}
 			if _, err := reader.Seek(int64(valueSize), io.SeekCurrent); err != nil {
 				return nil, &ApeTagParseError{Source: err}
 			}
-			remainingSize -= valueSize
 			continue
+		}
+		// The value must fit in what is left of the tag (checked before
+		// allocating); an overrun is a size mismatch, never a wrap-around.
+		if err := consume(uint64(valueSize)); err != nil {
+			return nil, err
 		}
 		item, err := parseItemWithKey(keyStr, flags, valueSize)
 		if err != nil {
 			return nil, err
 		}
-		remainingSize -= valueSize
 		tag.insert(item)
 	}
 	if _, err := reader.Seek(32, io.SeekCurrent); err != nil {
@@ -1287,20 +1367,7 @@ func (f *ApeFile) TaggedFile() *meta.TaggedFile {
 
 // SavePath saves the tags back to the file.
 func (f *ApeFile) SavePath(path string, writeOptions meta.WriteOptions) error {
-	if f.Ape.IsSome() {
-		return meta.SaveToPath(path, f, meta.TagTypeApe, writeOptions)
-	}
-	return meta.SaveToPath(path, f, f.primaryTagType(), writeOptions)
-}
-
-func (f *ApeFile) primaryTagType() meta.TagType {
-	if f.ID3v2.IsSome() {
-		return meta.TagTypeID3v2
-	}
-	if f.Ape.IsSome() {
-		return meta.TagTypeApe
-	}
-	return meta.TagTypeID3v1
+	return meta.SaveToPath(path, f, writeOptions)
 }
 
 // SaveFile writes the tags back to an open file.

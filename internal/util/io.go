@@ -253,14 +253,16 @@ func (f *BytesFile) Seek(offset int64, whence int) (int64, error) {
 	return abs, nil
 }
 
-// Truncate implements [FileLike].
+// Truncate implements [FileLike], matching Rust's `Vec::truncate` as reached
+// through `Cursor<Vec<u8>>`: a size larger than the current length is a no-op
+// that returns nil, and the position is left unchanged. A later Write past the
+// end zero-fills the gap.
 func (f *BytesFile) Truncate(size int64) error {
-	if size < 0 || size > int64(len(f.buf)) {
+	if size < 0 {
 		return errors.New("lofty: invalid truncation size")
 	}
-	f.buf = f.buf[:size]
-	if f.pos > size {
-		f.pos = size
+	if size < int64(len(f.buf)) {
+		f.buf = f.buf[:size]
 	}
 	return nil
 }

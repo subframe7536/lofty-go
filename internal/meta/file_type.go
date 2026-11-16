@@ -1,7 +1,8 @@
 package meta
 
 import (
-	"path"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -189,7 +190,7 @@ func tagSupportFor(tagType TagType) ([fileTypeCustom + 1]bool, [fileTypeCustom +
 
 // FileTypeFromExt attempts to extract a [FileType] from an extension.
 func FileTypeFromExt(ext string) (FileType, bool) {
-	ext = strings.ToLower(ext)
+	ext = asciiLower(ext)
 
 	// Give custom resolvers priority
 	if getGlobalOptions().UseCustomResolvers {
@@ -230,10 +231,41 @@ func FileTypeFromExt(ext string) (FileType, bool) {
 }
 
 // FileTypeFromPath attempts to determine a [FileType] from a path.
+//
+// The extension follows Rust's `Path::extension`: it is taken from the final
+// path component using the OS path separators, a leading dot alone (".mp3")
+// does not start an extension, and a path without an extension (or with an
+// empty one, "name.") yields no type.
 func FileTypeFromPath(p string) (FileType, bool) {
-	ext := path.Ext(p)
-	ext = strings.TrimPrefix(ext, ".")
+	ext, ok := pathExtension(p)
+	if !ok {
+		return FileType{}, false
+	}
 	return FileTypeFromExt(ext)
+}
+
+// pathExtension mirrors Rust's `Path::extension`, additionally treating an
+// empty extension as absent.
+func pathExtension(p string) (string, bool) {
+	if p == "" {
+		return "", false
+	}
+	// Strip trailing separators like Rust's component iteration does.
+	for len(p) > 0 && os.IsPathSeparator(p[len(p)-1]) {
+		p = p[:len(p)-1]
+	}
+	if p == "" {
+		return "", false
+	}
+	base := filepath.Base(p)
+	if base == "." || base == ".." || base == string(filepath.Separator) {
+		return "", false
+	}
+	i := strings.LastIndexByte(base, '.')
+	if i <= 0 || i == len(base)-1 {
+		return "", false
+	}
+	return base[i+1:], true
 }
 
 // FileTypeFromBuffer attempts to extract a [FileType] from a buffer.

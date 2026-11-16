@@ -1,8 +1,11 @@
 package meta
 
 import (
+	"bytes"
 	"io"
 	"strconv"
+
+	"github.com/subframe7536/lofty-go/internal/util"
 )
 
 // Id3v2Version is the ID3v2 version.
@@ -42,17 +45,45 @@ func NewTag(tagType TagType) *Tag {
 	return &Tag{tagType: tagType}
 }
 
+// CompanionCloner may be implemented by the concrete companion tag types
+// (e.g. *Id3v2Tag, *ApeTag, ...) stored with [Tag.SetCompanionTag], so that
+// [Tag.Clone] can deep-copy them. CloneCompanion must return a value of the
+// same dynamic type that shares no mutable state with the receiver.
+type CompanionCloner interface {
+	CloneCompanion() any
+}
+
 // Clone returns a deep copy of the tag.
+//
+// Items (including binary values), pictures (including their data) are copied.
+// The companion tag is deep-copied if it implements [CompanionCloner];
+// otherwise it is shared with the clone.
 func (t *Tag) Clone() *Tag {
-	items := make([]TagItem, len(t.items))
-	copy(items, t.items)
-	pics := make([]Picture, len(t.pictures))
-	copy(pics, t.pictures)
+	var items []TagItem
+	if t.items != nil {
+		items = make([]TagItem, len(t.items))
+		for i, it := range t.items {
+			it.value.binary = bytes.Clone(it.value.binary)
+			items[i] = it
+		}
+	}
+	var pics []Picture
+	if t.pictures != nil {
+		pics = make([]Picture, len(t.pictures))
+		for i, p := range t.pictures {
+			p.data = bytes.Clone(p.data)
+			pics[i] = p
+		}
+	}
+	companion := t.companionTag
+	if c, ok := companion.(CompanionCloner); ok {
+		companion = c.CloneCompanion()
+	}
 	return &Tag{
 		tagType:         t.tagType,
 		items:           items,
 		pictures:        pics,
-		companionTag:    t.companionTag,
+		companionTag:    companion,
 		OriginalVersion: t.OriginalVersion,
 	}
 }
@@ -135,9 +166,8 @@ func (t *Tag) GetString(itemKey ItemKey) (string, bool) {
 
 func (t *Tag) getU32FromString(key ItemKey) (uint32, bool) {
 	if s, ok := t.GetString(key); ok {
-		if n, err := strconv.ParseUint(s, 10, 32); err == nil {
-			return uint32(n), true
-		}
+		// Rust: `s.parse::<u32>()` (accepts a single leading '+')
+		return util.U32FromString(s)
 	}
 	return 0, false
 }
@@ -296,14 +326,28 @@ func (t *Tag) RemoveKey(key ItemKey) {
 }
 
 // Retain keeps tag items based on the predicate.
+//
+// The tag's items are never modified in place: a slice previously returned by
+// [Tag.Items] keeps its contents.
 func (t *Tag) Retain(f func(*TagItem) bool) {
-	kept := t.items[:0]
+	var kept []TagItem
+	removed := false
 	for i := range t.items {
 		if f(&t.items[i]) {
-			kept = append(kept, t.items[i])
+			if removed {
+				kept = append(kept, t.items[i])
+			}
+			continue
+		}
+		if !removed {
+			removed = true
+			kept = make([]TagItem, i, len(t.items))
+			copy(kept, t.items[:i])
 		}
 	}
-	t.items = kept
+	if removed {
+		t.items = kept
+	}
 }
 
 // RemoveEmpty removes all items with empty values.
@@ -333,7 +377,7 @@ func (t *Tag) PushPicture(picture Picture) { t.pictures = append(t.pictures, pic
 
 // RemovePictureType removes all [Picture]s of a [PictureType].
 func (t *Tag) RemovePictureType(pictureType PictureType) {
-	kept := t.pictures[:0]
+	kept := make([]Picture, 0, len(t.pictures))
 	for _, p := range t.pictures {
 		if p.picType != pictureType {
 			kept = append(kept, p)
@@ -355,7 +399,10 @@ func (t *Tag) SetPicture(index int, picture Picture) {
 // RemovePicture removes and returns the picture at the given `index`.
 func (t *Tag) RemovePicture(index int) Picture {
 	pic := t.pictures[index]
-	t.pictures = append(t.pictures[:index], t.pictures[index+1:]...)
+	kept := make([]Picture, 0, len(t.pictures)-1)
+	kept = append(kept, t.pictures[:index]...)
+	kept = append(kept, t.pictures[index+1:]...)
+	t.pictures = kept
 	return pic
 }
 

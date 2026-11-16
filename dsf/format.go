@@ -214,7 +214,7 @@ func (f *DsfFile) TaggedFile() *meta.TaggedFile {
 
 // SavePath implements AudioFile.
 func (f *DsfFile) SavePath(path string, wo meta.WriteOptions) error {
-	return meta.SaveToPath(path, f, meta.TagTypeID3v2, wo)
+	return meta.SaveToPath(path, f, wo)
 }
 
 // SaveFile implements AudioFile.

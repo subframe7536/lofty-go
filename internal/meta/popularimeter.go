@@ -109,7 +109,24 @@ func (MusicBeeProvider) Rate(tagType TagType, rating StarRating) uint8 {
 			return 255
 		}
 	}
-	return uint8(rating) * 20
+	return saturatingMul(uint8(rating), 20)
+}
+
+// saturatingMul is u8::saturating_mul.
+func saturatingMul(a, b uint8) uint8 {
+	if p := uint16(a) * uint16(b); p <= 255 {
+		return uint8(p)
+	}
+	return 255
+}
+
+// parseU64 parses like Rust's `str::parse::<u64>()`: exactly one leading '+' is
+// accepted, '-' and whitespace are not.
+func parseU64(s string) (uint64, error) {
+	if len(s) > 0 && s[0] == '+' {
+		s = s[1:]
+	}
+	return strconv.ParseUint(s, 10, 64)
 }
 
 // ConvertRaw converts a format-specific rating to a [StarRating].
@@ -178,9 +195,9 @@ func (PicardProvider) DefaultEmail() string { return PopularimeterPicardEmail }
 func (PicardProvider) Rate(tagType TagType, rating StarRating) uint8 {
 	stars := uint8(rating)
 	if tagType == TagTypeID3v2 {
-		return stars * 51
+		return saturatingMul(stars, 51)
 	}
-	return stars * 5
+	return saturatingMul(stars, 5)
 }
 
 // ConvertRaw converts a format-specific rating to a [StarRating].
@@ -273,12 +290,21 @@ func (p Popularimeter) Email() string {
 	if e, ok := p.email.Get(); ok {
 		return e
 	}
-	return p.ratingProvider.DefaultEmail()
+	return p.provider().DefaultEmail()
+}
+
+// provider returns the rating provider, falling back to [DefaultRatingProvider]
+// for a zero-value Popularimeter.
+func (p Popularimeter) provider() RatingProvider {
+	if p.ratingProvider == nil {
+		return DefaultRatingProvider{}
+	}
+	return p.ratingProvider
 }
 
 // MappedValue converts the rating to a format-specific integer.
 func (p Popularimeter) MappedValue(tagType TagType) uint8 {
-	return p.ratingProvider.Rate(tagType, p.Rating)
+	return p.provider().Rate(tagType, p.Rating)
 }
 
 // PopularimeterFromStr parses a popularimeter from a string of the form
@@ -307,7 +333,7 @@ func PopularimeterFromStr(s string) (Popularimeter, error) {
 	default:
 		return Popularimeter{}, &SizeMismatchError{}
 	}
-	counter, err := strconv.ParseUint(parts[2], 10, 64)
+	counter, err := parseU64(parts[2])
 	if err != nil {
 		return Popularimeter{}, err
 	}

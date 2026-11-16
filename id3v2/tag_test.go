@@ -2,7 +2,13 @@ package id3v2
 
 import (
 	"bytes"
+	"compress/zlib"
+	"errors"
+	"io"
+	"math/rand"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -1451,5 +1457,605 @@ func TestPopmProviderMappings(t *testing.T) {
 				t.Errorf("%s %d stars: rating = %d, want %d", c.name, star, frame.Rating, c.want[i])
 			}
 		}
+	}
+}
+
+// --- read-side regression tests (review fixes) ---
+//
+// The byte layouts below were cross-checked against the Rust implementation
+// (lofty 0.25.5) with a differential harness.
+
+func rtSynch(n int) []byte {
+	return []byte{byte(n>>21) & 0x7F, byte(n>>14) & 0x7F, byte(n>>7) & 0x7F, byte(n) & 0x7F}
+}
+
+func rtTag(ver, flags byte, body []byte) []byte {
+	out := []byte{'I', 'D', '3', ver, 0, flags}
+	out = append(out, rtSynch(len(body))...)
+	return append(out, body...)
+}
+
+func rtFrame(id string, flags uint16, content []byte, synch bool) []byte {
+	out := []byte(id)
+	n := len(content)
+	if synch {
+		out = append(out, rtSynch(n)...)
+	} else {
+		out = append(out, byte(n>>24), byte(n>>16), byte(n>>8), byte(n))
+	}
+	out = append(out, byte(flags>>8), byte(flags))
+	return append(out, content...)
+}
+
+func rtCat(parts ...[]byte) []byte {
+	var out []byte
+	for _, p := range parts {
+		out = append(out, p...)
+	}
+	return out
+}
+
+func rtZlib(b []byte) []byte {
+	var buf bytes.Buffer
+	w := zlib.NewWriter(&buf)
+	_, _ = w.Write(b)
+	_ = w.Close()
+	return buf.Bytes()
+}
+
+var rtModes = []struct {
+	name string
+	mode meta.ParsingMode
+}{
+	{"strict", meta.ParsingModeStrict},
+	{"best-attempt", meta.ParsingModeBestAttempt},
+	{"relaxed", meta.ParsingModeRelaxed},
+}
+
+func rtParse(data []byte, mode meta.ParsingMode) (*Id3v2Tag, error) {
+	opts := meta.NewParseOptions()
+	opts.ParsingMode = mode
+	r := bytes.NewReader(data)
+	h, err := ParseId3v2Header(r, opts)
+	if err != nil {
+		return nil, err
+	}
+	return ParseId3v2Tag(r, h, opts)
+}
+
+func rtParseAll(t *testing.T, data []byte, fn func(t *testing.T, tag *Id3v2Tag, err error)) {
+	t.Helper()
+	for _, m := range rtModes {
+		tag, err := rtParse(data, m.mode)
+		t.Run(m.name, func(t *testing.T) { fn(t, tag, err) })
+	}
+}
+
+func rtText(t *testing.T, tag *Id3v2Tag) string {
+	t.Helper()
+	v, ok := tag.Frames.GetText(FrameIdValid("TIT2"))
+	if !ok {
+		t.Fatal("no TIT2 frame")
+	}
+	return v
+}
+
+// A frame declaring more bytes than the tag holds is truncated, not rejected
+// (Rust reads through `reader.take(size)`).
+func TestReadFrameTruncatedByTagEnd(t *testing.T) {
+	body := rtCat([]byte("TIT2\x00\x00\x00\x14\x00\x00"), []byte{0, 'h', 'e', 'l', 'l', 'o', 'w', 'o', 'r', 'l'})
+	rtParseAll(t, rtTag(3, 0, body), func(t *testing.T, tag *Id3v2Tag, err error) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := rtText(t, tag); got != "helloworl" {
+			t.Fatalf("TIT2 = %q", got)
+		}
+	})
+
+	// A declared size near u32::MAX must neither fail nor allocate it.
+	body = rtCat([]byte("TIT2\xFF\xFF\xFF\xF0\x00\x00"), []byte{3, 'h', 'i'})
+	rtParseAll(t, rtTag(3, 0, body), func(t *testing.T, tag *Id3v2Tag, err error) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := rtText(t, tag); got != "hi" {
+			t.Fatalf("TIT2 = %q", got)
+		}
+	})
+
+	// v2.3 tag-wide unsynchronisation whose frame size counts the stuffed byte
+	body = rtFrame("TIT2", 0, []byte{0, 'a', 0xFF, 0x00, 0xFB, 'b'}, false)
+	rtParseAll(t, rtTag(3, 0x80, body), func(t *testing.T, tag *Id3v2Tag, err error) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := rtText(t, tag); got != "a\u00ff\u00fbb" {
+			t.Fatalf("TIT2 = %q", got)
+		}
+	})
+}
+
+// Rust only applies the allocation limit to encrypted frames and RVA2 peaks;
+// ordinary frame content is bounded by the tag.
+func TestReadLargeFrameIgnoresAllocationLimit(t *testing.T) {
+	n := 17 * 1024 * 1024 // > DefaultAllocationLimit (16 MiB)
+	content := rtCat([]byte{0x00}, []byte("image/p\x00"), []byte{0x03, 0x00}, make([]byte, n))
+	data := rtTag(4, 0, rtFrame("APIC", 0, content, true))
+	for _, m := range rtModes {
+		for _, src := range []struct {
+			name string
+			r    io.Reader
+		}{{"bytes", bytes.NewReader(data[10:])}, {"opaque", io.MultiReader(bytes.NewReader(data[10:]))}} {
+			t.Run(m.name+"/"+src.name, func(t *testing.T) {
+				opts := meta.NewParseOptions()
+				opts.ParsingMode = m.mode
+				h, err := ParseId3v2HeaderRaw(bytes.NewReader(data))
+				if err != nil {
+					t.Fatal(err)
+				}
+				tag, err := ParseId3v2Tag(src.r, h, opts)
+				if err != nil {
+					t.Fatal(err)
+				}
+				pf, ok := tag.Frames.Get(FrameIdValid("APIC")).(*AttachedPictureFrame)
+				if !ok || len(pf.Picture.Data()) != n {
+					t.Fatalf("APIC missing or wrong size (ok=%v)", ok)
+				}
+			})
+		}
+	}
+}
+
+// Encrypted frames still use an exact read (Rust `read_exact`).
+func TestReadEncryptedFrameShortIsError(t *testing.T) {
+	dli := rtSynch(6)
+	// size 8 - 1 (symbol) - 4 (DLI) = 3 data bytes, only 2 follow in the tag
+	body := rtCat([]byte("TIT2"), rtSynch(8), []byte{0x00, 0x05}, []byte{0x81}, dli, []byte{1, 2})
+	rtParseAll(t, rtTag(4, 0, body), func(t *testing.T, tag *Id3v2Tag, err error) {
+		if err == nil {
+			t.Fatal("expected an error for a truncated encrypted frame")
+		}
+	})
+
+	// A complete encrypted frame becomes a binary frame
+	body = rtFrame("TIT2", 0x0005, rtCat([]byte{0x81}, dli, []byte{1, 2, 3}), true)
+	rtParseAll(t, rtTag(4, 0, body), func(t *testing.T, tag *Id3v2Tag, err error) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		bf, ok := tag.Frames.Get(FrameIdValid("TIT2")).(*BinaryFrame)
+		if !ok || !bytes.Equal(bf.Data, []byte{1, 2, 3}) || bf.Flags().Encryption.IsNone() {
+			t.Fatalf("frame = %#v", tag.Frames.Get(FrameIdValid("TIT2")))
+		}
+	})
+}
+
+// De-unsynchronisation shortening an encrypted frame below its declared size
+// is an error, like Rust's `read_exact` over the unsynchronised stream.
+func TestReadEncryptedUnsyncShortenedIsError(t *testing.T) {
+	dli := rtSynch(3)
+	// flags: encryption + unsynchronisation + data length indicator
+	body := rtFrame("TIT2", 0x0007, rtCat([]byte{0x81}, dli, []byte{0xFF, 0x00, 0x01}), true)
+	rtParseAll(t, rtTag(4, 0, body), func(t *testing.T, tag *Id3v2Tag, err error) {
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+	})
+
+	// Without a stuffed byte the data is intact
+	body = rtFrame("TIT2", 0x0007, rtCat([]byte{0x81}, dli, []byte{0x02, 0x00, 0x01}), true)
+	rtParseAll(t, rtTag(4, 0, body), func(t *testing.T, tag *Id3v2Tag, err error) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// A UTF-16 TXXX whose content is a single 0xFF/0xFE byte used to index past
+// the end of the slice.
+func TestReadTxxxUtf16SingleTrailingByte(t *testing.T) {
+	for _, last := range []byte{0xFF, 0xFE, 0x41} {
+		content := rtCat([]byte{0x01, 0xFF, 0xFE, 0x61, 0x00, 0x00, 0x00}, []byte{last})
+		rtParseAll(t, rtTag(4, 0, rtFrame("TXXX", 0, content, true)), func(t *testing.T, tag *Id3v2Tag, err error) {
+			if err != nil {
+				t.Fatalf("last=%#x: %v", last, err)
+			}
+			tx, ok := tag.Frames.Frames()[0].(*ExtendedTextFrame)
+			if !ok || tx.Description != "a" || tx.Content != "" {
+				t.Fatalf("last=%#x: frame = %#v", last, tag.Frames.Frames()[0])
+			}
+		})
+	}
+}
+
+// Rust trims trailing NULs from frame IDs (`utf8_decode_str`), so a v2.4 ID
+// "TT2\0" becomes the outdated 3-character ID "TT2".
+func TestReadFrameIdTrailingNul(t *testing.T) {
+	body := rtFrame("TT2\x00", 0, []byte{0x00, 'x'}, true)
+	rtParseAll(t, rtTag(4, 0, body), func(t *testing.T, tag *Id3v2Tag, err error) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tag.Frames.Len() != 1 {
+			t.Fatalf("frames = %d", tag.Frames.Len())
+		}
+		f := tag.Frames.Frames()[0]
+		tf, ok := f.(*TextInformationFrame)
+		if !ok || f.ID() != FrameIdOutdated("TT2") || tf.Value != "x" {
+			t.Fatalf("frame = %#v", f)
+		}
+	})
+}
+
+// Sizes are unsynchsafe'd with every byte masked to 7 bits (Rust `unsynch`).
+func TestReadNonSynchsafeSizes(t *testing.T) {
+	// A v2.4 frame size of 00 00 00 C8 is read as 0x48 (72) bytes.
+	frame := rtFrame("TIT2", 0, append([]byte{3}, bytes.Repeat([]byte("a"), 199)...), false)
+	data := rtTag(4, 0, frame)
+	for _, m := range rtModes[1:] {
+		tag, err := rtParse(data, m.mode)
+		if err != nil {
+			t.Fatal(m.name, err)
+		}
+		if got := rtText(t, tag); got != strings.Repeat("a", 71) {
+			t.Fatalf("%s: TIT2 has %d bytes, want 71", m.name, len(got))
+		}
+	}
+
+	// Tag size bytes 00 00 00 80 mean size 0.
+	h, err := ParseId3v2HeaderRaw(bytes.NewReader([]byte{'I', 'D', '3', 4, 0, 0, 0, 0, 0, 0x80}))
+	if err != nil || h.Size != 0 {
+		t.Fatalf("header = %+v, err = %v", h, err)
+	}
+
+	// A v2.4 extended header size of 00 00 00 86 means 6.
+	body := []byte{0x00, 0x00, 0x00, 0x86, 0x01, 0x00}
+	h, err = ParseId3v2Header(bytes.NewReader(rtTag(4, 0x40, body)), meta.NewParseOptions())
+	if err != nil || h.ExtendedSize != 6 {
+		t.Fatalf("header = %+v, err = %v", h, err)
+	}
+}
+
+// Compression is lazy like Rust's ZlibDecoder.
+func TestReadCompressedFrames(t *testing.T) {
+	raw := append([]byte{3}, []byte("hello")...)
+	dli := rtSynch(len(raw))
+
+	// v2.4: compression + data length indicator
+	rtParseAll(t, rtTag(4, 0, rtFrame("TIT2", 0x0009, rtCat(dli, rtZlib(raw)), true)), func(t *testing.T, tag *Id3v2Tag, err error) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := rtText(t, tag); got != "hello" {
+			t.Fatalf("TIT2 = %q", got)
+		}
+	})
+	// v2.3: compression flag, plain 4-byte decompressed size
+	rtParseAll(t, rtTag(3, 0, rtFrame("TIT2", 0x0080, rtCat([]byte{0, 0, 0, byte(len(raw))}, rtZlib(raw)), false)), func(t *testing.T, tag *Id3v2Tag, err error) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := rtText(t, tag); got != "hello" {
+			t.Fatalf("TIT2 = %q", got)
+		}
+	})
+
+	// A corrupt stream in an RVA2 frame: Rust's parsers swallow the read error
+	// (`while let Ok(..)`), leaving an empty frame.
+	bad := rtFrame("RVA2", 0x0009, rtCat(dli, []byte("ABCDEFG")), true)
+	rtParseAll(t, rtTag(4, 0, bad), func(t *testing.T, tag *Id3v2Tag, err error) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		rv, ok := tag.Frames.Get(FrameIdValid("RVA2")).(*RelativeVolumeAdjustmentFrame)
+		if !ok || rv.Identification != "" || len(rv.Channels) != 0 {
+			t.Fatalf("frame = %#v", tag.Frames.Get(FrameIdValid("RVA2")))
+		}
+	})
+
+	// ...while a text frame fails, because Rust's skip drains the broken reader.
+	bad = rtFrame("TIT2", 0x0009, rtCat(dli, []byte("ABCDEFG")), true)
+	rtParseAll(t, rtTag(4, 0, bad), func(t *testing.T, tag *Id3v2Tag, err error) {
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+	})
+}
+
+// Deliberate deviation from Rust: after a parser stops early (here a URL
+// frame stops at its first NUL) Go resumes at the declared frame end, whereas
+// Rust re-reads the leftover content as the next frame header.
+func TestReadRealignsToFrameEnd(t *testing.T) {
+	body := rtCat(
+		rtFrame("WOAF", 0, []byte("http://x\x00junk-junk-junk"), true),
+		rtFrame("TIT2", 0, []byte{3, 'a'}, true),
+	)
+	rtParseAll(t, rtTag(4, 0, body), func(t *testing.T, tag *Id3v2Tag, err error) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		u, ok := tag.Frames.Get(FrameIdValid("WOAF")).(*UrlLinkFrame)
+		if !ok || u.Content != "http://x" {
+			t.Fatalf("WOAF = %#v", tag.Frames.Get(FrameIdValid("WOAF")))
+		}
+		if got := rtText(t, tag); got != "a" {
+			t.Fatalf("TIT2 = %q", got)
+		}
+	})
+}
+
+// Deliberate deviation from Rust: a v2.3 TDRC that already has a month is kept
+// (Rust drops it in `construct_tdrc_from_v3`).
+func TestReadV23TdrcWithMonthIsKept(t *testing.T) {
+	body := rtFrame("TDRC", 0, append([]byte{0}, "2020-05-01"...), false)
+	rtParseAll(t, rtTag(3, 0, body), func(t *testing.T, tag *Id3v2Tag, err error) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		f, ok := tag.Frames.Get(FrameIdValid("TDRC")).(*TimestampFrame)
+		if !ok || f.Timestamp.String() != "2020-05-01" {
+			t.Fatalf("TDRC = %#v", tag.Frames.Get(FrameIdValid("TDRC")))
+		}
+	})
+}
+
+// The "not enough data" frame error is the shared NotEnoughDataError (Rust
+// `crate::error::NotEnoughDataError`), so errors.As finds it.
+func TestReadUndersizedFrameError(t *testing.T) {
+	body := rtFrame("COMM", 0, []byte{0, 'e', 'n'}, true)
+	for _, m := range rtModes[:2] {
+		_, err := rtParse(rtTag(4, 0, body), m.mode)
+		var ne *util.NotEnoughDataError
+		if !errors.As(err, &ne) || !ne.HasExpected || ne.Expected != 5 {
+			t.Fatalf("%s: err = %v (%#v)", m.name, err, ne)
+		}
+		var fe *FrameParseError
+		if !errors.As(err, &fe) || fe.ID.IsNone() {
+			t.Fatalf("%s: frame error without ID: %v", m.name, err)
+		}
+	}
+	// Relaxed mode skips the frame
+	tag, err := rtParse(rtTag(4, 0, body), meta.ParsingModeRelaxed)
+	if err != nil || tag.Frames.Len() != 0 {
+		t.Fatalf("relaxed: err = %v", err)
+	}
+}
+
+// Header errors carry the same information as Rust's `Id3v2HeaderError`.
+func TestHeaderErrorKinds(t *testing.T) {
+	check := func(data []byte, kind Id3v2HeaderErrorKind) *Id3v2HeaderError {
+		t.Helper()
+		_, err := ParseId3v2Header(bytes.NewReader(data), meta.NewParseOptions())
+		var he *Id3v2HeaderError
+		if !errors.As(err, &he) || he.Kind != kind {
+			t.Fatalf("err = %v, want kind %d", err, kind)
+		}
+		return he
+	}
+	he := check([]byte{'I', 'D', '3', 5, 1, 0, 0, 0, 0, 0}, Id3v2HeaderBadVersion)
+	if he.Major != 5 || he.Minor != 1 || !strings.Contains(he.Error(), "v5.1") {
+		t.Fatalf("bad version error = %+v / %q", he, he.Error())
+	}
+	check([]byte{'I', 'D', '3', 2, 0, 0x40, 0, 0, 0, 0}, Id3v2HeaderV2Compression)
+	check(rtTag(4, 0x40, []byte{0, 0, 0, 3, 1, 0}), Id3v2HeaderBadExtendedHeaderSize)
+	strict := meta.NewParseOptions()
+	strict.ParsingMode = meta.ParsingModeStrict
+	_, err := ParseId3v2Header(bytes.NewReader(rtTag(4, 0x40, []byte{0, 0, 0, 6, 1, 0x01})), strict)
+	var he2 *Id3v2HeaderError
+	if !errors.As(err, &he2) || he2.Kind != Id3v2HeaderBadExtendedHeaderFlags {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+type rtEOFWithDataReader struct {
+	data []byte
+	pos  int
+}
+
+func (r *rtEOFWithDataReader) Read(p []byte) (int, error) {
+	n := copy(p, r.data[r.pos:])
+	r.pos += n
+	if r.pos >= len(r.data) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
+// Bytes returned together with an error must still be processed.
+func TestFindId3v2InJunkDataWithEOF(t *testing.T) {
+	// One byte per Read, the last one accompanied by io.EOF
+	r := io.Reader(&rtOneByteReader{rtEOFWithDataReader{data: []byte("xxID3")}})
+	off, found := FindId3v2InJunk(r)
+	if !found || off != 2 {
+		t.Fatalf("found = %v, offset = %d", found, off)
+	}
+}
+
+type rtOneByteReader struct{ rtEOFWithDataReader }
+
+func (r *rtOneByteReader) Read(p []byte) (int, error) { return r.rtEOFWithDataReader.Read(p[:1]) }
+
+// LocateId3v2 must end exactly at the end of the tag even when an extended
+// header (already consumed by the header parser, but counted in the size) is
+// present, or a footer follows.
+func TestLocateId3v2Range(t *testing.T) {
+	frame := rtFrame("TIT2", 0, []byte{3, 'a'}, true)
+	audio := []byte("AUDIOAUDIO")
+	v4ext := rtCat([]byte{0, 0, 0, 6, 1, 0}, frame)
+	v3ext := rtCat([]byte{0, 0, 0, 6, 0, 0, 0, 0, 0, 0}, rtFrame("TIT2", 0, []byte{0, 'a'}, false))
+	footer := []byte("3DI\x04\x00\x10\x00\x00\x00\x0b")
+	cases := []struct {
+		name string
+		tag  []byte
+	}{
+		{"plain", rtTag(4, 0, frame)},
+		{"v4-ext", rtTag(4, 0x40, v4ext)},
+		{"v3-ext", rtTag(3, 0x40, v3ext)},
+		{"footer", rtCat(rtTag(4, 0x10, frame), footer)},
+	}
+	for _, c := range cases {
+		for _, read := range []bool{false, true} {
+			for _, junk := range []string{"", "jj"} {
+				data := rtCat([]byte(junk), c.tag, audio)
+				r := bytes.NewReader(data)
+				res, err := LocateId3v2(r, read, meta.NewParseOptions())
+				if err != nil || res == nil {
+					t.Fatalf("%s: res = %v, err = %v", c.name, res, err)
+				}
+				wantEnd := int64(len(junk) + len(c.tag))
+				pos, _ := r.Seek(0, io.SeekCurrent)
+				if res.End != wantEnd || pos != wantEnd {
+					t.Fatalf("%s (read=%v junk=%q): End = %d, pos = %d, want %d", c.name, read, junk, res.End, pos, wantEnd)
+				}
+				if read {
+					tag, err := res.Parse(meta.NewParseOptions())
+					if err != nil {
+						t.Fatalf("%s: %v", c.name, err)
+					}
+					if got := rtText(t, tag); got != "a" {
+						t.Fatalf("%s: TIT2 = %q", c.name, got)
+					}
+				}
+			}
+		}
+	}
+}
+
+// --- mutated-tag robustness ---
+
+func rtMutate(r *rand.Rand, tag []byte) []byte {
+	hdr := append([]byte(nil), tag[:10]...)
+	body := append([]byte(nil), tag[10:]...)
+	for i, nops := 0, 1+r.Intn(3); i < nops && len(body) > 0; i++ {
+		switch r.Intn(8) {
+		case 0, 1:
+			body[r.Intn(len(body))] = byte(r.Intn(256))
+		case 2:
+			body[r.Intn(len(body))] = 0xFF
+		case 3:
+			body[r.Intn(len(body))] = 0
+		case 4:
+			body = body[:r.Intn(len(body)+1)]
+		case 5:
+			p := r.Intn(len(body))
+			body = append(body[:p], body[p+1:]...)
+		case 6:
+			p := r.Intn(len(body) + 1)
+			body = append(body[:p], append([]byte{byte(r.Intn(256))}, body[p:]...)...)
+		case 7:
+			if len(body) > 10 {
+				body[r.Intn(10)] = byte(r.Intn(256))
+			}
+		}
+	}
+	if r.Intn(10) == 0 {
+		hdr[5] = byte(r.Intn(256)) & 0xF0
+		if hdr[3] == 2 {
+			hdr[5] &^= 0x40
+		}
+	}
+	copy(hdr[6:10], rtSynch(len(body)))
+	return append(hdr, body...)
+}
+
+func rtFuzzSeeds(t *testing.T) map[string][]byte {
+	seeds := map[string][]byte{}
+	txt := func(enc byte, s ...byte) []byte { return append([]byte{enc}, s...) }
+	u16 := func(s string, bom bool) []byte {
+		var b []byte
+		if bom {
+			b = append(b, 0xFF, 0xFE)
+		}
+		for _, c := range s {
+			b = append(b, byte(c), 0)
+		}
+		return b
+	}
+	v4 := func(frames ...[]byte) []byte { return rtTag(4, 0, rtCat(frames...)) }
+	v3 := func(frames ...[]byte) []byte { return rtTag(3, 0, rtCat(frames...)) }
+	raw := append([]byte{3}, []byte("hello")...)
+	seeds["txxx-u16"] = v4(rtFrame("TXXX", 0, rtCat(txt(1, 0xFF, 0xFE, 0x61, 0, 0, 0), []byte{0xFF}), true))
+	seeds["nul-id"] = v4(rtFrame("TT2\x00", 0, txt(0, 'x'), true))
+	seeds["v23-v2id"] = v3(rtFrame("TT2\x00", 0, txt(0, 'x'), false))
+	seeds["multi-bom"] = v4(rtFrame("TPE1", 0, rtCat([]byte{1}, u16("a", true), []byte{0, 0}, u16("b", true)), true))
+	seeds["comm-u16"] = v4(rtFrame("COMM", 0, rtCat([]byte{1, 'e', 'n', 'g'}, u16("a", true), []byte{0, 0}, u16("bc", false)), true))
+	seeds["v23-date"] = v3(rtFrame("TYER", 0, txt(0, '1', '9', '8', '4'), false), rtFrame("TDAT", 0, txt(0, '0', '6', '1', '2'), false), rtFrame("TIME", 0, txt(0, '1', '4', '3', '0'), false))
+	seeds["unsync"] = rtTag(4, 0x80, rtFrame("TIT2", 0, txt(0, 'a', 0xFF, 0x00, 0xFB, 'b'), true))
+	seeds["unsync-v3"] = rtTag(3, 0x80, rtFrame("TIT2", 0, txt(0, 'a', 0xFF, 0x00, 0xFB, 'b'), false))
+	seeds["compressed"] = v4(rtFrame("TIT2", 0x0009, rtCat(rtSynch(len(raw)), rtZlib(raw)), true))
+	seeds["encrypted"] = v4(rtFrame("TIT2", 0x0005, rtCat([]byte{0x81}, rtSynch(6), []byte{1, 2, 3}), true))
+	seeds["ext-v4"] = rtTag(4, 0x40, rtCat([]byte{0, 0, 0, 12, 1, 0x20, 5, 0, 0, 0, 0, 0}, rtFrame("TIT2", 0, txt(3, 'a'), true)))
+	seeds["ext-v3"] = rtTag(3, 0x40, rtCat([]byte{0, 0, 0, 6, 0, 0, 0, 0, 0, 0}, rtFrame("TIT2", 0, txt(0, 'a'), false)))
+	seeds["v22"] = rtTag(2, 0, rtCat([]byte("TT2\x00\x00\x02\x00a"), []byte("PIC\x00\x00\x09\x00PNG\x03\x00\x01\x02\x03")))
+	seeds["popm"] = v4(rtFrame("POPM", 0, rtCat([]byte("a@b\x00"), []byte{200, 0, 0, 0, 1}), true))
+	seeds["ufid"] = v4(rtFrame("UFID", 0, rtCat([]byte("own\x00"), []byte{1, 2}), true))
+	seeds["rva2"] = v4(rtFrame("RVA2", 0, rtCat([]byte("id\x00"), []byte{1, 0, 1, 8, 0x7F}), true))
+	seeds["etco"] = v4(rtFrame("ETCO", 0, rtCat([]byte{2}, []byte{3, 0, 0, 0, 9}), true))
+	seeds["owne"] = v4(rtFrame("OWNE", 0, rtCat([]byte{0}, []byte("USD1\x0020200101sel")), true))
+	seeds["tipl"] = v4(rtFrame("TIPL", 0, rtCat([]byte{1}, u16("k", true), []byte{0, 0}, u16("v", false), []byte{0, 0}), true))
+	seeds["tdrc"] = v4(rtFrame("TDRC", 0, txt(3, []byte("2020-05-01T10:20:30")...), true))
+
+	// Fixtures: complete tags, plus bare frame bodies wrapped into tags
+	wrap := map[string]string{
+		"test.atxt": "ATXT", "test.chap": "CHAP", "test.ctoc": "CTOC", "test.etco": "ETCO", "test.geob": "GEOB",
+		"test.owne": "OWNE", "test.priv": "PRIV", "test.rva2": "RVA2", "test.sylt": "SYLT", "test.tipl": "TIPL",
+		"test_utf16.sylt": "SYLT", "test_utf16.tipl": "TIPL",
+	}
+	files, _ := filepath.Glob(id3v2TestAsset("*"))
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		base := filepath.Base(f)
+		if id, ok := wrap[base]; ok {
+			seeds["w4-"+base] = rtTag(4, 0, rtFrame(id, 0, b, true))
+			seeds["w3-"+base] = rtTag(3, 0, rtFrame(id, 0, b, false))
+		} else if len(b) > 10 && string(b[:3]) == "ID3" {
+			n := int(b[6])<<21 | int(b[7])<<14 | int(b[8])<<7 | int(b[9])
+			if 10+n <= len(b) {
+				seeds["f-"+base] = b[:10+n]
+			}
+		}
+	}
+	return seeds
+}
+
+// Mutated tags must never panic (or hang) in any parsing mode.
+func TestParseId3v2MutatedTagsNeverPanic(t *testing.T) {
+	seeds := rtFuzzSeeds(t)
+	names := make([]string, 0, len(seeds))
+	for n := range seeds {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	r := rand.New(rand.NewSource(12345))
+	cases := 0
+	for _, n := range names {
+		s := seeds[n]
+		if len(s) < 12 {
+			continue
+		}
+		inputs := [][]byte{s}
+		for i := 0; i < 60; i++ {
+			inputs = append(inputs, rtMutate(r, s))
+		}
+		for _, in := range inputs {
+			cases++
+			for _, m := range rtModes {
+				func() {
+					defer func() {
+						if p := recover(); p != nil {
+							t.Fatalf("panic parsing %s mutation %x in %s mode: %v", n, in, m.name, p)
+						}
+					}()
+					_, _ = rtParse(in, m.mode)
+				}()
+			}
+		}
+	}
+	if cases < 2000 {
+		t.Fatalf("only %d cases generated", cases)
 	}
 }

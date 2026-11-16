@@ -217,7 +217,7 @@ func ParseId3v2HeaderRaw(reader io.Reader) (Id3v2Header, error) {
 	}
 	version := b[3]
 	if version != 2 && version != 3 && version != 4 {
-		return Id3v2Header{}, &Id3v2ParseError{Message: "unsupported ID3v2 version"}
+		return Id3v2Header{}, &Id3v2ParseError{Source: &Id3v2HeaderError{Kind: Id3v2HeaderBadVersion, Major: version, Minor: b[4]}}
 	}
 	var h Id3v2Header
 	h.Version = version
@@ -679,6 +679,9 @@ func (t *Id3v2Tag) SaveTo(file meta.FileLike, writeOptions meta.WriteOptions) er
 	if err != nil {
 		return &meta.FileEncodingError{Source: err}
 	}
+	if err := t.checkTagSupport(vf.Format()); err != nil {
+		return err
+	}
 	return t.SaveToVerified(vf, writeOptions)
 }
 
@@ -689,18 +692,27 @@ func (t *Id3v2Tag) SaveToPath(path string, writeOptions meta.WriteOptions) error
 		return &meta.FileEncodingError{Source: err}
 	}
 	defer f.Close()
+	if err := t.checkTagSupport(vf.Format()); err != nil {
+		return err
+	}
 	return t.SaveToVerified(vf, writeOptions)
 }
 
-// SaveToVerified writes the tag into a [meta.VerifiedFile], skipping the public
-// support check — mirrors Rust's `TagWriteExt::save_to`, which AudioFile save
-// paths invoke directly (e.g. ID3v2 in FLAC is read-only yet still written).
-func (t *Id3v2Tag) SaveToVerified(vf *meta.VerifiedFile, writeOptions meta.WriteOptions) error {
-	format := vf.Format()
+// checkTagSupport mirrors Rust's `TagExt::save_to` support gate: unsupported
+// formats always fail; read-only formats only accept an empty (stripping) tag.
+func (t *Id3v2Tag) checkTagSupport(format meta.FileType) error {
 	support := format.TagSupport(meta.TagTypeID3v2)
 	if support == meta.TagSupportUnsupported || (!support.IsWritable() && !t.IsEmpty()) {
 		return &meta.FileEncodingError{FileType: format, Source: &meta.UnsupportedTagError{}}
 	}
+	return nil
+}
+
+// SaveToVerified writes the tag into a [meta.VerifiedFile] without the public
+// support check — mirrors Rust's `TagWriteExt::save_to`, which AudioFile save
+// paths invoke directly (e.g. ID3v2 in FLAC is read-only yet still written).
+func (t *Id3v2Tag) SaveToVerified(vf *meta.VerifiedFile, writeOptions meta.WriteOptions) error {
+	format := vf.Format()
 	var encoded []byte
 	if !t.Frames.IsEmpty() {
 		var err error
@@ -764,13 +776,33 @@ func WriteId3v2(file meta.FileLike, tag *meta.Tag, writeOptions meta.WriteOption
 	return meta.Splice(file, start, end, encoded)
 }
 
-// FindId3v2 finds an ID3v2 tag at the current position (possibly preceded by junk).
-// Returns the header (if found), the end position of the tag, whether found, and an error.
-// On success the reader is positioned at the end of the tag; on failure at the original position.
-func FindId3v2(reader io.ReadSeeker, read bool, parseOptions meta.ParseOptions) (Id3v2Header, int64, bool, error) {
+// Id3v2FindResult describes an ID3v2 tag located by [LocateId3v2], mirroring
+// Rust's `ID3FindResults<Id3v2Header, Option<Vec<u8>>>`.
+type Id3v2FindResult struct {
+	// Header is the parsed tag header, extended header included.
+	Header Id3v2Header
+	// Content holds the bytes following the header (and extended header);
+	// nil unless reading was requested.
+	Content []byte
+	// Start is the position the search began at, End the position after the
+	// tag (footer included). Junk preceding the tag lies inside the range.
+	Start, End int64
+}
+
+// Parse parses the located tag's content. It requires the result to have been
+// located with reading enabled.
+func (r *Id3v2FindResult) Parse(parseOptions meta.ParseOptions) (*Id3v2Tag, error) {
+	return ParseId3v2Tag(bytes.NewReader(r.Content), r.Header, parseOptions)
+}
+
+// LocateId3v2 finds an ID3v2 tag at the current position (possibly preceded by
+// junk), mirroring Rust's `find_id3v2`. It returns nil when no tag is found.
+// On success the reader is positioned at the end of the tag; otherwise at the
+// original position.
+func LocateId3v2(reader io.ReadSeeker, read bool, parseOptions meta.ParseOptions) (*Id3v2FindResult, error) {
 	start, err := reader.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return Id3v2Header{}, 0, false, err
+		return nil, err
 	}
 
 	var offset int64
@@ -779,49 +811,79 @@ func FindId3v2(reader io.ReadSeeker, read bool, parseOptions meta.ParseOptions) 
 		offset, found, err = util.ChunkedScan(reader, 2, int64(parseOptions.MaxJunkBytes),
 			func(window []byte) int { return bytes.Index(window, []byte("ID3")) })
 		if err != nil {
-			return Id3v2Header{}, 0, false, err
+			return nil, err
 		}
 	}
 	if !found {
 		if _, err := reader.Seek(start, io.SeekStart); err != nil {
-			return Id3v2Header{}, 0, false, err
+			return nil, err
 		}
-		return Id3v2Header{}, 0, false, nil
+		return nil, nil
 	}
 
 	// Seek back to start of "ID3"
 	if _, err := reader.Seek(start+offset, io.SeekStart); err != nil {
-		return Id3v2Header{}, 0, false, err
+		return nil, err
 	}
 
-	header, err := ParseId3v2HeaderRaw(reader)
+	header, err := ParseId3v2Header(reader, parseOptions)
 	if err != nil {
 		if _, err := reader.Seek(start, io.SeekStart); err != nil {
-			return Id3v2Header{}, 0, false, err
+			return nil, err
 		}
-		return Id3v2Header{}, 0, false, nil
+		return nil, nil
 	}
 
+	// Rust reads/skips `header.size` bytes after the header parser has already
+	// consumed the extended header, which `size` includes, so its range ends
+	// too far (a later splice would eat into the audio). Count only what is
+	// left of the tag instead.
+	headerEnd, err := reader.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return nil, err
+	}
+	remaining := start + offset + 10 + int64(header.Size) - headerEnd
+	if remaining < 0 {
+		remaining = 0
+	}
+
+	res := &Id3v2FindResult{Header: header, Start: start}
 	if read {
-		content, err := util.TryByteSlice(int(header.Size))
+		content, err := util.TryByteSlice(int(remaining))
 		if err != nil {
-			return header, 0, false, &Id3v2ParseError{Source: err}
+			return nil, &Id3v2ParseError{Source: err}
 		}
 		if _, err := io.ReadFull(reader, content); err != nil {
-			return header, 0, false, err
+			return nil, err
 		}
+		res.Content = content
 	} else {
-		if _, err := reader.Seek(int64(header.Size), io.SeekCurrent); err != nil {
-			return header, 0, false, err
+		if _, err := reader.Seek(remaining, io.SeekCurrent); err != nil {
+			return nil, err
 		}
 	}
 	if header.Flags.Footer {
 		if _, err := reader.Seek(10, io.SeekCurrent); err != nil {
-			return header, 0, false, err
+			return nil, err
 		}
 	}
-	end, err := reader.Seek(0, io.SeekCurrent)
-	return header, end, true, err
+	if res.End, err = reader.Seek(0, io.SeekCurrent); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// FindId3v2 finds an ID3v2 tag at the current position (possibly preceded by junk).
+// Returns the header (if found), the end position of the tag, whether found, and an error.
+// On success the reader is positioned at the end of the tag; on failure at the original position.
+//
+// Callers that need the tag's content should use [LocateId3v2].
+func FindId3v2(reader io.ReadSeeker, read bool, parseOptions meta.ParseOptions) (Id3v2Header, int64, bool, error) {
+	res, err := LocateId3v2(reader, read, parseOptions)
+	if err != nil || res == nil {
+		return Id3v2Header{}, 0, false, err
+	}
+	return res.Header, res.End, true, nil
 }
 
 // FindId3v2InJunk scans reader for an "ID3" magic; on return the reader is
@@ -845,17 +907,27 @@ func FindId3v2InJunk(reader io.Reader) (int64, bool) {
 	var window [3]byte
 	idx := int64(0)
 	var oneByte [1]byte
+	empty := 0
 	for {
-		_, err := reader.Read(oneByte[:])
+		n, err := reader.Read(oneByte[:])
+		if n > 0 {
+			empty = 0
+			window[0] = window[1]
+			window[1] = window[2]
+			window[2] = oneByte[0]
+			idx++
+			if bytes.Equal(window[:], []byte("ID3")) {
+				return idx - 3, true
+			}
+		}
 		if err != nil {
 			return 0, false
 		}
-		window[0] = window[1]
-		window[1] = window[2]
-		window[2] = oneByte[0]
-		idx++
-		if bytes.Equal(window[:], []byte("ID3")) {
-			return idx - 3, true
+		if n == 0 {
+			// Like bufio, give up on a reader that never makes progress
+			if empty++; empty >= 100 {
+				return 0, false
+			}
 		}
 	}
 }

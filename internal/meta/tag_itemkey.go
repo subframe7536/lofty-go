@@ -1,7 +1,5 @@
 package meta
 
-import "strings"
-
 // ItemKey is a format-agnostic representation of a tag key.
 type ItemKey uint16
 
@@ -202,6 +200,23 @@ func (k ItemKey) IsTimestamp() bool {
 	return false
 }
 
+// asciiLower lowercases ASCII letters only, like Rust's `eq_ignore_ascii_case` /
+// `to_ascii_lowercase` (strings.ToLower would also fold e.g. U+212A KELVIN SIGN).
+func asciiLower(s string) string {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c >= 'A' && c <= 'Z' {
+			b := []byte(s)
+			for j := i; j < len(b); j++ {
+				if b[j] >= 'A' && b[j] <= 'Z' {
+					b[j] += 'a' - 'A'
+				}
+			}
+			return string(b)
+		}
+	}
+	return s
+}
+
 // keyMapEntry is a single key → ItemKey mapping. Multiple keys may map to the
 // same ItemKey; the first listed key is the preferred ("standard") one.
 type keyMapEntry struct {
@@ -232,7 +247,7 @@ func newKeyMap(entries []keyMapEntry) *keyMap {
 	for _, e := range entries {
 		for _, k := range e.keys {
 			// last entry wins for a given key (Rust HashMap::insert)
-			m.byKey[strings.ToLower(k)] = e.itemKey
+			m.byKey[asciiLower(k)] = e.itemKey
 		}
 		for _, v := range append([]ItemKey{e.itemKey}, e.aliases...) {
 			if !seen[v] {
@@ -256,7 +271,7 @@ func newKeyMap(entries []keyMapEntry) *keyMap {
 
 // itemKeyForKey returns the [ItemKey] for a format-specific key (case-insensitive).
 func (m *keyMap) itemKeyForKey(key string) (ItemKey, bool) {
-	k, ok := m.byKey[strings.ToLower(key)]
+	k, ok := m.byKey[asciiLower(key)]
 	return k, ok
 }
 

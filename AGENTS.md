@@ -98,6 +98,16 @@ most debugging:
   loop iteration (actual item size); Rust `ape/tag/read.rs` only subtracts 4
   (`value_size`), which is an upstream oversight that miscounts remaining
   bytes. Go's strict accounting is an intentional deviation for robustness.
+- **Ogg page errors are two-tiered** (`oggHeaderError`): header/segment-table
+  failures end packet scans (`Packets::read_count`'s `while let Ok`) and are
+  the only retry candidates in `find_last_page`; body errors abort. The
+  comment packet's vendor is the file's — on write it always overrides the
+  tag's own vendor/`EncoderSoftware`; truncated vendor = hard error,
+  invalid UTF-8 → `""`.
+- **Vorbis values**: trailing NULs trimmed on read (`utf8_decode_str`),
+  including TRACKNUMBER/DISCNUMBER before the `n/total` split. Unknown-key
+  items are dropped in generic→concrete conversion (`map_key` → None), not
+  stored under their description.
 
 ## Fixture paths
 
