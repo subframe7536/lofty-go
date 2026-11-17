@@ -3,6 +3,8 @@ package id3v1
 import (
 	"bytes"
 	"io"
+	"strconv"
+	"unicode/utf8"
 
 	meta "github.com/subframe7536/lofty-go/internal/meta"
 	"github.com/subframe7536/lofty-go/internal/util"
@@ -172,7 +174,7 @@ func Id3v1TagFromTag(input *meta.Tag) *Id3v1Tag {
 		Comment: take(meta.ItemKeyComment),
 	}
 	if s, ok := input.GetString(meta.ItemKeyYear); ok {
-		if n, err := util.Atoi(s); err == nil {
+		if n, ok := parseUint(s, 16); ok {
 			tag.Year = meta.Some(uint16(n))
 		}
 	}
@@ -182,19 +184,49 @@ func Id3v1TagFromTag(input *meta.Tag) *Id3v1Tag {
 		}
 	}
 	if s, ok := input.GetString(meta.ItemKeyTrackNumber); ok {
-		if n, err := util.Atoi(s); err == nil && n <= 255 {
+		if n, ok := parseUint(s, 8); ok {
 			tag.TrackNumber = meta.Some(uint8(n))
 		}
 	}
 	if g, ok := input.GetString(meta.ItemKeyGenre); ok {
-		for i, genre := range Id3v1Genres {
-			if genre == g {
-				tag.Genre = meta.Some(uint8(i))
-				break
-			}
-		}
+		tag.Genre = genreIndex(g)
 	}
 	return tag
+}
+
+// genreIndex maps a genre name to its ID3v1 index (exact match), falling back
+// to a numeric string that fits a u8, like Rust's `Id3v1Tag::from(Tag)`.
+func genreIndex(g string) meta.Option[uint8] {
+	for i, genre := range Id3v1Genres {
+		if genre == g {
+			return meta.Some(uint8(i))
+		}
+	}
+	if n, ok := parseUint(g, 8); ok {
+		return meta.Some(uint8(n))
+	}
+	return meta.None[uint8]()
+}
+
+// parseUint parses like Rust's `str::parse::<uN>()`: base 10, an optional
+// leading '+', no whitespace, and values must fit in `bits`.
+func parseUint(s string, bits int) (uint64, bool) {
+	if len(s) > 1 && s[0] == '+' {
+		s = s[1:]
+	}
+	n, err := strconv.ParseUint(s, 10, bits)
+	return n, err == nil
+}
+
+// truncateRunes returns the first n characters of s.
+func truncateRunes(s string, n int) string {
+	for i := range s {
+		if n == 0 {
+			return s[:i]
+		}
+		n--
+	}
+	return s
 }
 
 func (t *Id3v1Tag) isEmpty() bool {
@@ -208,55 +240,59 @@ func (t *Id3v1Tag) isEmpty() bool {
 }
 
 func id3v1Encode(tag *Id3v1Tag, writeOptions meta.WriteOptions) ([]byte, error) {
-	encodeField := func(field meta.Option[string], len_ int, fieldName string) ([]byte, error) {
+	encodeField := func(field meta.Option[string], len_ int) ([]byte, error) {
+		buf := make([]byte, len_)
 		if s, ok := field.Get(); ok {
-			if len([]rune(s)) > len_ && !writeOptions.ImplicitTruncation {
-				return nil, &Id3v1EncodingError{Message: fieldName + " is too long"}
+			if utf8.RuneCountInString(s) > len_ {
+				if !writeOptions.ImplicitTruncation {
+					return nil, &Id3v1EncodingError{Source: &meta.TooMuchDataError{}}
+				}
+				// Rust encodes lazily and takes `len_` chars, so characters
+				// past the cut are never checked for encodability.
+				s = truncateRunes(s, len_)
 			}
 			enc, err := util.Latin1Encode(s, writeOptions.LossyTextEncoding)
 			if err != nil {
 				return nil, &Id3v1EncodingError{Source: err}
 			}
-			if len(enc) > len_ {
-				enc = enc[:len_]
-			}
-			buf := make([]byte, len_)
 			copy(buf, enc)
-			return buf, nil
 		}
-		return make([]byte, len_), nil
+		return buf, nil
 	}
 
 	var writer bytes.Buffer
 	writer.Write(Id3v1TagMarker)
 
-	title, err := encodeField(tag.Title, 30, "Title")
+	title, err := encodeField(tag.Title, 30)
 	if err != nil {
 		return nil, err
 	}
 	writer.Write(title)
 
-	artist, err := encodeField(tag.Artist, 30, "Artist")
+	artist, err := encodeField(tag.Artist, 30)
 	if err != nil {
 		return nil, err
 	}
 	writer.Write(artist)
 
-	album, err := encodeField(tag.Album, 30, "Album")
+	album, err := encodeField(tag.Album, 30)
 	if err != nil {
 		return nil, err
 	}
 	writer.Write(album)
 
+	// Zero-padded to four digits and clamped to 9999 (Rust: `min(year, 9999)`)
+	var year [4]byte
 	if y, ok := tag.Year.Get(); ok {
-		var buf [4]byte
-		copy(buf[:], util.Itoa(int(y)))
-		writer.Write(buf[:])
-	} else {
-		writer.Write(make([]byte, 4))
+		y = min(y, 9999)
+		for i := 3; i >= 0; i-- {
+			year[i] = '0' + byte(y%10)
+			y /= 10
+		}
 	}
+	writer.Write(year[:])
 
-	comment, err := encodeField(tag.Comment, 28, "Comment")
+	comment, err := encodeField(tag.Comment, 28)
 	if err != nil {
 		return nil, err
 	}

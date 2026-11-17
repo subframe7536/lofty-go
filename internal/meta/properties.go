@@ -227,6 +227,82 @@ const (
 	AudioObjectTypeAacScalableSampleRate AudioObjectType = 3
 	// AudioObjectTypeAacLongTermPrediction is AAC Long Term Predictor.
 	AudioObjectTypeAacLongTermPrediction AudioObjectType = 4
+	// AudioObjectTypeSpectralBandReplication is Spectral Band Replication.
+	AudioObjectTypeSpectralBandReplication AudioObjectType = 5
+	// AudioObjectTypeAACScalable is AAC Scalable.
+	AudioObjectTypeAACScalable AudioObjectType = 6
+	// AudioObjectTypeTwinVQ is Twin VQ.
+	AudioObjectTypeTwinVQ AudioObjectType = 7
+	// AudioObjectTypeCodeExcitedLinearPrediction is Code Excited Linear Prediction (CELP).
+	AudioObjectTypeCodeExcitedLinearPrediction AudioObjectType = 8
+	// AudioObjectTypeHarmonicVectorExcitationCoding is Harmonic Vector Excitation Coding (HVXC).
+	AudioObjectTypeHarmonicVectorExcitationCoding AudioObjectType = 9
+	// AudioObjectTypeTextToSpeechtInterface is Text-To-Speech Interface (TTSI).
+	//
+	// The name keeps Rust's spelling (`TextToSpeechtInterface`).
+	AudioObjectTypeTextToSpeechtInterface AudioObjectType = 12
+	// AudioObjectTypeMainSynthetic is Main Synthetic.
+	AudioObjectTypeMainSynthetic AudioObjectType = 13
+	// AudioObjectTypeWavetableSynthesis is Wavetable Synthesis.
+	AudioObjectTypeWavetableSynthesis AudioObjectType = 14
+	// AudioObjectTypeGeneralMIDI is General MIDI.
+	AudioObjectTypeGeneralMIDI AudioObjectType = 15
+	// AudioObjectTypeAlgorithmicSynthesis is Algorithmic Synthesis and Audio FX.
+	AudioObjectTypeAlgorithmicSynthesis AudioObjectType = 16
+	// AudioObjectTypeErrorResilientAacLowComplexity is Error Resilient AAC Low Complexity.
+	AudioObjectTypeErrorResilientAacLowComplexity AudioObjectType = 17
+	// AudioObjectTypeErrorResilientAacLongTermPrediction is Error Resilient AAC Long Term Prediction.
+	AudioObjectTypeErrorResilientAacLongTermPrediction AudioObjectType = 19
+	// AudioObjectTypeErrorResilientAacScalable is Error Resilient AAC Scalable.
+	AudioObjectTypeErrorResilientAacScalable AudioObjectType = 20
+	// AudioObjectTypeErrorResilientAacTwinVQ is Error Resilient AAC TwinVQ.
+	AudioObjectTypeErrorResilientAacTwinVQ AudioObjectType = 21
+	// AudioObjectTypeErrorResilientAacBitSlicedArithmeticCoding is Error Resilient Bit Sliced Arithmetic Coding.
+	AudioObjectTypeErrorResilientAacBitSlicedArithmeticCoding AudioObjectType = 22
+	// AudioObjectTypeErrorResilientAacLowDelay is Error Resilient AAC Low Delay.
+	AudioObjectTypeErrorResilientAacLowDelay AudioObjectType = 23
+	// AudioObjectTypeErrorResilientCodeExcitedLinearPrediction is Error Resilient Code Excited Linear Prediction.
+	AudioObjectTypeErrorResilientCodeExcitedLinearPrediction AudioObjectType = 24
+	// AudioObjectTypeErrorResilientHarmonicVectorExcitationCoding is Error Resilient Harmonic Vector Excitation Coding.
+	AudioObjectTypeErrorResilientHarmonicVectorExcitationCoding AudioObjectType = 25
+	// AudioObjectTypeErrorResilientHarmonicIndividualLinesNoise is Error Resilient Harmonic and Individual Lines plus Noise.
+	AudioObjectTypeErrorResilientHarmonicIndividualLinesNoise AudioObjectType = 26
+	// AudioObjectTypeErrorResilientParametric is Error Resilient Parametric.
+	AudioObjectTypeErrorResilientParametric AudioObjectType = 27
+	// AudioObjectTypeSinuSoidalCoding is Sinusoidal Coding (SSC).
+	AudioObjectTypeSinuSoidalCoding AudioObjectType = 28
+	// AudioObjectTypeParametricStereo is Parametric Stereo.
+	AudioObjectTypeParametricStereo AudioObjectType = 29
+	// AudioObjectTypeMpegSurround is MPEG Surround.
+	AudioObjectTypeMpegSurround AudioObjectType = 30
+	// AudioObjectTypeMpegLayer1 is MPEG Layer 1.
+	AudioObjectTypeMpegLayer1 AudioObjectType = 32
+	// AudioObjectTypeMpegLayer2 is MPEG Layer 2.
+	AudioObjectTypeMpegLayer2 AudioObjectType = 33
+	// AudioObjectTypeMpegLayer3 is MPEG Layer 3.
+	AudioObjectTypeMpegLayer3 AudioObjectType = 34
+	// AudioObjectTypeDirectStreamTransfer is Direct Stream Transfer (DST).
+	AudioObjectTypeDirectStreamTransfer AudioObjectType = 35
 	// AudioObjectTypeAudioLosslessCoding is MPEG-4 ALS.
 	AudioObjectTypeAudioLosslessCoding AudioObjectType = 36
+	// AudioObjectTypeScalableLosslessCoding is Scalable Lossless Coding (SLS).
+	AudioObjectTypeScalableLosslessCoding AudioObjectType = 37
+	// AudioObjectTypeScalableLosslessCodingNoneCore is Scalable Lossless Coding non-core.
+	AudioObjectTypeScalableLosslessCodingNoneCore AudioObjectType = 38
+	// AudioObjectTypeErrorResilientAacEnhancedLowDelay is Error Resilient AAC Enhanced Low Delay.
+	AudioObjectTypeErrorResilientAacEnhancedLowDelay AudioObjectType = 39
+	// AudioObjectTypeSymbolicMusicRepresentationSimple is Symbolic Music Representation Simple.
+	AudioObjectTypeSymbolicMusicRepresentationSimple AudioObjectType = 40
+	// AudioObjectTypeSymbolicMusicRepresentationMain is Symbolic Music Representation Main.
+	AudioObjectTypeSymbolicMusicRepresentationMain AudioObjectType = 41
+	// AudioObjectTypeUnifiedSpeechAudioCoding is Unified Speech and Audio Coding (USAC).
+	AudioObjectTypeUnifiedSpeechAudioCoding AudioObjectType = 42
+	// AudioObjectTypeSpatialAudioObjectCoding is Spatial Audio Object Coding (SAOC).
+	AudioObjectTypeSpatialAudioObjectCoding AudioObjectType = 43
+	// AudioObjectTypeLowDelayMpegSurround is Low Delay MPEG Surround.
+	AudioObjectTypeLowDelayMpegSurround AudioObjectType = 44
+	// AudioObjectTypeSpatialAudioObjectCodingDialogueEnhancement is Spatial Audio Object Coding - Dialog Enhancement.
+	AudioObjectTypeSpatialAudioObjectCodingDialogueEnhancement AudioObjectType = 45
+	// AudioObjectTypeAudioSync is Audio Sync.
+	AudioObjectTypeAudioSync AudioObjectType = 46
 )

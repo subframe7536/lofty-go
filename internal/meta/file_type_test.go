@@ -74,7 +74,7 @@ func TestFileTypeFromExtASCIIFoldOnly(t *testing.T) {
 }
 
 func TestFileTypeExtensionsAllResolve(t *testing.T) {
-	for _, e := range Extensions {
+	for _, e := range Extensions() {
 		if _, ok := FileTypeFromExt(e); !ok {
 			t.Errorf("extension %q does not resolve", e)
 		}

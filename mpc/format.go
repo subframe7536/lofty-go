@@ -83,6 +83,66 @@ const (
 	MpcLinkLoudStartAndEnd
 )
 
+// MpcStreamVersion is the version of a Musepack stream. The zero value is
+// stream version 8, like Rust's default.
+type MpcStreamVersion uint8
+
+const (
+	// MpcStreamVersionSv8 is stream version 8.
+	MpcStreamVersionSv8 MpcStreamVersion = iota
+	// MpcStreamVersionSv7 is stream version 7.
+	MpcStreamVersionSv7
+	// MpcStreamVersionSv4to6 is stream versions 4 to 6.
+	MpcStreamVersionSv4to6
+)
+
+// MpcSv8StreamHeader is the information from an SV8 Stream Header packet
+// (Rust `musepack::sv8::StreamHeader`).
+type MpcSv8StreamHeader struct {
+	// CRC is the CRC 32 of the stream header packet.
+	CRC uint32
+	// StreamVersion is the bitstream version.
+	StreamVersion uint8
+	// SampleCount is the number of samples in the stream. 0 = unknown.
+	SampleCount uint64
+	// BeginningSilence is the number of samples to skip at the start.
+	BeginningSilence uint64
+	// SampleRate is the mapped sampling frequency in Hz.
+	SampleRate uint32
+	// MaxUsedBands is the maximum number of bands used in the file.
+	MaxUsedBands uint8
+	// Channels is the number of channels in the stream.
+	Channels uint8
+	// MSUsed reports whether Mid Side Stereo is enabled.
+	MSUsed bool
+	// AudioBlockFrames is the number of frames per audio packet.
+	AudioBlockFrames uint16
+}
+
+// MpcSv8ReplayGain is the information from an SV8 ReplayGain packet
+// (Rust `musepack::sv8::ReplayGain`). Values are dB in Q8.8 format; 0 means
+// the field was not computed.
+type MpcSv8ReplayGain struct {
+	Version   uint8
+	TitleGain uint16
+	TitlePeak uint16
+	AlbumGain uint16
+	AlbumPeak uint16
+}
+
+// MpcSv8EncoderInfo is the information from an SV8 Encoder Info packet
+// (Rust `musepack::sv8::EncoderInfo`).
+type MpcSv8EncoderInfo struct {
+	// Profile is the quality in 4.3 format.
+	Profile float32
+	// PNSTool reports whether the Perceptual Noise Substitution tool is on.
+	PNSTool bool
+	Major   uint8
+	// Minor is even for stable versions, odd when unstable.
+	Minor uint8
+	Build uint8
+}
+
 // MpcProperties are the audio properties of a Musepack file.
 type MpcProperties struct {
 	Version        uint8
@@ -109,6 +169,12 @@ type MpcProperties struct {
 	LastFrameLength uint16
 	FastSeekingSafe bool
 	EncoderVersion  uint8
+
+	// SV8 packets: the Stream Header and ReplayGain packets (zero when
+	// missing in a relaxed parse) and the optional Encoder Info packet.
+	StreamHeader MpcSv8StreamHeader
+	ReplayGain   MpcSv8ReplayGain
+	EncoderInfo  meta.Option[MpcSv8EncoderInfo]
 }
 
 // FileProperties converts to generic [FileProperties].
@@ -126,11 +192,16 @@ func (p MpcProperties) FileProperties() meta.FileProperties {
 
 // MusepackFile is a Musepack file.
 type MusepackFile struct {
-	Properties MpcProperties
-	ID3v1      meta.Option[*id3v1.Id3v1Tag]
-	ID3v2      meta.Option[*id3v2.Id3v2Tag]
-	Ape        meta.Option[*ape.ApeTag]
+	streamVersion MpcStreamVersion
+	Properties    MpcProperties
+	ID3v1         meta.Option[*id3v1.Id3v1Tag]
+	ID3v2         meta.Option[*id3v2.Id3v2Tag]
+	Ape           meta.Option[*ape.ApeTag]
 }
+
+// StreamVersion returns the version of the Musepack stream, determined from
+// the file's magic signature.
+func (f *MusepackFile) StreamVersion() MpcStreamVersion { return f.streamVersion }
 
 var mpcSampleRates = [8]uint32{44100, 48000, 37800, 32000, 0, 0, 0, 0}
 
@@ -214,6 +285,14 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 			}
 		}
 	}
+	switch {
+	case isSV8:
+		file.streamVersion = MpcStreamVersionSv8
+	case bytes.Equal(sig[:], []byte("MP+")):
+		file.streamVersion = MpcStreamVersionSv7
+	default:
+		file.streamVersion = MpcStreamVersionSv4to6
+	}
 	if isSV8 {
 		p.Version = 8
 		// SV8: "MPCK" + SH packet: [2B key "SH"][varint size][data]
@@ -252,11 +331,14 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 				if _, err := io.ReadFull(bounded, crc[:]); err != nil {
 					return nil, &meta.FileParseError{Source: err}
 				}
+				sh := &p.StreamHeader
+				sh.CRC = binary.BigEndian.Uint32(crc[:])
 				var ver [1]byte
 				if _, err := io.ReadFull(bounded, ver[:]); err != nil {
 					return nil, &meta.FileParseError{Source: err}
 				}
 				p.Version = ver[0]
+				sh.StreamVersion = ver[0]
 				if sampleCount, err = mpcReadSize(bounded); err != nil {
 					return nil, &meta.FileParseError{Source: err}
 				}
@@ -267,8 +349,15 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 				if _, err := io.ReadFull(bounded, bits[:]); err != nil {
 					return nil, &meta.FileParseError{Source: err}
 				}
-				p.SampleRate = mpcSampleRates[(int(bits[0])>>5)&7]
-				p.Channels = uint8((int(bits[1]) >> 4) + 1)
+				sh.SampleCount = sampleCount
+				sh.BeginningSilence = beginningSilence
+				sh.SampleRate = mpcSampleRates[(bits[0]>>5)&7]
+				sh.MaxUsedBands = (bits[0] & 0x1F) + 1
+				sh.Channels = (bits[1] >> 4) + 1
+				sh.MSUsed = bits[1]&0x08 != 0
+				sh.AudioBlockFrames = 1 << (2 * (bits[1] & 0x07))
+				p.SampleRate = sh.SampleRate
+				p.Channels = sh.Channels
 				foundSH = true
 			case "SE":
 				foundSE = true
@@ -278,6 +367,13 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 				if _, err := io.ReadFull(bounded, rg[:]); err != nil {
 					return nil, &meta.FileParseError{Source: err}
 				}
+				p.ReplayGain = MpcSv8ReplayGain{
+					Version:   rg[0],
+					TitleGain: binary.BigEndian.Uint16(rg[1:]),
+					TitlePeak: binary.BigEndian.Uint16(rg[3:]),
+					AlbumGain: binary.BigEndian.Uint16(rg[5:]),
+					AlbumPeak: binary.BigEndian.Uint16(rg[7:]),
+				}
 				foundRG = true
 			case "EI":
 				// EI body: profile/PNS byte + major/minor/build bytes
@@ -285,6 +381,13 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 				if _, err := io.ReadFull(bounded, ei[:]); err != nil {
 					return nil, &meta.FileParseError{Source: err}
 				}
+				p.EncoderInfo = meta.Some(MpcSv8EncoderInfo{
+					Profile: float32((ei[0]&0xFE)>>1) / 8.0,
+					PNSTool: ei[0]&0x01 == 1,
+					Major:   ei[1],
+					Minor:   ei[2],
+					Build:   ei[3],
+				})
 			}
 			// Rust's PacketReader discards the packet remainder from the current
 			// position on the next `next()`; the cursor only ever moves forward.
@@ -314,9 +417,9 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 				}
 				totalSamples := sampleCount - beginningSilence
 				if p.SampleRate > 0 && totalSamples > 0 {
-					length := util.DivRound(totalSamples*1000, uint64(p.SampleRate))
-					p.Duration = time.Duration(length) * time.Millisecond
-					bitrate := uint32(sv8StreamLen * 8 * uint64(p.SampleRate) / (totalSamples * 1000))
+					length := util.MulDivRound(totalSamples, 1000, uint64(p.SampleRate))
+					p.Duration = util.DurationFromMillis(length)
+					bitrate := uint32(util.MulDiv(util.SaturatingMul(sv8StreamLen, 8), uint64(p.SampleRate), util.SaturatingMul(totalSamples, 1000)))
 					p.OverallBitrate = bitrate
 					p.AudioBitrate = bitrate
 				}
@@ -337,7 +440,7 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 			if rest[0]&0x0F != 7 {
 				return nil, &meta.FileParseError{Source: &MpcParseError{Message: "expected stream version 7"}}
 			}
-			p.Version = rest[0]
+			p.Version = rest[0] & 0x0F
 			frameCount := binary.LittleEndian.Uint32(rest[1:])
 			p.FrameCount = frameCount
 			hdrFlags := binary.LittleEndian.Uint32(rest[5:])
@@ -374,7 +477,7 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 				const mpcFrameLength = 1152
 				const mpcDecoderSynthDelay = 481
 				length := float64(frameCount) * (float64(mpcFrameLength) / float64(p.SampleRate)) * 1000.0
-				p.Duration = time.Duration(length) * time.Millisecond
+				p.Duration = util.DurationFromMillis(uint64(length))
 				var totalSamples uint64
 				if p.TrueGapless {
 					totalSamples = uint64(frameCount)*mpcFrameLength - (mpcFrameLength - uint64(p.LastFrameLength))
@@ -382,7 +485,7 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 					totalSamples = uint64(frameCount)*mpcFrameLength - mpcDecoderSynthDelay
 				}
 				if totalSamples > 0 {
-					bitrate := uint32(streamLen * 8 * uint64(p.SampleRate) / (totalSamples * 1000))
+					bitrate := uint32(util.MulDiv(util.SaturatingMul(streamLen, 8), uint64(p.SampleRate), totalSamples*1000))
 					p.OverallBitrate = bitrate
 					p.AudioBitrate = bitrate
 				}
@@ -435,9 +538,9 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 				const mpcFrameLength = 1152
 				const mpcDecoderSynthDelay = 481
 				samples := uint64(p.FrameCount)*mpcFrameLength - mpcDecoderSynthDelay
-				p.Duration = time.Duration(util.DivRound(samples*1000, uint64(p.SampleRate))) * time.Millisecond
+				p.Duration = util.DurationFromMillis(util.MulDivRound(samples, 1000, uint64(p.SampleRate)))
 				pcmFrames := uint64(p.FrameCount)*mpcFrameLength - 576
-				bitrate := uint32(float64(streamLen) * 8.0 * float64(p.SampleRate) / float64(pcmFrames) / mpcFrameLength)
+				bitrate := util.F64ToU32(float64(streamLen) * 8.0 * float64(p.SampleRate) / float64(pcmFrames) / mpcFrameLength)
 				p.OverallBitrate = bitrate
 				p.AudioBitrate = bitrate
 			}

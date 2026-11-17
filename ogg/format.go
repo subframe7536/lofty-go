@@ -122,56 +122,52 @@ func oggFirstPage(reader io.ReadSeeker) (serial uint32, granule uint64, err erro
 }
 
 // oggLastGranulePos finds the last page's granule position for duration,
-// mirroring Rust's `find_last_page`: it searches backward from EOF to the
-// header end for the last valid page. A candidate whose header is malformed
-// (`MissingMagic`/`InvalidVersion`/`BadSegmentCount`) is skipped, like Rust;
-// any other error aborts the search and the caller falls back to the 1000ms
-// default length.
+// mirroring Rust's `find_last_page`: the first reverse search runs from EOF
+// all the way to the stream start; only the retries after a false positive
+// (`MissingMagic`/`InvalidVersion`/`BadSegmentCount`) are bounded by
+// `headerEnd`. Any other error aborts the search and the caller falls back to
+// the 1000ms default length.
 func oggLastGranulePos(reader io.ReadSeeker, headerEnd int64) (uint64, error) {
-	end, err := reader.Seek(0, io.SeekEnd)
+	found, err := util.NewRevPatternSearcher(reader, oggPreamble).Search()
 	if err != nil {
 		return 0, err
 	}
-	// Rust scans in MAX_CONTENT_SIZE/4 (~16KB) chunks, overlapping enough to
-	// fully validate a header (27 + 255 bytes max).
-	const scanChunk = 16256
-	const overlap = 27 + 255 - 1
-	for pos := end; pos > headerEnd; {
-		start := pos - scanChunk
-		if start < headerEnd {
-			start = headerEnd
-		}
-		if _, err := reader.Seek(start, io.SeekStart); err != nil {
+	if !found {
+		return 0, errOggMissingMagic
+	}
+	for {
+		current, err := reader.Seek(0, io.SeekCurrent)
+		if err != nil {
 			return 0, err
 		}
-		buf := make([]byte, pos-start)
-		if _, err := io.ReadFull(reader, buf); err != nil {
-			return 0, err
-		}
-		for idx := bytes.LastIndex(buf, oggPreamble); idx >= 0; idx = bytes.LastIndex(buf[:idx], oggPreamble) {
-			if _, err := reader.Seek(start+int64(idx), io.SeekStart); err != nil {
-				return 0, err
-			}
-			page, err := readOggPage(reader)
-			if err != nil {
-				var he *oggHeaderError
-				if errors.As(err, &he) &&
-					(errors.Is(he.err, errOggMissingMagic) ||
-						errors.Is(he.err, errOggInvalidVersion) ||
-						errors.Is(he.err, errOggBadSegmentCount)) {
-					// False positive, keep searching
-					continue
-				}
-				return 0, err
-			}
+		page, err := readOggPage(reader)
+		if err == nil {
 			return page.granulePos, nil
 		}
-		if pos-start < overlap+1 {
-			break
+		var he *oggHeaderError
+		if !errors.As(err, &he) {
+			return 0, err
 		}
-		pos = start + overlap
+		if !errors.Is(he.err, errOggMissingMagic) &&
+			!errors.Is(he.err, errOggInvalidVersion) &&
+			!errors.Is(he.err, errOggBadSegmentCount) {
+			return 0, err
+		}
+		// False positive, keep searching
+		if _, err := reader.Seek(current, io.SeekStart); err != nil {
+			return 0, err
+		}
+		found, err := util.NewRevPatternSearcher(reader, oggPreamble).
+			WithStart(util.RevSearchFromCurrent).
+			WithEnd(util.RevSearchEndAtPos(uint64(max(headerEnd, 0)))).
+			Search()
+		if err != nil {
+			return 0, err
+		}
+		if !found {
+			return 0, errOggMissingMagic
+		}
 	}
-	return 0, errOggMissingMagic
 }
 
 // OggProperties are the audio properties of an Ogg file.
@@ -231,34 +227,14 @@ type OggSpeexFile struct {
 	VorbisComments meta.Option[*vorbis.VorbisCommentsTag]
 }
 
-// oggReadTagged reads an Ogg file: returns (properties, vorbis comments tag, file type).
+// oggReadTagged sniffs the codec from the identification packet and reads an
+// Ogg file: returns (properties, vorbis comments tag, file type). The format
+// readers use [oggReadTaggedAs] with the requested type instead.
 func oggReadTagged(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*OggProperties, *vorbis.VorbisCommentsTag, meta.FileType, error) {
 	start, err := reader.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return nil, nil, meta.FileType{}, &meta.FileParseError{Source: err}
 	}
-	streamEnd, err := reader.Seek(0, io.SeekEnd)
-	if err != nil {
-		return nil, nil, meta.FileType{}, &meta.FileParseError{Source: err}
-	}
-	streamLen := uint64(streamEnd - start)
-	if _, err := reader.Seek(start, io.SeekStart); err != nil {
-		return nil, nil, meta.FileType{}, &meta.FileParseError{Source: err}
-	}
-
-	_, firstGranule, err := oggFirstPage(reader)
-	if err != nil {
-		return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &OggParseError{Source: err}}
-	}
-	if _, err := reader.Seek(start, io.SeekStart); err != nil {
-		return nil, nil, meta.FileType{}, &meta.FileParseError{Source: err}
-	}
-
-	// Rust dispatches on the concrete file type, so each reader knows how many
-	// header packets to read (3 for Vorbis, 2 for Opus/Speex). This shared
-	// entry point sniffs the identification packet first, then re-reads the
-	// whole header packet region from the start in one call — matching
-	// `Packets::read_count`.
 	sniffed, _, _, err := OggReadCountPackets(reader, 1)
 	if err != nil {
 		return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &OggParseError{Source: err}}
@@ -269,41 +245,85 @@ func oggReadTagged(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*OggPr
 	ident := sniffed[0]
 
 	var fType meta.FileType
-	var identSig, commentSig []byte
-	packetCount := 2
 	switch {
 	case len(ident) >= 7 && bytes.Equal(ident[1:7], []byte("vorbis")):
 		fType = meta.FileTypeVorbis
+	case len(ident) >= 8 && bytes.Equal(ident[:8], []byte("OpusHead")):
+		fType = meta.FileTypeOpus
+	case len(ident) >= 8 && bytes.Equal(ident[:8], []byte("Speex   ")):
+		fType = meta.FileTypeSpeex
+	default:
+		return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &OggParseError{Message: "unsupported Ogg codec"}}
+	}
+	props, vc, err := oggReadTaggedAs(reader, parseOptions, fType)
+	if err != nil {
+		return nil, nil, meta.FileType{}, err
+	}
+	return props, vc, fType, nil
+}
+
+// oggReadTaggedAs reads an Ogg file as the requested codec, mirroring Rust's
+// per-type `read_from`: each type knows its signatures and header packet
+// count (3 for Vorbis, 2 for Opus/Speex), and a stream that does not carry the
+// requested identification signature fails with "file missing magic signature".
+func oggReadTaggedAs(reader io.ReadSeeker, parseOptions meta.ParseOptions, fType meta.FileType) (*OggProperties, *vorbis.VorbisCommentsTag, error) {
+	// Errors raised before the properties step carry the file type (Rust's
+	// `with_format` on the shared `read_from`).
+	headerErr := func(src error) error { return &meta.FileParseError{FileType: fType, Source: src} }
+
+	var identSig, commentSig []byte
+	packetCount := 2
+	switch {
+	case fType.Equal(meta.FileTypeVorbis):
 		identSig = []byte{1, 'v', 'o', 'r', 'b', 'i', 's'}
 		commentSig = []byte{3, 'v', 'o', 'r', 'b', 'i', 's'}
 		packetCount = 3
-	case len(ident) >= 8 && bytes.Equal(ident[:8], []byte("OpusHead")):
-		fType = meta.FileTypeOpus
+	case fType.Equal(meta.FileTypeOpus):
 		identSig = []byte("OpusHead")
 		commentSig = []byte("OpusTags")
-	case len(ident) >= 8 && bytes.Equal(ident[:8], []byte("Speex   ")):
-		fType = meta.FileTypeSpeex
+	case fType.Equal(meta.FileTypeSpeex):
 		identSig = []byte("Speex   ")
 	default:
-		return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &OggParseError{Message: "unsupported Ogg codec"}}
+		return nil, nil, &meta.FileParseError{Source: &OggParseError{Message: "unsupported Ogg codec"}}
+	}
+
+	start, err := reader.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return nil, nil, headerErr(err)
+	}
+	streamEnd, err := reader.Seek(0, io.SeekEnd)
+	if err != nil {
+		return nil, nil, headerErr(err)
+	}
+	streamLen := uint64(streamEnd - start)
+	if _, err := reader.Seek(start, io.SeekStart); err != nil {
+		return nil, nil, headerErr(err)
+	}
+
+	_, firstGranule, err := oggFirstPage(reader)
+	if err != nil {
+		return nil, nil, headerErr(&OggParseError{Source: err})
+	}
+	if _, err := reader.Seek(start, io.SeekStart); err != nil {
+		return nil, nil, headerErr(err)
 	}
 
 	packets, _, _, err := OggReadCountPackets(reader, packetCount)
 	if err != nil {
-		return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &OggParseError{Source: err}}
+		return nil, nil, headerErr(&OggParseError{Source: err})
 	}
 	if len(packets) < 2 {
-		return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &OggParseError{Message: "missing Ogg header packets"}}
+		return nil, nil, headerErr(&OggParseError{Message: "missing Ogg header packets"})
 	}
-	ident = packets[0]
+	ident := packets[0]
 	// Rust `verify_signature` — a hard error in every parsing mode
 	if len(ident) < len(identSig) || !bytes.Equal(ident[:len(identSig)], identSig) {
-		return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &OggParseError{Message: "file missing magic signature"}}
+		return nil, nil, headerErr(&OggParseError{Message: "file missing magic signature"})
 	}
 	// Rust's find_last_page searches back to where the header packets ended.
 	headerEnd, err := reader.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return nil, nil, meta.FileType{}, &meta.FileParseError{Source: err}
+		return nil, nil, headerErr(err)
 	}
 
 	props := &OggProperties{}
@@ -314,11 +334,11 @@ func oggReadTagged(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*OggPr
 		comment := packets[1]
 		if len(commentSig) > 0 &&
 			(len(comment) < len(commentSig) || !bytes.Equal(comment[:len(commentSig)], commentSig)) {
-			return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &OggParseError{Message: "file missing magic signature"}}
+			return nil, nil, headerErr(&OggParseError{Message: "file missing magic signature"})
 		}
 		t, err := vorbis.ParseVorbisComments(comment[len(commentSig):], parseOptions)
 		if err != nil {
-			return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &vorbis.VorbisCommentsParseError{Source: err}}
+			return nil, nil, headerErr(&vorbis.VorbisCommentsParseError{Source: err})
 		}
 		vc = t
 	}
@@ -329,7 +349,7 @@ func oggReadTagged(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*OggPr
 			// Identification header: vorbis_version(4) channels(1) rate(4)
 			// bitrate_max(4) nominal(4) min(4) — 28 bytes minimum.
 			if len(ident) < 28 {
-				return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &OggParseError{Source: io.ErrUnexpectedEOF}}
+				return nil, nil, &meta.FileParseError{Source: &OggParseError{Source: io.ErrUnexpectedEOF}}
 			}
 			props.Version = binary.LittleEndian.Uint32(ident[7:])
 			props.Channels = ident[11]
@@ -342,7 +362,7 @@ func oggReadTagged(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*OggPr
 			// Rust reads these fields through a byte reader — a truncated
 			// OpusHead errors.
 			if len(ident) < 19 {
-				return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &OggParseError{Message: "truncated OpusHead"}}
+				return nil, nil, &meta.FileParseError{Source: &OggParseError{Message: "truncated OpusHead"}}
 			}
 			props.Version = uint32(ident[8])
 			props.Channels = ident[9]
@@ -351,16 +371,16 @@ func oggReadTagged(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*OggPr
 			props.OutputGainDb = float32(int16(binary.LittleEndian.Uint16(ident[16:]))) / 256
 			family := ident[18]
 			if family > 1 {
-				return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &OggParseError{Message: "invalid channel mapping family"}}
+				return nil, nil, &meta.FileParseError{Source: &OggParseError{Message: "invalid channel mapping family"}}
 			}
 			if (family == 0 && props.Channels > 2) || (family == 1 && props.Channels > 8) {
-				return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &OggParseError{Message: "invalid channel count for mapping family"}}
+				return nil, nil, &meta.FileParseError{Source: &OggParseError{Message: "invalid channel count for mapping family"}}
 			}
 			mask, ok := meta.ChannelMaskFromOpusChannels(props.Channels).Get()
 			if !ok {
 				// Rust's `expect` cannot fail after the family checks; a
 				// channel count of 0 lands here instead.
-				return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &OggParseError{Message: "invalid channel count"}}
+				return nil, nil, &meta.FileParseError{Source: &OggParseError{Message: "invalid channel count"}}
 			}
 			props.ChannelMask = meta.Some(mask)
 			// Rust reports `input_sample_rate`; duration still uses 48kHz.
@@ -368,16 +388,16 @@ func oggReadTagged(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*OggPr
 		case meta.FileTypeSpeex:
 			// The Speex header is a fixed 80-byte structure.
 			if len(ident) < 80 {
-				return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &OggParseError{Message: "header packet too small"}}
+				return nil, nil, &meta.FileParseError{Source: &OggParseError{Message: "header packet too small"}}
 			}
 			props.Version = binary.LittleEndian.Uint32(ident[28:])
 			if props.Version > 1 {
-				return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &OggParseError{Message: "unknown speex stream version"}}
+				return nil, nil, &meta.FileParseError{Source: &OggParseError{Message: "unknown speex stream version"}}
 			}
 			props.SampleRate = binary.LittleEndian.Uint32(ident[36:])
 			props.Mode = binary.LittleEndian.Uint32(ident[40:])
 			if channels := binary.LittleEndian.Uint32(ident[48:]); channels != 1 && channels != 2 {
-				return nil, nil, meta.FileType{}, &meta.FileParseError{Source: &OggParseError{Message: "found invalid channel count, must be mono or stereo"}}
+				return nil, nil, &meta.FileParseError{Source: &OggParseError{Message: "found invalid channel count, must be mono or stereo"}}
 			} else {
 				props.Channels = uint8(channels)
 			}
@@ -409,8 +429,10 @@ func oggReadTagged(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*OggPr
 				total = 0
 			}
 			if total > 0 {
-				lengthMs = util.DivRound(total*1000, uint64(rate))
-				props.Duration = time.Duration(lengthMs) * time.Millisecond
+				// Rust's Vorbis math is u128; Opus/Speex multiply in u64
+				// (saturated here instead of wrapping).
+				lengthMs = util.MulDivRound(total, 1000, uint64(rate))
+				props.Duration = util.DurationFromMillis(lengthMs)
 				gotTotal = true
 			}
 		}
@@ -431,29 +453,31 @@ func oggReadTagged(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*OggPr
 		switch fType {
 		case meta.FileTypeVorbis:
 			if lengthMs > 0 { // Rust: checked_div
-				props.OverallBitrate = uint32(streamLen * 8 / lengthMs)
+				props.OverallBitrate = uint32(util.SaturatingMul(streamLen, 8) / lengthMs)
 			}
 			if props.BitrateNominal > 0 {
 				props.AudioBitrate = uint32(uint64(props.BitrateNominal) / 1000)
 			}
 		case meta.FileTypeOpus:
 			if gotTotal && lengthMs > 0 {
-				props.OverallBitrate = uint32(streamLen * 8 / lengthMs)
-				props.AudioBitrate = uint32(dataLen * 8 / lengthMs)
+				props.OverallBitrate = uint32(util.SaturatingMul(streamLen, 8) / lengthMs)
+				props.AudioBitrate = uint32(util.SaturatingMul(dataLen, 8) / lengthMs)
 			}
 		case meta.FileTypeSpeex:
 			if props.BitrateNominal > 0 {
 				if lengthMs > 0 {
-					props.OverallBitrate = uint32(streamLen * 8 / lengthMs)
+					props.OverallBitrate = uint32(util.SaturatingMul(streamLen, 8) / lengthMs)
 				}
 				props.AudioBitrate = uint32(uint64(props.BitrateNominal) / 1000)
 			} else if lengthMs > 0 {
-				props.OverallBitrate = uint32(util.DivRound(streamLen*8, lengthMs))
-				props.AudioBitrate = uint32(util.DivRound(dataLen*8, lengthMs))
+				// `DivRound(SaturatingMul(x, 8), n)` would wrap at the
+				// saturation point; the 128-bit form saturates cleanly.
+				props.OverallBitrate = uint32(util.MulDivRound(streamLen, 8, lengthMs))
+				props.AudioBitrate = uint32(util.MulDivRound(dataLen, 8, lengthMs))
 			}
 		}
 	}
-	return props, vc, fType, nil
+	return props, vc, nil
 }
 
 // --- shared Ogg tag write ---
@@ -698,7 +722,7 @@ func oggWriteVorbisCommentsImpl(file meta.FileLike, ft meta.FileType, writeOptio
 	}
 	comment := packets[1]
 	if sig != nil && (len(comment) < len(sig) || !bytes.Equal(comment[:len(sig)], sig)) {
-		return &meta.FileEncodingError{Source: &OggParseError{Source: &meta.FakeTagError{}}}
+		return &meta.FileEncodingError{Source: &meta.FileParseError{Source: &OggParseError{Message: "file missing magic signature"}}}
 	}
 
 	// Retain the vendor string. Rust reads `vendor_len` bytes unconditionally:
@@ -873,36 +897,27 @@ func (f *OggSpeexFile) RemoveFromPath(path string, t meta.TagType) error {
 
 // OggVorbisFileReadFrom reads an [OggVorbisFile].
 func OggVorbisFileReadFrom(reader io.ReadSeeker, po meta.ParseOptions) (*OggVorbisFile, error) {
-	props, vc, ft, err := oggReadTagged(reader, po)
+	props, vc, err := oggReadTaggedAs(reader, po, meta.FileTypeVorbis)
 	if err != nil {
 		return nil, err
-	}
-	if !ft.Equal(meta.FileTypeVorbis) {
-		return nil, &meta.FileParseError{Source: &OggParseError{Message: "not a Vorbis stream"}}
 	}
 	return &OggVorbisFile{Properties: *props, VorbisComments: util.OptionFromPtr(vc)}, nil
 }
 
 // OggOpusFileReadFrom reads an [OggOpusFile].
 func OggOpusFileReadFrom(reader io.ReadSeeker, po meta.ParseOptions) (*OggOpusFile, error) {
-	props, vc, ft, err := oggReadTagged(reader, po)
+	props, vc, err := oggReadTaggedAs(reader, po, meta.FileTypeOpus)
 	if err != nil {
 		return nil, err
-	}
-	if !ft.Equal(meta.FileTypeOpus) {
-		return nil, &meta.FileParseError{Source: &OggParseError{Message: "not an Opus stream"}}
 	}
 	return &OggOpusFile{Properties: *props, VorbisComments: util.OptionFromPtr(vc)}, nil
 }
 
 // OggSpeexFileReadFrom reads an [OggSpeexFile].
 func OggSpeexFileReadFrom(reader io.ReadSeeker, po meta.ParseOptions) (*OggSpeexFile, error) {
-	props, vc, ft, err := oggReadTagged(reader, po)
+	props, vc, err := oggReadTaggedAs(reader, po, meta.FileTypeSpeex)
 	if err != nil {
 		return nil, err
-	}
-	if !ft.Equal(meta.FileTypeSpeex) {
-		return nil, &meta.FileParseError{Source: &OggParseError{Message: "not a Speex stream"}}
 	}
 	return &OggSpeexFile{Properties: *props, VorbisComments: util.OptionFromPtr(vc)}, nil
 }
@@ -910,7 +925,7 @@ func OggSpeexFileReadFrom(reader io.ReadSeeker, po meta.ParseOptions) (*OggSpeex
 func init() {
 	for _, ft := range []meta.FileType{meta.FileTypeVorbis, meta.FileTypeOpus, meta.FileTypeSpeex} {
 		meta.RegisterFormatReader(ft, func(rs io.ReadSeeker, opts meta.ParseOptions) (*meta.TaggedFile, error) {
-			props, vc, ft, err := oggReadTagged(rs, opts)
+			props, vc, err := oggReadTaggedAs(rs, opts, ft)
 			if err != nil {
 				return nil, err
 			}

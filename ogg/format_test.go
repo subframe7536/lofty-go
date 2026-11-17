@@ -303,3 +303,149 @@ func TestOggWriteFileVendorWins(t *testing.T) {
 		t.Fatalf("vendor = %q, want file-vendor", vc.Vendor)
 	}
 }
+
+func oggTestOpusIdent() []byte {
+	pkt := []byte("OpusHead")
+	pkt = append(pkt, 1, 2, 0, 0) // version, channels, pre-skip
+	var u32 [4]byte
+	binary.LittleEndian.PutUint32(u32[:], 48000)
+	pkt = append(pkt, u32[:]...)
+	return append(pkt, 0, 0, 0) // gain, mapping family
+}
+
+func oggTestVorbisStream(ident []byte, lastGranule uint64) []byte {
+	var file []byte
+	file = append(file, oggTestPage(0, 0, oggPageBOS, [][]byte{ident})...)
+	file = append(file, oggTestPage(1, 0, 0, [][]byte{oggTestVorbisComment("v"), oggTestSetup()})...)
+	return append(file, oggTestPage(2, lastGranule, 0, [][]byte{{0xAA}})...)
+}
+
+// TestOggReadersHonourRequestedType: like Rust's per-type `read_from`, a
+// reader fails with "file missing magic signature" when the stream carries a
+// different codec, while the sniffing entry point still detects the type.
+func TestOggReadersHonourRequestedType(t *testing.T) {
+	vorbisFile := oggTestVorbisStream(oggTestVorbisIdent(), 44100)
+
+	var opusFile []byte
+	opusFile = append(opusFile, oggTestPage(0, 0, oggPageBOS, [][]byte{oggTestOpusIdent()})...)
+	opusFile = append(opusFile, oggTestPage(1, 0, 0, [][]byte{append([]byte("OpusTags"), oggTestCommentPayload("v")...)})...)
+	opusFile = append(opusFile, oggTestPage(2, 48000, 0, [][]byte{{0xAA}})...)
+
+	wantMagicErr := func(t *testing.T, err error) {
+		t.Helper()
+		var pe *OggParseError
+		if !errors.As(err, &pe) || pe.Message != "file missing magic signature" {
+			t.Fatalf("err = %v, want OggParseError(file missing magic signature)", err)
+		}
+	}
+
+	if _, err := OggOpusFileReadFrom(bytes.NewReader(vorbisFile), meta.NewParseOptions()); err == nil {
+		t.Fatal("Opus reader accepted a Vorbis stream")
+	} else {
+		wantMagicErr(t, err)
+	}
+	if _, err := OggSpeexFileReadFrom(bytes.NewReader(vorbisFile), meta.NewParseOptions()); err == nil {
+		t.Fatal("Speex reader accepted a Vorbis stream")
+	} else {
+		wantMagicErr(t, err)
+	}
+	if _, err := OggVorbisFileReadFrom(bytes.NewReader(opusFile), meta.NewParseOptions()); err == nil {
+		t.Fatal("Vorbis reader accepted an Opus stream")
+	} else {
+		wantMagicErr(t, err)
+	}
+
+	// Mismatches are hard errors even without tags/properties
+	bare := meta.NewParseOptions()
+	bare.ReadTags, bare.ReadProperties = false, false
+	if _, err := OggOpusFileReadFrom(bytes.NewReader(vorbisFile), bare); err == nil {
+		t.Fatal("Opus reader accepted a Vorbis stream with ReadTags=false")
+	}
+
+	if f, err := OggVorbisFileReadFrom(bytes.NewReader(vorbisFile), meta.NewParseOptions()); err != nil || f.Properties.Duration != time.Second {
+		t.Fatalf("Vorbis reader: f=%+v err=%v", f, err)
+	}
+	if f, err := OggOpusFileReadFrom(bytes.NewReader(opusFile), meta.NewParseOptions()); err != nil || f.Properties.Duration != time.Second {
+		t.Fatalf("Opus reader: f=%+v err=%v", f, err)
+	}
+
+	// The sniffing entry point (used when the type is not known up front)
+	if _, _, ft, err := oggReadTagged(bytes.NewReader(opusFile), meta.NewParseOptions()); err != nil || ft != meta.FileTypeOpus {
+		t.Fatalf("sniff opus: ft=%v err=%v", ft, err)
+	}
+	if _, _, ft, err := oggReadTagged(bytes.NewReader(vorbisFile), meta.NewParseOptions()); err != nil || ft != meta.FileTypeVorbis {
+		t.Fatalf("sniff vorbis: ft=%v err=%v", ft, err)
+	}
+}
+
+// TestOggLastPageSearchReachesStreamStart: Rust's first reverse search in
+// `find_last_page` runs to the stream start; only retries stop at the header
+// end. A stream whose last page is a header page therefore still gets a
+// duration from that page.
+func TestOggLastPageSearchReachesStreamStart(t *testing.T) {
+	var file []byte
+	file = append(file, oggTestPage(0, 0, oggPageBOS, [][]byte{oggTestVorbisIdent()})...)
+	file = append(file, oggTestPage(1, 88200, 0, [][]byte{oggTestVorbisComment("v"), oggTestSetup()})...)
+
+	props, _, _, err := oggReadTagged(bytes.NewReader(file), meta.NewParseOptions())
+	if err != nil {
+		t.Fatalf("oggReadTagged: %v", err)
+	}
+	if props.Duration != 2*time.Second {
+		t.Fatalf("duration = %v, want 2s", props.Duration)
+	}
+}
+
+// TestOggVorbisDurationUses128Bit: `total_samples * 1000` overflows u64 here;
+// Rust's Vorbis math is u128, so the duration must not wrap.
+func TestOggVorbisDurationUses128Bit(t *testing.T) {
+	ident := oggTestVorbisIdent()
+	binary.LittleEndian.PutUint32(ident[12:], 4_000_000_000) // sample rate
+	const total = uint64(2e16)                               // 2e19 > MaxUint64 once multiplied by 1000
+
+	props, _, _, err := oggReadTagged(bytes.NewReader(oggTestVorbisStream(ident, total)), meta.NewParseOptions())
+	if err != nil {
+		t.Fatalf("oggReadTagged: %v", err)
+	}
+	if want := util.DurationFromMillis(5_000_000_000); props.Duration != want {
+		t.Fatalf("duration = %v, want %v", props.Duration, want)
+	}
+}
+
+// TestOggDurationSaturates: an absurd granule position saturates the Duration
+// instead of overflowing it (Rust `Duration` holds u64 seconds).
+func TestOggDurationSaturates(t *testing.T) {
+	huge := uint64(1) << 62
+	for name, file := range map[string][]byte{
+		"vorbis": oggTestVorbisStream(oggTestVorbisIdent(), huge),
+		"speex": func() []byte {
+			var f []byte
+			f = append(f, oggTestPage(0, 0, oggPageBOS, [][]byte{oggTestSpeexIdent(1, 2)})...)
+			f = append(f, oggTestPage(1, 0, 0, [][]byte{oggTestCommentPayload("v")})...)
+			return append(f, oggTestPage(2, huge, 0, [][]byte{{0xAA}})...)
+		}(),
+	} {
+		props, _, _, err := oggReadTagged(bytes.NewReader(file), meta.NewParseOptions())
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if props.Duration != time.Duration(1<<63-1) {
+			t.Fatalf("%s: duration = %v, want saturated", name, props.Duration)
+		}
+	}
+}
+
+// TestOggWriteBadCommentSignature: a comment packet without the codec's
+// signature fails with the same "file missing magic signature" parse error as
+// the read path (Rust `verify_signature`).
+func TestOggWriteBadCommentSignature(t *testing.T) {
+	f := oggTestWrite([]byte{9, 'n', 'o', 't', 'v', 'o', 'r', 0, 0, 0, 0, 0, 0, 0, 0})
+	err := oggWriteVorbisCommentsImpl(f, meta.FileTypeVorbis, oggTestWriteOptions(), func(string) *vorbis.VorbisCommentsTag {
+		return &vorbis.VorbisCommentsTag{}
+	})
+	var fpe *meta.FileParseError
+	var pe *OggParseError
+	if !errors.As(err, &fpe) || !errors.As(err, &pe) || pe.Message != "file missing magic signature" {
+		t.Fatalf("err = %v, want FileParseError(OggParseError(file missing magic signature))", err)
+	}
+}

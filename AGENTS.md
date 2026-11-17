@@ -40,7 +40,7 @@ unchanged — `lofty.X` resolves through generated aliases.
 | `internal/testutil` | — | fixture path resolution + shared test helpers; tests live in the package whose internals they exercise |
 | `id3v1`, `id3v2`, `vorbis`, `lyrics3` | `id3/v1`, `id3/v2`, `ogg/tag`, `id3/lyrics3` | tag implementations (`id3v2` is a native port: `tag.go` tag+header, `read.go`/`write.go` frame walk+serialize, `frame.go`/`framelist.go`/`items*.go` typed frames, `convert.go` generic-Tag split/merge) |
 | `ape`, `ogg`, `flac`, `mp4`, `iff`, `mpeg`, `dsf`, `wavpack`, `mpc`, `aac` | `<format>/` | file readers/writers; `mp4` includes `Ilst`/`Atom`/`AtomData` |
-| root (`package lofty`) | — | **pure facade**: `facade_gen.go` re-exports every moved public symbol (regenerate with `go run ./scripts/facadegen`); `shim_util.go` holds internal bridges for root tests |
+| root (`package lofty`) | — | **pure facade**: `facade_gen.go` re-exports every moved public symbol (regenerate with `go run ./scripts/facadegen`); `shim_util_test.go` holds internal bridges for root tests |
 | `*_test.go` | Rust `tests/` + `src/**/tests.rs` | ported test cases, distributed to their owning package |
 
 Dependency rule: `internal/util` ← `internal/meta` ← format packages ← root
@@ -52,10 +52,9 @@ facade. Format packages never import the root; they register themselves in
 
 - `github.com/bogem/id3v2/v2` — test-only parse oracle (`bogemFrames` in
   tests); production ID3v2 read/write is the native `id3v2` package
-- `github.com/go-flac/go-flac/v2` — FLAC metadata blocks
 
-MP4 box traversal, Ogg page read/write, and Latin-1/UTF-16 codecs are all
-hand-rolled in the `mp4`, `ogg`, and `internal/util` packages.
+MP4 box traversal, Ogg page read/write, FLAC metadata blocks (`flac/block.go`),
+and Latin-1/UTF-16 codecs are all hand-rolled in the `mp4`, `ogg`, and `internal/util` packages.
 
 ## Port-parity rules that matter
 
@@ -108,6 +107,33 @@ most debugging:
   including TRACKNUMBER/DISCNUMBER before the `n/total` split. Unknown-key
   items are dropped in generic→concrete conversion (`map_key` → None), not
   stored under their description.
+
+## Intentional deviations from Rust (reviewed; do not "fix")
+
+- **Content sniffing:** `ReadFromPath` falls back to content detection when the
+  extension is unknown; Rust returns an error. Accounts for the differential
+  diffs on `empty_vorbis.oga`, `no-tags.3g2`, `id3v2/test.atxt`,
+  `id3v2/test.geob`, `id3v2/trailing_nulls.id3v24`.
+- **ID3v2:** `verifyFrame` accepts OWNE/ETCO and the Go-only SYLT/GEOB/ATXT
+  frames; `constructTdrcFromV3` keeps a TDRC that already has a month;
+  COMM/USLT descriptions apply to every NUL-split item; nested CHAP/CTOC depth
+  is capped at 8 and decompressed frames are bounded by `AllocationLimit`.
+  `Locator` items are written to URL frames.
+- **MP4:** UTF-16 atoms are written as real UTF-16BE; `dfLa` reads a fixed
+  18-byte STREAMINFO; after a non-strict bad `data` child later children are
+  not pre-read.
+- **APE:** generic-Tag conversion routes `Cover Art` items through pictures,
+  merges same-key text with NUL, merges Track/Disc pairs on write, and outputs
+  items, then pairs, then pictures. After a leading APE tag Go keeps scanning
+  for the MAC header (Rust effectively errors).
+- **IFF:** after an invalid RIFF INFO FourCC Go seeks to the list end (Rust
+  leaves the reader mid-list).
+- **Ogg:** `SaveFile` with no `VorbisComments` is a no-op. `MulDivRound`
+  saturates where Rust truncates `u128 as u64`.
+- **FLAC:** `InsertPicture` returns only `error`; `InsertPictureReplacing`
+  also returns the replaced picture.
+- **Lyrics3:** generic `Tag.DumpTo` writes Lyrics3/Lyrics3v2 data (Rust writes
+  nothing).
 
 ## Fixture paths
 

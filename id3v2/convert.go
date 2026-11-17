@@ -85,39 +85,12 @@ func handleTagSplit(tag *meta.Tag, frame Frame) bool {
 	const consumed, retained = false, true
 
 	splitPair := func(content string, numKey, totKey meta.ItemKey) bool {
-		parts := strings.SplitN(content, "/", 2)
-		var numPart, totPart string
-		hasTot := false
-		if idx := strings.IndexAny(parts[0], "\x00"); idx >= 0 {
-			numPart, totPart, hasTot = parts[0][:idx], parts[0][idx+1:], true
-		} else if len(parts) == 2 {
-			numPart, totPart, hasTot = parts[0], parts[1], true
-		} else {
-			numPart = parts[0]
-		}
-		parse := func(s string) (string, bool) {
-			s = strings.TrimSpace(s)
-			if s == "" {
-				return "", false
-			}
-			if _, err := strconvParseU32(s); err != nil {
-				return "", false
-			}
-			return s, true
-		}
-		num, ok := parse(numPart)
+		num, tot, ok := splitNumPair(content)
 		if !ok {
 			return false
 		}
-		var tot string
-		if hasTot {
-			tot, ok = parse(totPart)
-			if !ok {
-				return false
-			}
-		}
 		tag.PushUnchecked(meta.NewTagItem(numKey, meta.ItemValueText(num)))
-		if hasTot {
+		if tot != "" {
 			tag.PushUnchecked(meta.NewTagItem(totKey, meta.ItemValueText(tot)))
 		}
 		return true

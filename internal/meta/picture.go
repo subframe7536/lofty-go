@@ -562,6 +562,15 @@ func (p *Picture) ClearDescription() { p.description = None[string]() }
 // Data returns the [Picture] data.
 func (p *Picture) Data() []byte { return p.data }
 
+// Equal reports whether two pictures have the same type, mime type,
+// description and data (Rust's derived `PartialEq`).
+func (p Picture) Equal(other Picture) bool {
+	return p.picType == other.picType &&
+		p.mimeType == other.mimeType &&
+		p.description == other.description &&
+		bytes.Equal(p.data, other.data)
+}
+
 // AsFlacBytes converts a [Picture] to a base64 encoded FLAC `METADATA_BLOCK_PICTURE` string.
 //
 // Use `encode` to convert the picture to a base64 encoded string ([RFC 4648 §4]).
@@ -788,7 +797,7 @@ func PictureFromApeBytes(key string, b []byte) (Picture, error) {
 		picType:     picType,
 		mimeType:    Some(mimeType),
 		description: description,
-		data:        b[pos:],
+		data:        bytes.Clone(b[pos:]),
 	}, nil
 }
 

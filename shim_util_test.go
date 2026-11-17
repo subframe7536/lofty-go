@@ -1,8 +1,8 @@
 package lofty
 
-// Internal aliases to internal/util so that files still in the root package
-// keep their original unqualified names until they move to their own
-// subpackages.
+// Test-only bridges: unqualified aliases to internal/util, internal/meta and
+// format-package helpers that the root package tests use. No non-test root
+// file references them, so they live in a _test.go file.
 
 import (
 	"github.com/subframe7536/lofty-go/id3v2"

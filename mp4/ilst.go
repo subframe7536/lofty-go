@@ -197,12 +197,22 @@ func (l *Ilst) InsertPicture(p meta.Picture) {
 
 // Remove deletes the atom with the identifier.
 func (l *Ilst) Remove(ident AtomIdent) {
+	l.removeWhere(func(a *Atom) bool { return a.Ident == ident })
+}
+
+// removeWhere deletes every atom matching the predicate (Rust
+// `extract_if_exhaustive`), preserving order.
+func (l *Ilst) removeWhere(match func(*Atom) bool) {
+	kept := l.atoms[:0]
 	for i := range l.atoms {
-		if l.atoms[i].Ident == ident {
-			l.atoms = append(l.atoms[:i], l.atoms[i+1:]...)
-			return
+		if !match(&l.atoms[i]) {
+			kept = append(kept, l.atoms[i])
 		}
 	}
+	for i := len(kept); i < len(l.atoms); i++ {
+		l.atoms[i] = Atom{}
+	}
+	l.atoms = kept
 }
 
 // Tag converts the `Ilst` to a generic [Tag] (Rust `SplitTag`/`From<Ilst> for Tag`).
@@ -281,35 +291,12 @@ func (l *Ilst) Tag() *meta.Tag {
 	// Advisory rating (rtng) — signed int or unknown bytes → ParentalAdvisory.
 	// The atom sits in `remainder` at this point (SignedInt/Unknown aren't
 	// consumed by the retain loop).
-	rtngIdent := FourccIdent("rtng")
-	for i := range remainder {
-		if remainder[i].Ident != rtngIdent {
-			continue
-		}
-		var raw byte
-		hasRaw := false
-		for _, d := range remainder[i].Data {
-			switch d.Kind {
-			case AtomDataSignedInt:
-				raw, hasRaw = byte(d.Int), true
-			case AtomDataUnknown:
-				// Rust's `advisory_rating` ignores `AtomData::UnsignedInt`.
-				if len(d.Data) > 0 {
-					raw, hasRaw = d.Data[0], true
-				}
-			}
-			if hasRaw {
-				break
-			}
-		}
-		if hasRaw {
-			if rating, ok := advisoryRatingFromU8(raw); ok {
-				tag.InsertText(meta.ItemKeyParentalAdvisory, util.Itoa(int(rating)))
-				remainder = append(remainder[:i], remainder[i+1:]...)
-			}
-		}
-		break
+	rem := &Ilst{atoms: remainder}
+	if rating, ok := rem.AdvisoryRating(); ok {
+		tag.InsertText(meta.ItemKeyParentalAdvisory, util.Itoa(int(rating.AsU8())))
+		rem.Remove(FourccIdent("rtng"))
 	}
+	remainder = rem.atoms
 
 	if util.GetGlobalOptions().PreserveFormatSpecificItems && len(remainder) > 0 {
 		tag.SetCompanionTag(&Ilst{atoms: remainder})
@@ -333,14 +320,10 @@ func IlstFromTag(tag *meta.Tag) *Ilst {
 	var tracks, discs [2]meta.Option[uint16]
 
 	for _, item := range tag.Items() {
+		// Rust discards items without a mapping (including `ItemKey::Unknown`).
 		key, ok := item.Key().MapKey(meta.TagTypeMp4Ilst)
 		if !ok {
-			if item.Key() == meta.ItemKeyUnknown &&
-				(len(item.Description) == 4 || strings.HasPrefix(item.Description, "----:")) {
-				key = item.Description
-			} else {
-				continue
-			}
+			continue
 		}
 		text, isText := item.Value().IntoString()
 		if !isText {
@@ -439,15 +422,20 @@ func (l *Ilst) DumpTo(writer io.Writer, writeOptions meta.WriteOptions) error {
 func encodeIlst(ilst *Ilst) ([]byte, error) {
 	var atoms bytes.Buffer
 
-	writeDataAtom := func(buf *bytes.Buffer, dataType uint32, payload []byte) {
+	writeDataAtom := func(buf *bytes.Buffer, dataType uint32, payload []byte) error {
+		size, err := ilstAtomSize(16, len(payload))
+		if err != nil {
+			return err
+		}
 		var sz [4]byte
-		binary.BigEndian.PutUint32(sz[:], uint32(16+len(payload)))
+		binary.BigEndian.PutUint32(sz[:], size)
 		buf.Write(sz[:])
 		buf.WriteString("data")
 		// version (1), then the 24-bit type code
 		buf.Write([]byte{0, byte(dataType >> 16), byte(dataType >> 8), byte(dataType)})
 		buf.Write([]byte{0, 0, 0, 0})
 		buf.Write(payload)
+		return nil
 	}
 
 	dataTypeFor := func(d AtomData) (uint32, []byte, error) {
@@ -497,26 +485,41 @@ func encodeIlst(ilst *Ilst) ([]byte, error) {
 	for _, atom := range ilst.atoms {
 		var a bytes.Buffer
 		if atom.Ident.Freeform {
-			writeSub := func(boxName string, payload []byte) {
+			writeSub := func(boxName string, payload []byte) error {
+				size, err := ilstAtomSize(12, len(payload))
+				if err != nil {
+					return err
+				}
 				var s [4]byte
-				binary.BigEndian.PutUint32(s[:], uint32(12+len(payload)))
+				binary.BigEndian.PutUint32(s[:], size)
 				a.Write(s[:])
 				a.WriteString(boxName)
 				a.Write([]byte{0, 0, 0, 0})
 				a.Write(payload)
+				return nil
 			}
-			writeSub("mean", []byte(atom.Ident.Mean))
-			writeSub("name", []byte(atom.Ident.Name))
+			if err := writeSub("mean", []byte(atom.Ident.Mean)); err != nil {
+				return nil, err
+			}
+			if err := writeSub("name", []byte(atom.Ident.Name)); err != nil {
+				return nil, err
+			}
 		}
 		for _, d := range atom.Data {
 			code, payload, err := dataTypeFor(d)
 			if err != nil {
 				return nil, err
 			}
-			writeDataAtom(&a, code, payload)
+			if err := writeDataAtom(&a, code, payload); err != nil {
+				return nil, err
+			}
+		}
+		atomSize, err := ilstAtomSize(8, a.Len())
+		if err != nil {
+			return nil, err
 		}
 		var sz [4]byte
-		binary.BigEndian.PutUint32(sz[:], uint32(a.Len()+8))
+		binary.BigEndian.PutUint32(sz[:], atomSize)
 		atoms.Write(sz[:])
 		name := atom.Ident.Fourcc
 		if atom.Ident.Freeform {
@@ -528,13 +531,27 @@ func encodeIlst(ilst *Ilst) ([]byte, error) {
 	if atoms.Len() == 0 {
 		return nil, nil
 	}
+	ilstSize, err := ilstAtomSize(8, atoms.Len())
+	if err != nil {
+		return nil, err
+	}
 	var out bytes.Buffer
 	var sz [4]byte
-	binary.BigEndian.PutUint32(sz[:], uint32(atoms.Len()+8))
+	binary.BigEndian.PutUint32(sz[:], ilstSize)
 	out.Write(sz[:])
 	out.WriteString("ilst")
 	out.Write(atoms.Bytes())
 	return out.Bytes(), nil
+}
+
+// ilstAtomSize returns header+payload as a u32 atom size, or
+// [meta.TooMuchDataError] if it doesn't fit.
+func ilstAtomSize(header, payload int) (uint32, error) {
+	total := uint64(header) + uint64(payload)
+	if total > math.MaxUint32 {
+		return 0, &meta.TooMuchDataError{}
+	}
+	return uint32(total), nil
 }
 
 // intPayload packs a big-endian integer following Rust's writers: signed ints
@@ -816,7 +833,7 @@ func ParseIlst(reader io.ReadSeeker, end int64, parseOptions meta.ParseOptions) 
 					// Drop the whole atom (Rust `handle_error`)
 					datas = nil
 					_, _ = cursor.Seek(atomEnd, io.SeekStart)
-					break
+					goto atomDone
 				}
 				// Rust only keeps 8-byte `plID` payloads
 				if fourcc != [4]byte{'p', 'l', 'I', 'D'} || len(payload) == 8 {
@@ -1096,9 +1113,20 @@ func (l *Ilst) TrackTotal() (uint32, bool) {
 // SetTrackTotal writes the track total into `trkn`, preserving the number.
 func (l *Ilst) SetTrackTotal(v uint32) { l.setNumber(trknFourcc, 6, v) }
 
-// RemoveTrackTotal zeroes the total field, removing `trkn` if the number is gone.
-func (l *Ilst) RemoveTrackTotal() {
-	l.setNumber(trknFourcc, 6, 0)
+// RemoveTrackTotal removes the total, keeping the track number (if any).
+func (l *Ilst) RemoveTrackTotal() { l.removeTotal(trknFourcc) }
+
+// removeTotal mirrors Rust `remove_track_total`/`remove_disk_total`: read the
+// number, remove the atom, and re-add it only if a number existed.
+func (l *Ilst) removeTotal(fourcc [4]byte) {
+	num, ok := l.extractNumber(fourcc, 4)
+	l.Remove(AtomIdent{Fourcc: fourcc})
+	if ok {
+		l.ReplaceAtom(Atom{
+			AtomIdent{Fourcc: fourcc},
+			[]AtomData{{Kind: AtomDataUnknown, Code: 0, Data: []byte{0, 0, byte(num >> 8), byte(num), 0, 0}}},
+		})
+	}
 }
 
 // Disk returns the disc number stored in `disk`.
@@ -1122,15 +1150,14 @@ func (l *Ilst) DiskTotal() (uint32, bool) {
 // SetDiskTotal writes the disc total into `disk`, preserving the number.
 func (l *Ilst) SetDiskTotal(v uint32) { l.setNumber(diskFourcc, 6, v) }
 
-// RemoveDiskTotal zeroes the total field, removing `disk` if the number is gone.
-func (l *Ilst) RemoveDiskTotal() {
-	l.setNumber(diskFourcc, 6, 0)
-}
+// RemoveDiskTotal removes the total, keeping the disc number (if any).
+func (l *Ilst) RemoveDiskTotal() { l.removeTotal(diskFourcc) }
 
 // Date returns the "©day" atom parsed as a [meta.Timestamp].
 func (l *Ilst) Date() (meta.Timestamp, bool) {
-	if s, ok := l.firstText(FourccIdent("©day")); ok {
-		if ts, ok := util.TryParseTimestamp(s).Get(); ok {
+	// Rust only accepts a UTF-8 first value (`AtomData::UTF8`).
+	if a := l.Get(FourccIdent("©day")); a != nil && len(a.Data) > 0 && a.Data[0].Kind == AtomDataUTF8 {
+		if ts, ok := util.TryParseTimestamp(a.Data[0].Text).Get(); ok {
 			return ts, true
 		}
 	}
@@ -1157,27 +1184,37 @@ func (l *Ilst) GetFlag(ident AtomIdent) (bool, bool) {
 
 // SetFlag writes a bool atom.
 func (l *Ilst) SetFlag(ident AtomIdent, value bool) {
+	if !value {
+		// A flag with a value of `false` is equivalent to removing it.
+		l.Remove(ident)
+		return
+	}
 	l.ReplaceAtom(Atom{ident, []AtomData{{Kind: AtomDataBool, Bool: value}}})
 }
 
 // AdvisoryRating returns the normalized parental advisory rating.
 func (l *Ilst) AdvisoryRating() (AdvisoryRating, bool) {
 	if a := l.Get(FourccIdent("rtng")); a != nil {
+		// Rust: filter_map(u8::try_from / first byte).find_map(AdvisoryRating::try_from)
+		// — `AtomData::UnsignedInteger` is ignored.
 		for _, d := range a.Data {
 			var raw byte
-			hasRaw := false
 			switch d.Kind {
 			case AtomDataSignedInt:
-				raw, hasRaw = byte(d.Int), true
-			case AtomDataUnsignedInt:
-				raw, hasRaw = byte(d.Uint), true
-			case AtomDataUnknown:
-				if len(d.Data) > 0 {
-					raw, hasRaw = d.Data[0], true
+				if d.Int < 0 || d.Int > math.MaxUint8 {
+					continue
 				}
+				raw = byte(d.Int)
+			case AtomDataUnknown:
+				if len(d.Data) == 0 {
+					continue
+				}
+				raw = d.Data[0]
+			default:
+				continue
 			}
-			if hasRaw {
-				return advisoryRatingFromU8(raw)
+			if rating, ok := advisoryRatingFromU8(raw); ok {
+				return rating, true
 			}
 		}
 	}
@@ -1193,7 +1230,11 @@ func (l *Ilst) SetAdvisoryRating(rating AdvisoryRating) {
 }
 
 // RemovePictures removes the `covr` atom.
-func (l *Ilst) RemovePictures() { l.Remove(FourccIdent("covr")) }
+func (l *Ilst) RemovePictures() {
+	l.removeWhere(func(a *Atom) bool {
+		return len(a.Data) > 0 && a.Data[0].Kind == AtomDataPicture
+	})
+}
 
 // SaveTo writes the ilst atom into an MP4 file, mirroring Rust
 // `TagExt::save_to`.

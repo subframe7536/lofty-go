@@ -51,17 +51,20 @@ const (
 	TagTypeAiffText
 )
 
-// TagTypeVariants contains all [TagType] variants.
-var TagTypeVariants = []TagType{
-	TagTypeApe,
-	TagTypeID3v1,
-	TagTypeID3v2,
-	TagTypeLyrics3,
-	TagTypeLyrics3v2,
-	TagTypeMp4Ilst,
-	TagTypeVorbisComments,
-	TagTypeRiffInfo,
-	TagTypeAiffText,
+// TagTypeVariants returns all [TagType] variants. The returned slice is a
+// copy and may be modified freely.
+func TagTypeVariants() []TagType {
+	return []TagType{
+		TagTypeApe,
+		TagTypeID3v1,
+		TagTypeID3v2,
+		TagTypeLyrics3,
+		TagTypeLyrics3v2,
+		TagTypeMp4Ilst,
+		TagTypeVorbisComments,
+		TagTypeRiffInfo,
+		TagTypeAiffText,
+	}
 }
 
 func (t TagType) String() string {

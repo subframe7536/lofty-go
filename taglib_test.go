@@ -1315,7 +1315,7 @@ func TestTaglibWavPackProperties(t *testing.T) {
 		file       string
 		millis     int64
 		bitrate    uint32
-		channels   uint8
+		channels   uint16
 		bitDepth   uint8
 		lossless   bool
 		sampleRate uint32

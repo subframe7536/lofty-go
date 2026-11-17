@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/bits"
 	"time"
 
 	"github.com/subframe7536/lofty-go/id3v1"
@@ -296,7 +297,7 @@ func Mp4FileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp4
 		return nil, &meta.FileParseError{Source: err}
 	}
 	if first == nil || string(first.name[:]) != "ftyp" {
-		return nil, &meta.FileParseError{Source: &Mp4ParseError{Source: &meta.FakeTagError{}}}
+		return nil, &meta.FileParseError{Source: &Mp4ParseError{Source: &meta.UnknownFormatError{}}}
 	}
 	if first.size < 4 {
 		return nil, &meta.FileParseError{Source: util.NewNotEnoughDataError(12)}
@@ -336,7 +337,7 @@ func Mp4FileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp4
 		}
 	}
 	if moov == nil {
-		return nil, &meta.FileParseError{Source: &Mp4ParseError{Source: &meta.FakeTagError{}}}
+		return nil, &meta.FileParseError{Source: &Mp4ParseError{Message: `file does not contain a "moov" atom`}}
 	}
 
 	// Rust's `read_properties` independently rescans the whole file for the
@@ -385,9 +386,23 @@ func Mp4FileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp4
 		boxEnd := h.pos + int64(h.size)
 		switch string(h.name[:]) {
 		case "trak":
-			// Rust's `Moov::parse` only collects traks when reading properties.
+			// Rust's `Moov::parse` only collects traks when reading properties,
+			// and scans every trak for its `mdia` right away (errors propagate),
+			// so a malformed later trak fails the parse.
 			if parseOptions.ReadProperties {
-				traks = append(traks, h)
+				var mdia *mp4BoxHeader
+				if err := mp4Children(mr, h, parseOptions.ParsingMode, func(c *mp4BoxHeader) bool {
+					if string(c.name[:]) == "mdia" {
+						mdia = c
+						return false
+					}
+					return true
+				}); err != nil {
+					return nil, &meta.FileParseError{Source: &Mp4ParseError{Source: err}}
+				}
+				if mdia != nil {
+					traks = append(traks, mdia)
+				}
 			}
 		case "udta":
 			// Rust's `Moov::parse` only parses udta when reading tags, so tag
@@ -465,23 +480,9 @@ func mp4ReadProperties(reader io.ReadSeeker, traks []*mp4BoxHeader, fileLen uint
 	audioTrack := false
 	// Search all traks for the first audio track (hdlr == "soun"). Rust's
 	// mdia scan propagates `next()?` errors in all modes.
-	for _, trak := range traks {
+	for _, mdia := range traks {
 		mdhd, minf = nil, nil
 		isAudio := false
-		var mdia *mp4BoxHeader
-		// Rust's trak→mdia find (`find_child_atom`) propagates errors.
-		if err := mp4Children(reader, trak, parseOptions.ParsingMode, func(c *mp4BoxHeader) bool {
-			if string(c.name[:]) == "mdia" {
-				mdia = c
-				return false
-			}
-			return true
-		}); err != nil {
-			return &Mp4ParseError{Source: err}
-		}
-		if mdia == nil {
-			continue
-		}
 		var cbErr error
 		walkErr := mp4Children(reader, mdia, parseOptions.ParsingMode, func(c *mp4BoxHeader) bool {
 			switch string(c.name[:]) {
@@ -546,7 +547,7 @@ func mp4ReadProperties(reader io.ReadSeeker, traks []*mp4BoxHeader, fileLen uint
 		duration = uint64(binary.BigEndian.Uint32(fb[12:]))
 	}
 	if timescale > 0 {
-		p.Duration = time.Duration(util.DivRound(duration*1000, timescale)) * time.Millisecond
+		p.Duration = util.DurationFromMillis(util.MulDivRound(duration, 1000, timescale))
 	}
 	if minf == nil {
 		return nil
@@ -636,18 +637,30 @@ func mp4ReadProperties(reader io.ReadSeeker, traks []*mp4BoxHeader, fileLen uint
 		}
 		if sttsPresent && sttsSpecifies {
 			// Accurate audio bitrate: mdat*8*timescale/duration (bps) → kbps
-			p.AudioBitrate = meta.Some(uint32(mdat * 8 * timescale / duration / 1000))
+			p.AudioBitrate = meta.Some(mp4AudioBitrateBps(mdat, timescale, duration) / 1000)
 		}
 		durationMs := uint64(p.Duration.Milliseconds())
 		if durationMs == 0 {
 			return nil
 		}
-		p.OverallBitrate = meta.Some(uint32(fileLen * 8 / durationMs))
+		p.OverallBitrate = meta.Some(uint32(util.SaturatingMul(fileLen, 8) / durationMs))
 		if v, ok := p.AudioBitrate.Get(); !ok || v == 0 {
-			p.AudioBitrate = meta.Some(uint32(mdat * 8 / durationMs))
+			p.AudioBitrate = meta.Some(uint32(util.SaturatingMul(mdat, 8) / durationMs))
 		}
 	}
 	return nil
+}
+
+// mp4AudioBitrateBps computes `(mdat*8*timescale/duration) as u32` with Rust's
+// u128 intermediate: the 99-bit product is divided exactly and the low 32 bits
+// of the quotient are kept (matching the truncating `as u32`). duration must be > 0.
+func mp4AudioBitrateBps(mdat, timescale, duration uint64) uint32 {
+	aHi, aLo := mdat>>61, mdat<<3 // mdat*8 as a 128-bit value
+	hi, lo := bits.Mul64(aLo, timescale)
+	hi += aHi * timescale // < 2^35, cannot overflow: the product is < 2^99
+	r := hi % duration
+	q0, _ := bits.Div64(r, lo, duration)
+	return uint32(q0)
 }
 
 var mp4SampleRates = [15]uint32{96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350, 0, 0}
@@ -986,7 +999,9 @@ func mp4FlacProperties(r *bytes.Reader, p *Mp4Properties) error {
 	if _, err := r.Seek(4, io.SeekCurrent); err != nil {
 		return err
 	}
-	if int64(dfla.size)-4 < 22 {
+	// Rust: `dfla.len - 12 < 18` with `len` including the 8-byte header, i.e.
+	// payload - 4 < 18. (`size` is already the payload length.)
+	if int64(dfla.size)-4 < 18 {
 		return nil
 	}
 	// 4-byte FLAC metadata block header (last-block flag, type, 24-bit len)
@@ -1437,11 +1452,12 @@ func mp4WriteIlstData(file meta.FileLike, ilst *Ilst, writeOptions meta.WriteOpt
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return &meta.FileEncodingError{Source: err}
 	}
-	buf, err := util.TryByteSlice(int(end))
-	if err == nil {
-		_, err = io.ReadFull(file, buf)
+	// Rust's `read_to_end` has no allocation limit here, so don't apply one.
+	if end < 0 || uint64(end) > uint64(math.MaxInt) {
+		return &meta.FileEncodingError{Source: &meta.TooMuchDataError{}}
 	}
-	if err != nil {
+	buf := make([]byte, int(end))
+	if _, err := io.ReadFull(file, buf); err != nil {
 		return &meta.FileEncodingError{Source: err}
 	}
 	mem := &memFileLike{buf: buf}
@@ -1528,22 +1544,23 @@ func mp4WriteIlstDataInner(file meta.FileLike, ilst *Ilst, writeOptions meta.Wri
 
 	// Rust `write_to` runs `verify_mp4` first — the file must start with a
 	// valid `ftyp` atom.
+	// Its errors surface as `FileParseError` (`verify_mp4(..).map_err(FileParseError::from)`).
 	first, err := mp4ReadBoxBound(file, uint64(streamEnd), mode)
 	if err != nil {
-		return &meta.FileEncodingError{Source: err}
+		return &meta.FileParseError{Source: err}
 	}
 	if first == nil || string(first.name[:]) != "ftyp" {
-		return &meta.FileEncodingError{Source: &Mp4ParseError{Source: &meta.FakeTagError{}}}
+		return &meta.FileParseError{Source: &Mp4ParseError{Source: &meta.UnknownFormatError{}}}
 	}
 	if first.size < 4 {
-		return &meta.FileEncodingError{Source: util.NewNotEnoughDataError(12)}
+		return &meta.FileParseError{Source: util.NewNotEnoughDataError(12)}
 	}
 	var brand [4]byte
 	if _, err := io.ReadFull(file, brand[:]); err != nil {
-		return &meta.FileEncodingError{Source: err}
+		return &meta.FileParseError{Source: &Mp4ParseError{Source: err}}
 	}
 	if _, err := util.Utf8DecodeStr(brand[:]); err != nil {
-		return &meta.FileEncodingError{Source: &Mp4ParseError{Message: "malformed ftyp major brand"}}
+		return &meta.FileParseError{Source: &Mp4ParseError{Message: "malformed ftyp major brand"}}
 	}
 
 	// Rust builds the ContextualAtom tree up front; malformed containers
@@ -1572,18 +1589,23 @@ func mp4WriteIlstDataInner(file meta.FileLike, ilst *Ilst, writeOptions meta.Wri
 		if h == nil {
 			break
 		}
+		// Rust's `find_atom` (and the moof lookup) take the first match.
 		switch string(h.name[:]) {
 		case "moov":
-			moov = h
+			if moov == nil {
+				moov = h
+			}
 		case "moof":
-			moof = h
+			if moof == nil {
+				moof = h
+			}
 		}
 		if err := mp4SkipBox(file, h); err != nil {
 			return &meta.FileEncodingError{Source: err}
 		}
 	}
 	if moov == nil {
-		return &meta.FileEncodingError{Source: &Mp4ParseError{Message: "no moov box"}}
+		return &meta.FileParseError{Source: &Mp4ParseError{Message: `file does not contain a "moov" atom`}}
 	}
 
 	// Encode the ilst atom

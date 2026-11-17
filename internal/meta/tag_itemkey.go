@@ -1,5 +1,7 @@
 package meta
 
+import "slices"
+
 // ItemKey is a format-agnostic representation of a tag key.
 type ItemKey uint16
 
@@ -153,10 +155,25 @@ const (
 	// Vendor-specific
 	ItemKeyAppleXid
 
-	// ItemKeyUnknown is a placeholder for items with a key not defined in [ItemKey].
-	// The value is stored in [TagItem.Key].
+	// ItemKeyUnknown is a Go-only sentinel for an item whose format-specific
+	// key has no [ItemKey] variant (see [ItemKeyOrUnknown]). Rust's `ItemKey`
+	// has no such variant: unknown keys are dropped during conversion.
+	//
+	// It is always the last constant, is not part of [ItemKeyVariants], and
+	// has no mapping in any tag type's key map.
 	ItemKeyUnknown
 )
+
+// ItemKeyVariants returns every real [ItemKey] variant in declaration order,
+// excluding the Go-only [ItemKeyUnknown] sentinel. A fresh slice is returned
+// on every call.
+func ItemKeyVariants() []ItemKey {
+	keys := make([]ItemKey, 0, int(ItemKeyUnknown))
+	for k := ItemKey(0); k < ItemKeyUnknown; k++ {
+		keys = append(keys, k)
+	}
+	return keys
+}
 
 func (k ItemKey) String() string {
 	if int(k) < len(itemKeyVariantNames) {
@@ -665,17 +682,19 @@ func keyMapForTagType(tagType TagType) *keyMap {
 }
 
 // ItemKeySupportedKeys returns all supported keys for a given [TagType].
+//
+// The returned slice is a copy and may be modified freely.
 func ItemKeySupportedKeys(tagType TagType) []ItemKey {
 	switch tagType {
 	case TagTypeID3v1:
-		return id3v1ValidItemKeys
+		return slices.Clone(id3v1ValidItemKeys)
 	case TagTypeLyrics3:
-		return lyrics3v1ValidItemKeys
+		return slices.Clone(lyrics3v1ValidItemKeys)
 	case TagTypeLyrics3v2:
-		return lyrics3v2ValidItemKeys
+		return slices.Clone(lyrics3v2ValidItemKeys)
 	}
 	if m := keyMapForTagType(tagType); m != nil {
-		return m.supportedKeys
+		return slices.Clone(m.supportedKeys)
 	}
 	return nil
 }

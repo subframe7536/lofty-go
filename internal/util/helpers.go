@@ -3,14 +3,9 @@ package util
 import (
 	"bytes"
 	"strconv"
-	"time"
 )
 
 // --- small helpers ---
-
-func DurationFromSeconds(s float64) time.Duration {
-	return time.Duration(s * float64(time.Second))
-}
 
 func Itoa(n int) string { return strconv.Itoa(n) }
 
@@ -23,22 +18,6 @@ func IndexOfStr(s []string, v string) int {
 		}
 	}
 	return -1
-}
-
-func Latin1EncodeMust(s string) []byte {
-	b, err := Latin1Encode(s, true)
-	if err != nil {
-		out := make([]byte, len(s))
-		for i := 0; i < len(s); i++ {
-			if s[i] < 0x80 {
-				out[i] = s[i]
-			} else {
-				out[i] = '?'
-			}
-		}
-		return out
-	}
-	return b
 }
 
 func OptionFromPtr[T any](p *T) Option[*T] {

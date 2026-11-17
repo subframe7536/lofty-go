@@ -434,7 +434,11 @@ func zeroAudio(t *testing.T, path string, fTy FileType, readPropsShouldErr bool)
 		t.Fatal(err)
 	}
 
-	noPropsOpts := ParseOptions{ReadProperties: false, ReadTags: true}
+	// Rust: `ParseOptions::new().read_properties(false)` — keep the default
+	// junk window, which is what lets the APE reader see zero.ape's leading
+	// ID3v2 tag.
+	noPropsOpts := NewParseOptions()
+	noPropsOpts.ReadProperties = false
 	tf, err := readFormat(fTy, f, noPropsOpts)
 	if err != nil {
 		t.Fatalf("%s: read without properties failed: %v", path, err)

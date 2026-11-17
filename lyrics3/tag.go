@@ -2,14 +2,18 @@ package lyrics3
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/subframe7536/lofty-go/internal/meta"
 	"github.com/subframe7536/lofty-go/internal/tagpos"
 	"github.com/subframe7536/lofty-go/internal/util"
 )
+
+var errNegativeSeek = errors.New("invalid seek to a negative or overflowing position")
 
 var (
 	lyrics3v1Footer = []byte("LYRICSEND")
@@ -135,26 +139,50 @@ func (t *Lyrics3Tag) encode(writeOptions meta.WriteOptions) ([]byte, error) {
 // writeLatin1Field encodes a string to Latin-1, truncating to maxChars. When
 // the content exceeds maxChars, meta.TooMuchDataError is returned unless
 // meta.WriteOptions.ImplicitTruncation is set.
+//
+// Like Rust's `write_latin1_string`, encoding is lazy over the first maxChars
+// characters, so characters past the cut are never checked. A character that
+// is not Latin-1 fails with a [util.TextEncodingError]; the byte 0xFF (which
+// Lyrics3 cannot carry) fails with encErr unless lossy encoding is enabled.
 func writeLatin1Field(s string, maxChars int, writeOptions meta.WriteOptions, encErr error) ([]byte, error) {
-	if len([]rune(s)) > maxChars && !writeOptions.ImplicitTruncation {
-		return nil, &meta.TooMuchDataError{}
+	if utf8.RuneCountInString(s) > maxChars {
+		if !writeOptions.ImplicitTruncation {
+			return nil, &meta.TooMuchDataError{}
+		}
+		s = truncateRunes(s, maxChars)
 	}
-	enc, err := util.Latin1Encode(s, writeOptions.LossyTextEncoding)
-	if err != nil {
-		return nil, encErr
-	}
-	for i, b := range enc {
+	lossy := writeOptions.LossyTextEncoding
+	out := make([]byte, 0, len(s))
+	for i, c := range []rune(s) {
+		var b byte
+		switch {
+		case c <= 0xFF:
+			b = byte(c)
+		case lossy:
+			b = '?'
+		default:
+			return nil, &util.TextEncodingError{Encoding: util.TextEncodingLatin1, ValidUpTo: i}
+		}
 		if b == 0xFF {
-			if !writeOptions.LossyTextEncoding {
+			if !lossy {
 				return nil, encErr
 			}
-			enc[i] = '?'
+			b = '?'
 		}
+		out = append(out, b)
 	}
-	if len(enc) > maxChars {
-		enc = enc[:maxChars]
+	return out, nil
+}
+
+// truncateRunes returns the first n characters of s.
+func truncateRunes(s string, n int) string {
+	for i := range s {
+		if n == 0 {
+			return s[:i]
+		}
+		n--
 	}
-	return enc, nil
+	return s
 }
 
 // Lyrics3v2TagFlags are the IND field flags of a [Lyrics3v2Tag].
@@ -311,10 +339,7 @@ func ParseLyrics3v2Tag(content []byte, parseOptions meta.ParseOptions) (*Lyrics3
 			if err != nil {
 				return nil, err
 			}
-			for _, line := range strings.Split(strings.ReplaceAll(imgStr, "\r\n", "\n"), "\n") {
-				if line == "" {
-					continue
-				}
+			for _, line := range rustLines(imgStr) {
 				parts := strings.Split(line, "||")
 				var img Lyrics3v2Image
 				img.Filename = parts[0]
@@ -346,6 +371,22 @@ func ParseLyrics3v2Tag(content []byte, parseOptions meta.ParseOptions) (*Lyrics3
 		}
 	}
 	return tag, nil
+}
+
+// rustLines splits like Rust's `str::lines`: on "\n", dropping a "\r" that
+// directly precedes it, with no trailing empty line. Blank lines in the middle
+// are kept.
+func rustLines(s string) []string {
+	var lines []string
+	for s != "" {
+		line, rest, found := strings.Cut(s, "\n")
+		if found {
+			line = strings.TrimSuffix(line, "\r")
+		}
+		lines = append(lines, line)
+		s = rest
+	}
+	return lines
 }
 
 // lyrics3v2ParseTimestamp parses a `[mm:ss]` timestamp.
@@ -428,10 +469,9 @@ func (t *Lyrics3v2Tag) isContentEmpty() bool {
 	return !hasLyrics && !hasInfo && !hasAuthor && !hasEAL && !hasEAR && !hasETT && len(t.Images) == 0
 }
 
-// IsEmpty reports whether the tag has no fields, images, or set flags.
-func (t *Lyrics3v2Tag) IsEmpty() bool {
-	return t.isContentEmpty() && !t.Flags.SynchronizedLyrics && !t.Flags.RandomSelection
-}
+// IsEmpty reports whether the tag has no fields or images. Like Rust's
+// `is_empty`, the flags are not counted.
+func (t *Lyrics3v2Tag) IsEmpty() bool { return t.isContentEmpty() }
 
 // Len returns the number of fields and images present.
 func (t *Lyrics3v2Tag) Len() int {
@@ -637,8 +677,10 @@ func FindLyrics3(reader io.ReadSeeker, read bool, parseOptions meta.ParseOptions
 	if err != nil {
 		return 0, 0, nil, false, err
 	}
+	// Rust seeks relative to the current position, so a negative target is an
+	// error rather than "no tag".
 	if end < int64(len(lyrics3v1Footer)) {
-		return 0, 0, nil, false, nil
+		return 0, 0, nil, false, &meta.TagParseError{Source: errNegativeSeek}
 	}
 	if _, err := reader.Seek(end-int64(len(lyrics3v1Footer)), io.SeekStart); err != nil {
 		return 0, 0, nil, false, err
@@ -690,7 +732,9 @@ func FindLyrics3(reader io.ReadSeeker, read bool, parseOptions meta.ParseOptions
 	}
 
 	var tag any
-	if read && parseOptions.ReadTags {
+	// `read` alone decides whether the tag is parsed (Rust ignores
+	// `parse_options.read_tags` here).
+	if read {
 		content := make([]byte, end-start)
 		if _, err := reader.Seek(start, io.SeekStart); err != nil {
 			return 0, 0, nil, false, err
@@ -734,7 +778,12 @@ func Lyrics3v2WriteTo(file meta.FileLike, tag *Lyrics3v2Tag, writeOptions meta.W
 	if _, err := file.Seek(id3v1Start, io.SeekStart); err != nil {
 		return &meta.FileEncodingError{Source: err}
 	}
-	if l3start, l3end, _, l3found, err := FindLyrics3(file, false, writeOptions.ParseOptions); err == nil && l3found {
+	// Rust propagates `find_lyrics3` errors (e.g. a footer without a header)
+	l3start, l3end, _, l3found, err := FindLyrics3(file, false, writeOptions.ParseOptions)
+	if err != nil {
+		return &meta.FileEncodingError{Source: err}
+	}
+	if l3found {
 		existingStart, existingEnd = l3start, l3end
 	}
 	encoded, err := tag.encode(writeOptions)
@@ -757,7 +806,11 @@ func Lyrics3v1WriteTo(file meta.FileLike, tag *Lyrics3Tag, writeOptions meta.Wri
 	if _, err := file.Seek(id3v1Start, io.SeekStart); err != nil {
 		return &meta.FileEncodingError{Source: err}
 	}
-	if l3start, l3end, _, l3found, err := FindLyrics3(file, false, writeOptions.ParseOptions); err == nil && l3found {
+	l3start, l3end, _, l3found, err := FindLyrics3(file, false, writeOptions.ParseOptions)
+	if err != nil {
+		return &meta.FileEncodingError{Source: err}
+	}
+	if l3found {
 		existingStart, existingEnd = l3start, l3end
 	}
 	encoded, err := tag.encode(writeOptions)

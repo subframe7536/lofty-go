@@ -60,7 +60,24 @@ func main() {
 	}
 	seen := map[string]bool{}
 	var types, consts, vars_, funcs []entry
-	skip := map[string]bool{"init": true}
+	// skip lists exported functions that are internal plumbing for the format
+	// packages (registries, small helpers) and must not become public API of
+	// the root `lofty` package.
+	skip := map[string]bool{
+		"init":                      true,
+		"Itoa":                      true,
+		"Atoi":                      true,
+		"IndexOfStr":                true,
+		"OptionFromPtr":             true,
+		"TryMake":                   true,
+		"SaveTagFields":             true,
+		"RegisterFormat":            true,
+		"RegisterFormatReader":      true,
+		"RegisterFormatWriter":      true,
+		"RegisterTagDumper":         true,
+		"RegisterConcreteTagWriter": true,
+		"WriteConcreteTag":          true,
+	}
 
 	for _, p := range pkgs {
 		fset := token.NewFileSet()

@@ -3,6 +3,7 @@ package wavpack
 import (
 	"bytes"
 	"encoding/binary"
+	"math"
 	"os"
 	"testing"
 
@@ -53,7 +54,7 @@ func TestWvMultichannelSubBlockCursor(t *testing.T) {
 	cases := []struct {
 		name     string
 		content  []byte
-		channels uint8
+		channels uint16
 		mask     uint32
 	}{
 		// ID_MULTICHANNEL (size 2, mono mask 0x04), then nothing: Rust
@@ -157,5 +158,39 @@ func TestWvNonStandardRateProperties(t *testing.T) {
 	}
 	if f.Properties.Channels != 2 || f.Properties.BitDepth != 16 || !f.Properties.IsLossless {
 		t.Errorf("props = %+v", f.Properties)
+	}
+}
+
+// Rust stores the channel count as a u16 ("unlimited" streams) and truncates
+// to u8 only in `From<WavPackProperties> for FileProperties`.
+func TestWvChannelsAreU16(t *testing.T) {
+	// ID_MULTICHANNEL, 6-byte element: channel byte 44 + high nibble 1 (+1) =
+	// 301 channels with a 24-bit mask; two bytes of slack for Rust's skip.
+	first := []byte{0x0D, 0x03, 0x2C, 0x01, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00}
+	data := append(wvtBlock(wvtDSDInitial, 2000, 1000, first), wvtBlock(wvtDSDFinal, 2000, 1000, nil)...)
+	f, err := wvtRead(t, data, meta.ParsingModeBestAttempt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Properties.Channels != 301 {
+		t.Fatalf("channels = %d, want 301", f.Properties.Channels)
+	}
+	if got := f.GetProperties().Channels().OrZero(); got != uint8(301&0xFF) {
+		t.Fatalf("generic channels = %d, want %d", got, uint8(301&0xFF))
+	}
+}
+
+// Rust computes duration/bitrate with saturating casts; a huge stream must not
+// depend on the platform's float-to-int conversion.
+func TestWvBitrateSaturates(t *testing.T) {
+	// One sample at 192 kHz (~5 µs) over a 5 MiB stream: the bitrate overflows u32.
+	flags := uint32(0x800 | 0x1000 | 14<<23) // initial + final, rate index 14
+	data := append(wvtBlock(flags, 1, 1, nil), make([]byte, 5<<20)...)
+	f, err := wvtRead(t, data, meta.ParsingModeBestAttempt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Properties.AudioBitrate != math.MaxUint32 || f.Properties.OverallBitrate != math.MaxUint32 {
+		t.Fatalf("bitrates = %d/%d, want saturated", f.Properties.AudioBitrate, f.Properties.OverallBitrate)
 	}
 }

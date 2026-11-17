@@ -125,6 +125,15 @@ func NewTagItemChecked(tagType TagType, itemKey ItemKey, itemValue ItemValue) (T
 	return NewTagItem(itemKey, itemValue), true
 }
 
+// Equal reports whether two items have the same key, value, language and
+// description (Rust's derived `PartialEq`).
+func (t TagItem) Equal(other TagItem) bool {
+	return t.key == other.key &&
+		t.Lang == other.Lang &&
+		t.Description == other.Description &&
+		t.value.Equal(other.value)
+}
+
 // Key returns the [ItemKey].
 func (t TagItem) Key() ItemKey { return t.key }
 

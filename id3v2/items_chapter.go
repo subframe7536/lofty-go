@@ -10,6 +10,45 @@ import (
 	"github.com/subframe7536/lofty-go/internal/util"
 )
 
+// maxFrameNesting is the deepest CHAP/CTOC nesting that is parsed. Rust has no
+// cap (deeply nested tags can exhaust its stack); real files nest at most one
+// or two levels.
+const maxFrameNesting = 8
+
+// parseNestedFrames reads the embedded sub-frames of a CHAP/CTOC frame from the
+// rest of its content. A nil list with a nil error means the frame is skipped
+// (nesting limit exceeded in a non-strict parsing mode).
+func parseNestedFrames(reader io.Reader, id FrameId, version Id3v2Version, parseOptions meta.ParseOptions) (*FrameList, error) {
+	depth := readerDepth(reader)
+	if depth == 0 {
+		// Parsed standalone rather than from a tag: this frame's content is
+		// the first level.
+		depth = 1
+	}
+	if depth > maxFrameNesting {
+		if parseOptions.ParsingMode == meta.ParsingModeStrict {
+			return nil, frameParseErrorMsg(meta.Some(id), "frames are nested too deeply")
+		}
+		return nil, nil
+	}
+
+	owned, ok := reader.(*ownedReader)
+	if !ok {
+		limit := int64(util.GetGlobalOptions().AllocationLimit)
+		// Read errors end the sub-frame list like a short read, except for an
+		// allocation-limit overrun, which must not be swallowed.
+		data, err := io.ReadAll(io.LimitReader(reader, limit+1))
+		if _, isAlloc := err.(*util.AllocationError); isAlloc || int64(len(data)) > limit {
+			if !isAlloc {
+				err = &util.AllocationError{Kind: util.AllocationLimitExceeded}
+			}
+			return nil, frameParseError(meta.Some(id), err)
+		}
+		owned = &ownedReader{buf: data, depth: depth}
+	}
+	return readAllFramesIntoList(owned, version, Id3v2TagFlags{}, parseOptions)
+}
+
 // ChapterFrame is an ID3v2 "CHAP" frame.
 type ChapterFrame struct {
 	header FrameHeader
@@ -76,16 +115,22 @@ func (f *ChapterFrame) frameBytes(ctx *frameEncodingContext) ([]byte, error) {
 	content.Write(tmp[:])
 	binary.BigEndian.PutUint32(tmp[:], f.EndOffset)
 	content.Write(tmp[:])
-	frames := f.Children.CloneFrames()
-	if ctx.version == id3v2Version3 {
-		err = createItemsV3(&content, frames, ctx)
-	} else {
-		err = createItems(&content, frames, ctx)
-	}
-	if err != nil {
+	if err := writeNestedFrames(&content, f.Children, ctx); err != nil {
 		return nil, err
 	}
 	return content.Bytes(), nil
+}
+
+// writeNestedFrames encodes sub-frames with a fresh encoding context, like
+// Rust's nested `create_items`: state such as the CTOC root marker must not
+// leak from the parent's context into its children.
+func writeNestedFrames(w io.Writer, children *FrameList, parent *frameEncodingContext) error {
+	ctx := &frameEncodingContext{version: parent.version, writeOptions: parent.writeOptions}
+	frames := children.CloneFrames()
+	if ctx.version == id3v2Version3 {
+		return createItemsV3(w, frames, ctx)
+	}
+	return createItems(w, frames, ctx)
 }
 
 func (f *ChapterFrame) cloneFrame() Frame {
@@ -106,8 +151,8 @@ func parseChapterFrame(reader io.Reader, parseOptions meta.ParseOptions, version
 	if _, err := io.ReadFull(reader, times[:]); err != nil {
 		return nil, frameParseError(meta.None[FrameId](), err)
 	}
-	children, err := readAllFramesIntoList(reader, version, Id3v2TagFlags{}, parseOptions)
-	if err != nil {
+	children, err := parseNestedFrames(reader, FrameIdValid("CHAP"), version, parseOptions)
+	if err != nil || children == nil {
 		return nil, err
 	}
 	return &ChapterFrame{
@@ -217,13 +262,7 @@ func (f *ChapterTableOfContentsFrame) frameBytes(ctx *frameEncodingContext) ([]b
 		}
 		content.Write(entryBytes)
 	}
-	frames := f.Children.CloneFrames()
-	if ctx.version == id3v2Version3 {
-		err = createItemsV3(&content, frames, ctx)
-	} else {
-		err = createItems(&content, frames, ctx)
-	}
-	if err != nil {
+	if err := writeNestedFrames(&content, f.Children, ctx); err != nil {
 		return nil, err
 	}
 	return content.Bytes(), nil
@@ -258,8 +297,8 @@ func parseChapterTableOfContentsFrame(reader io.Reader, parseOptions meta.ParseO
 		}
 		entries = append(entries, entry.Content)
 	}
-	children, err := readAllFramesIntoList(reader, version, Id3v2TagFlags{}, parseOptions)
-	if err != nil {
+	children, err := parseNestedFrames(reader, FrameIdValid("CTOC"), version, parseOptions)
+	if err != nil || children == nil {
 		return nil, err
 	}
 	return &ChapterTableOfContentsFrame{

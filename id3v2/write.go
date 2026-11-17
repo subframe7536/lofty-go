@@ -87,7 +87,15 @@ func createTag(flags Id3v2TagFlags, frames []Frame, writeOptions meta.WriteOptio
 		if flags.Restrictions != nil {
 			contentStart += 3
 		}
-		crc := crc32Of(out[contentStart:])
+		// Rust's offsets overshoot the content start by one byte when
+		// restrictions are present (it hashes from byte 25, not 24); the same
+		// offset is kept for byte parity, clamped so a tag with no content
+		// after it cannot slice out of range.
+		var crcContent []byte
+		if contentStart <= len(out) {
+			crcContent = out[contentStart:]
+		}
+		crc := crc32Of(crcContent)
 		// The CRC-32 is stored as a 35 bit synchsafe integer
 		var encodedCrc [5]byte
 		for i := 0; i < 5; i++ {
@@ -99,8 +107,8 @@ func createTag(flags Id3v2TagFlags, frames []Frame, writeOptions meta.WriteOptio
 
 	if flags.Footer {
 		writeTagFooter(&id3v2)
-	} else {
-		writeTagPadding(&id3v2, paddingSize)
+	} else if err := writeTagPadding(&id3v2, paddingSize); err != nil {
+		return nil, &Id3v2EncodingError{Source: err}
 	}
 
 	return id3v2.Bytes(), nil
@@ -154,8 +162,8 @@ func createTagV3(flags Id3v2TagFlags, frames []Frame, writeOptions meta.WriteOpt
 
 	if flags.Footer {
 		writeTagFooter(&id3v2)
-	} else {
-		writeTagPadding(&id3v2, paddingSize)
+	} else if err := writeTagPadding(&id3v2, paddingSize); err != nil {
+		return nil, &Id3v2EncodingError{Source: err}
 	}
 
 	return id3v2.Bytes(), nil
@@ -163,10 +171,12 @@ func createTagV3(flags Id3v2TagFlags, frames []Frame, writeOptions meta.WriteOpt
 
 // verifyTagSize mirrors Rust `verify_tag_size`.
 func verifyTagSize(flags Id3v2TagFlags, tagLen, headerLen int, extendedHeaderLen uint32, preferredPadding uint32) (totalSize, paddingSize uint32, err error) {
-	length := uint32(tagLen - (headerLen - int(extendedHeaderLen)))
-	if length > synchsafeMax {
+	// Check the width before narrowing: a length past 4 GiB must not wrap.
+	wide := int64(tagLen) - (int64(headerLen) - int64(extendedHeaderLen))
+	if wide < 0 || wide > int64(synchsafeMax) {
 		return 0, 0, &Id3v2EncodingError{Source: &meta.TooMuchDataError{}}
 	}
+	length := uint32(wide)
 	if flags.Footer {
 		preferredPadding = 0
 	}
@@ -189,10 +199,16 @@ func writeTagFooter(id3v2 *bytes.Buffer) {
 	id3v2.Write(out[3:10])
 }
 
-func writeTagPadding(id3v2 *bytes.Buffer, paddingSize uint32) {
-	if paddingSize > 0 {
-		id3v2.Write(make([]byte, paddingSize))
+func writeTagPadding(id3v2 *bytes.Buffer, paddingSize uint32) error {
+	if paddingSize == 0 {
+		return nil
 	}
+	padding, err := util.TryByteSlice(int(paddingSize))
+	if err != nil {
+		return err
+	}
+	id3v2.Write(padding)
+	return nil
 }
 
 // --- frame writing ---
@@ -245,7 +261,8 @@ func createItemsV3(w io.Writer, frames []Frame, ctx *frameEncodingContext) error
 			}
 			if isTdor {
 				year := tsf.Timestamp.Year
-				newFrame := NewTextInformationFrame(FrameIdValid("TORY"), tsf.Encoding.ToID3v23(), util.Itoa(int(year)))
+				// Rust writes a year-only Timestamp, which formats as `{:04}`
+				newFrame := NewTextInformationFrame(FrameIdValid("TORY"), tsf.Encoding.ToID3v23(), meta.Timestamp{Year: year}.String())
 				newFrame.SetFlags(tsf.Flags())
 				value, err := frameAsBytes(newFrame, ctx)
 				if err != nil {

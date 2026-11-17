@@ -408,6 +408,17 @@ func (t *Id3v2Tag) UnsyncText() string {
 	return content
 }
 
+// UnsyncTexts returns all USLT frames (Rust `Id3v2Tag::unsync_text`).
+func (t *Id3v2Tag) UnsyncTexts() []*UnsynchronizedTextFrame {
+	var out []*UnsynchronizedTextFrame
+	for _, f := range t.Frames.Frames() {
+		if uf, ok := f.(*UnsynchronizedTextFrame); ok {
+			out = append(out, uf)
+		}
+	}
+	return out
+}
+
 // Comments returns the comment frames with the empty content descriptor
 // (Rust `Id3v2Tag::comments` — custom-description comments are excluded).
 func (t *Id3v2Tag) Comments() []*CommentFrame {
@@ -442,8 +453,20 @@ func (t *Id3v2Tag) setText(id string, value string) {
 	t.Frames.Insert(NewTextInformationFrame(fid, util.TextEncodingUTF8, value))
 }
 
-// Title returns the tag's title (TIT2).
-func (t *Id3v2Tag) Title() string { return t.text("TIT2") }
+// accessorText is [Id3v2Tag.text] for the Title/Artist/Album accessors: the
+// ID3v2.4 multi-value separator is replaced with "/" (Rust
+// `remove_separators_from_frame_text`). Other versions are left untouched.
+func (t *Id3v2Tag) accessorText(id string) string {
+	s := t.text(id)
+	if t.originalVersion != id3v2Version4 {
+		return s
+	}
+	return strings.ReplaceAll(s, v4MultiValueSeparator, "/")
+}
+
+// Title returns the tag's title (TIT2). For ID3v2.4 tags, null separators
+// between multiple values are replaced with "/".
+func (t *Id3v2Tag) Title() string { return t.accessorText("TIT2") }
 
 // SetTitle sets the tag's title (TIT2).
 func (t *Id3v2Tag) SetTitle(title string) { t.setText("TIT2", title) }
@@ -451,8 +474,9 @@ func (t *Id3v2Tag) SetTitle(title string) { t.setText("TIT2", title) }
 // RemoveTitle removes the tag's title (TIT2).
 func (t *Id3v2Tag) RemoveTitle() { t.Frames.Remove(FrameIdValid("TIT2")) }
 
-// Artist returns the tag's artist (TPE1).
-func (t *Id3v2Tag) Artist() string { return t.text("TPE1") }
+// Artist returns the tag's artist (TPE1), with the same separator handling as
+// [Id3v2Tag.Title].
+func (t *Id3v2Tag) Artist() string { return t.accessorText("TPE1") }
 
 // SetArtist sets the tag's artist (TPE1).
 func (t *Id3v2Tag) SetArtist(artist string) { t.setText("TPE1", artist) }
@@ -460,8 +484,9 @@ func (t *Id3v2Tag) SetArtist(artist string) { t.setText("TPE1", artist) }
 // RemoveArtist removes the tag's artist (TPE1).
 func (t *Id3v2Tag) RemoveArtist() { t.Frames.Remove(FrameIdValid("TPE1")) }
 
-// Album returns the tag's album title (TALB).
-func (t *Id3v2Tag) Album() string { return t.text("TALB") }
+// Album returns the tag's album title (TALB), with the same separator handling
+// as [Id3v2Tag.Title].
+func (t *Id3v2Tag) Album() string { return t.accessorText("TALB") }
 
 // SetAlbum sets the tag's album title (TALB).
 func (t *Id3v2Tag) SetAlbum(album string) { t.setText("TALB", album) }
@@ -471,7 +496,8 @@ func (t *Id3v2Tag) RemoveAlbum() { t.Frames.Remove(FrameIdValid("TALB")) }
 
 // Track returns the tag's track number (TRCK "N/T" first part).
 func (t *Id3v2Tag) Track() meta.Option[uint32] {
-	return firstPairValue(t.text("TRCK"))
+	first, _ := splitNumPairLoose(t.text("TRCK"))
+	return first
 }
 
 // SetTrack sets the tag's track number, preserving the total if present.
@@ -482,7 +508,8 @@ func (t *Id3v2Tag) RemoveTrack() { t.Frames.Remove(FrameIdValid("TRCK")) }
 
 // TrackTotal returns the tag's total tracks (TRCK "N/T" second part).
 func (t *Id3v2Tag) TrackTotal() meta.Option[uint32] {
-	return secondPairValue(t.text("TRCK"))
+	_, second := splitNumPairLoose(t.text("TRCK"))
+	return second
 }
 
 // SetTrackTotal sets the tag's total tracks, preserving the number if present.
@@ -492,7 +519,10 @@ func (t *Id3v2Tag) SetTrackTotal(total uint32) { t.setNumberPairTotal("TRCK", me
 func (t *Id3v2Tag) RemoveTrackTotal() { t.setNumberPairTotal("TRCK", meta.None[uint32]()) }
 
 // Disk returns the tag's disc number (TPOS).
-func (t *Id3v2Tag) Disk() meta.Option[uint32] { return firstPairValue(t.text("TPOS")) }
+func (t *Id3v2Tag) Disk() meta.Option[uint32] {
+	first, _ := splitNumPairLoose(t.text("TPOS"))
+	return first
+}
 
 // SetDisk sets the tag's disc number, preserving the total if present.
 func (t *Id3v2Tag) SetDisk(disk uint32) { t.setNumberPair("TPOS", meta.Some(disk)) }
@@ -501,7 +531,10 @@ func (t *Id3v2Tag) SetDisk(disk uint32) { t.setNumberPair("TPOS", meta.Some(disk
 func (t *Id3v2Tag) RemoveDisk() { t.Frames.Remove(FrameIdValid("TPOS")) }
 
 // DiskTotal returns the tag's total discs (TPOS).
-func (t *Id3v2Tag) DiskTotal() meta.Option[uint32] { return secondPairValue(t.text("TPOS")) }
+func (t *Id3v2Tag) DiskTotal() meta.Option[uint32] {
+	_, second := splitNumPairLoose(t.text("TPOS"))
+	return second
+}
 
 // SetDiskTotal sets the tag's total discs, preserving the number if present.
 func (t *Id3v2Tag) SetDiskTotal(total uint32) { t.setNumberPairTotal("TPOS", meta.Some(total)) }
@@ -509,14 +542,26 @@ func (t *Id3v2Tag) SetDiskTotal(total uint32) { t.setNumberPairTotal("TPOS", met
 // RemoveDiskTotal removes the tag's total discs.
 func (t *Id3v2Tag) RemoveDiskTotal() { t.setNumberPairTotal("TPOS", meta.None[uint32]()) }
 
-// Date returns the tag's timestamp (TDRC).
-func (t *Id3v2Tag) Date() string { return t.text("TDRC") }
+// Date returns the tag's timestamp (TDRC) as text. Parsed tags store TDRC as a
+// [TimestampFrame], which is formatted; a plain text frame is returned as is.
+func (t *Id3v2Tag) Date() string {
+	switch f := t.Frames.Get(FrameIdValid("TDRC")).(type) {
+	case *TimestampFrame:
+		return f.Timestamp.String()
+	case *TextInformationFrame:
+		return f.Value
+	}
+	return ""
+}
 
 // SetDate sets the tag's timestamp (TDRC) — accepts a parseable timestamp
-// string or falls back to plain text.
+// string or falls back to plain text. Any existing TDRC frame is replaced,
+// whatever its kind.
 func (t *Id3v2Tag) SetDate(date string) {
+	id := FrameIdValid("TDRC")
+	t.Frames.Remove(id)
 	if ts, err := meta.TimestampParseString(date); err == nil {
-		t.Frames.Insert(NewTimestampFrame(FrameIdValid("TDRC"), util.TextEncodingUTF8, ts))
+		t.Frames.Push(NewTimestampFrame(id, util.TextEncodingUTF8, ts))
 		return
 	}
 	t.setText("TDRC", date)
@@ -531,7 +576,7 @@ func (t *Id3v2Tag) Genre() string {
 	if len(genres) == 0 {
 		return ""
 	}
-	return strings.Join(genres, "/")
+	return strings.Join(genres, " / ")
 }
 
 // SetGenre sets the tag's genre (TCON).
@@ -587,35 +632,38 @@ func (t *Id3v2Tag) RemoveComment() {
 	t.Frames.SetFrames(remaining)
 }
 
-func firstPairValue(text string) meta.Option[uint32] {
-	num, _ := splitNumTotal(text)
-	if num == "" {
-		return meta.None[uint32]()
+// parseU32 parses like Rust's `str::parse::<u32>`: an optional leading '+' is
+// accepted, whitespace and signs otherwise are not.
+func parseU32(s string) (uint32, bool) {
+	if len(s) > 1 && s[0] == '+' {
+		s = s[1:]
 	}
-	if n, err := strconv.ParseUint(strings.TrimSpace(num), 10, 32); err == nil {
-		return meta.Some(uint32(n))
-	}
-	return meta.None[uint32]()
+	n, err := strconv.ParseUint(s, 10, 32)
+	return uint32(n), err == nil
 }
 
-func secondPairValue(text string) meta.Option[uint32] {
-	_, tot := splitNumTotal(text)
-	if tot == "" {
-		return meta.None[uint32]()
+// splitNumPairLoose is the accessor-side pair split (Rust
+// `Id3v2Tag::split_num_pair`): split on NUL and '/', keep the first two
+// segments that parse as u32 (unparseable segments are skipped, nothing is
+// trimmed).
+func splitNumPairLoose(text string) (first, second meta.Option[uint32]) {
+	for _, part := range strings.FieldsFunc(text, func(r rune) bool { return r == 0 || r == '/' }) {
+		n, ok := parseU32(part)
+		if !ok {
+			continue
+		}
+		if first.IsNone() {
+			first = meta.Some(n)
+		} else {
+			return first, meta.Some(n)
+		}
 	}
-	if n, err := strconv.ParseUint(strings.TrimSpace(tot), 10, 32); err == nil {
-		return meta.Some(uint32(n))
-	}
-	return meta.None[uint32]()
+	return first, second
 }
 
 // setNumberPair sets the number of an "N/T" frame, preserving the total.
 func (t *Id3v2Tag) setNumberPair(id string, num meta.Option[uint32]) {
-	_, tot := splitNumTotal(t.text(id))
-	var totOpt meta.Option[uint32]
-	if n, err := strconv.ParseUint(strings.TrimSpace(tot), 10, 32); err == nil && tot != "" {
-		totOpt = meta.Some(uint32(n))
-	}
+	_, totOpt := splitNumPairLoose(t.text(id))
 	if f := newNumberPairFrame(FrameIdValid(id), num, totOpt); f != nil {
 		t.Frames.Insert(f)
 	} else {
@@ -625,11 +673,7 @@ func (t *Id3v2Tag) setNumberPair(id string, num meta.Option[uint32]) {
 
 // setNumberPairTotal sets the total of an "N/T" frame, preserving the number.
 func (t *Id3v2Tag) setNumberPairTotal(id string, total meta.Option[uint32]) {
-	num, _ := splitNumTotal(t.text(id))
-	var numOpt meta.Option[uint32]
-	if n, err := strconv.ParseUint(strings.TrimSpace(num), 10, 32); err == nil && num != "" {
-		numOpt = meta.Some(uint32(n))
-	}
+	numOpt, _ := splitNumPairLoose(t.text(id))
 	if f := newNumberPairFrame(FrameIdValid(id), numOpt, total); f != nil {
 		t.Frames.Insert(f)
 	} else {
@@ -1052,18 +1096,10 @@ var id3v2SingleTxxxKeys = map[meta.ItemKey]bool{
 	meta.ItemKeyReplayGainTrackGain: true, meta.ItemKeyReplayGainTrackPeak: true,
 }
 
-func splitNumTotal(s string) (num, total string) {
-	num = s
-	if i := strings.IndexByte(s, '/'); i >= 0 {
-		num = s[:i]
-		total = s[i+1:]
-	}
-	return num, total
-}
-
 // splitNumPair splits an ID3v2 pair value on the first NUL or '/',
 // trims each part, and requires all present parts to parse as u32 —
-// matching Rust's `split_pair`. Returns ok=false when unconvertible.
+// matching Rust's `handle_tag_split::split_pair` (`splitn(2, [NUL, '/'])`).
+// Returns ok=false when unconvertible; total is "" when absent.
 func splitNumPair(s string) (num, total string, ok bool) {
 	numPart := s
 	totPart := ""
@@ -1076,7 +1112,7 @@ func splitNumPair(s string) (num, total string, ok bool) {
 		if p == "" {
 			return "", false
 		}
-		if _, err := strconv.ParseUint(p, 10, 32); err != nil {
+		if _, ok := parseU32(p); !ok {
 			return "", false
 		}
 		return p, true

@@ -6,15 +6,18 @@ import (
 	"strings"
 )
 
-// Extensions is a list of common audio extensions.
-//
-// This contains a bunch of common extensions for all supported [FileType]s, and
-// can be used as a filter when scanning directories.
-var Extensions = []string{
+var extensions = [...]string{
 	"aac", "ape", "aiff", "aif", "afc", "aifc", "dsf", "mp3", "mp2", "mp1", "wav",
 	"wv", "opus", "flac", "ogg", "mp4", "m4a", "m4b", "m4p", "m4r", "m4v", "3gp",
 	"mpc", "mp+", "mpp", "spx",
 }
+
+// Extensions returns a list of common audio extensions.
+//
+// This contains a bunch of common extensions for all supported [FileType]s, and
+// can be used as a filter when scanning directories. The returned slice is a
+// copy and may be modified freely.
+func Extensions() []string { return append([]string(nil), extensions[:]...) }
 
 // FileType is the type of file read.
 type FileType struct {
@@ -74,11 +77,14 @@ var (
 // [RegisterCustomResolver].
 func FileTypeCustom(name string) FileType { return FileType{kind: fileTypeCustom, customName: name} }
 
-// FileTypeVariants contains all non-custom [FileType] variants.
-var FileTypeVariants = []FileType{
-	FileTypeAac, FileTypeAiff, FileTypeApe, FileTypeDsf, FileTypeFlac, FileTypeMpeg,
-	FileTypeMp4, FileTypeMpc, FileTypeOpus, FileTypeVorbis, FileTypeSpeex,
-	FileTypeWav, FileTypeWavPack,
+// FileTypeVariants returns all non-custom [FileType] variants. The returned
+// slice is a copy and may be modified freely.
+func FileTypeVariants() []FileType {
+	return []FileType{
+		FileTypeAac, FileTypeAiff, FileTypeApe, FileTypeDsf, FileTypeFlac, FileTypeMpeg,
+		FileTypeMp4, FileTypeMpc, FileTypeOpus, FileTypeVorbis, FileTypeSpeex,
+		FileTypeWav, FileTypeWavPack,
+	}
 }
 
 func (t FileType) String() string {

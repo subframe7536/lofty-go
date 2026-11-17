@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"slices"
 )
 
 // FileLike provides a set of methods to read and write to a file-like object.
@@ -76,13 +77,22 @@ func replaceRange(file FileLike, fileLen, rangeStart, rangeEnd uint64, replaceme
 		return nil
 	}
 
-	buffer := make([]byte, moveBufferSize)
+	// Size the scratch buffer to the work at hand (capped at 64KiB) so small
+	// edits don't allocate a full chunk.
+	tailLen := fileLen - rangeEnd
+	var bufLen uint64
+	if replacementLen > oldLen {
+		bufLen = min(moveBufferSize, max(tailLen, replacementLen-oldLen))
+	} else {
+		bufLen = min(moveBufferSize, tailLen)
+	}
+	buffer := make([]byte, max(bufLen, 1))
 
 	switch {
 	case replacementLen > oldLen:
 		difference := replacementLen - oldLen
 		// The ranges overlap, so move the tail backwards from EOF before writing metadata.
-		if err := extendStorage(file, difference); err != nil {
+		if err := extendStorage(file, difference, buffer); err != nil {
 			return err
 		}
 		if err := shiftRight(file, rangeEnd, fileLen, difference, buffer); err != nil {
@@ -106,11 +116,15 @@ func replaceRange(file FileLike, fileLen, rangeStart, rangeEnd uint64, replaceme
 	return err
 }
 
-func extendStorage(file FileLike, amount uint64) error {
+// extendStorage appends `amount` zero bytes to the file, writing them in
+// chunks of at most len(scratch). `scratch` is cleared and reused, so callers
+// may reuse the same buffer for the subsequent shift.
+func extendStorage(file FileLike, amount uint64, scratch []byte) error {
 	if _, err := file.Seek(0, io.SeekEnd); err != nil {
 		return err
 	}
-	zeros := make([]byte, moveBufferSize)
+	clear(scratch)
+	zeros := scratch
 	remaining := amount
 	for remaining != 0 {
 		chunkLen := min(remaining, uint64(len(zeros)))
@@ -215,17 +229,14 @@ func (f *BytesFile) Write(b []byte) (int, error) {
 	end := f.pos + int64(len(b))
 	oldLen := int64(len(f.buf))
 	if end > oldLen {
-		if int64(cap(f.buf)) >= end {
-			f.buf = f.buf[:end]
-		} else {
-			nb := make([]byte, end)
-			copy(nb, f.buf)
-			f.buf = nb
-		}
+		// slices.Grow grows geometrically, so repeated appends are amortized O(1).
+		f.buf = slices.Grow(f.buf, int(end-oldLen))[:end]
 		// Rust `Cursor<Vec>` resizes with zeros — a resliced buffer may
-		// still hold stale bytes beyond the old length
-		for i := oldLen; i < f.pos; i++ {
-			f.buf[i] = 0
+		// still hold stale bytes beyond the old length. Only the gap between
+		// the old end and the write position needs zeroing; the rest is
+		// overwritten below.
+		if f.pos > oldLen {
+			clear(f.buf[oldLen:f.pos])
 		}
 	}
 	n := copy(f.buf[f.pos:], b)
@@ -336,7 +347,11 @@ func floatFromBits(b uint64) float64 { return math.Float64frombits(b) }
 
 // DivRound performs a rounded division.
 //
-// NOTE: If the result is less than 1, it will be rounded up to 1.
+// This is `(a + b/2) / b` exactly like Rust's `RoundedDivision::div_round`
+// (half rounds up). Rust's doc claims results below 1 are "rounded up to 1",
+// but that only happens when a >= b/2; e.g. DivRound(0, n) is 0. A zero
+// divisor panics, and `a + b/2` wraps on overflow (Rust panics in debug
+// builds); use [MulDivRound] when a 128-bit intermediate is needed.
 func DivRound(a, b uint64) uint64 {
 	return (a + (b >> 1)) / b
 }
@@ -366,6 +381,10 @@ type RevSearchEnd struct {
 
 // RevSearchEndStreamStart ends the search at the start of the stream.
 var RevSearchEndStreamStart = RevSearchEnd{kind: 0}
+
+// RevSearchEndFromCurrent ends the search at the reader's position when
+// [RevPatternSearcher.Search] was called (Rust `RevSearchEnd::FromCurrent`).
+var RevSearchEndFromCurrent = RevSearchEnd{kind: 1}
 
 // RevSearchEndAtPos ends the search at a specific position.
 func RevSearchEndAtPos(p uint64) RevSearchEnd { return RevSearchEnd{kind: 2, pos: p} }

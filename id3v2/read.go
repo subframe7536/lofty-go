@@ -408,12 +408,18 @@ func parsedFrameRead(reader io.Reader, version Id3v2Version, tagFlags Id3v2TagFl
 	if flags.Unsynchronisation {
 		content = Id3v2Deunsync(content)
 	}
-	var contentReader io.Reader = bytes.NewReader(content)
+	// The content is a private copy (or a private sub-slice of one), so nested
+	// frames (CHAP/CTOC children) can be handed sub-slices instead of copies.
+	contentDepth := readerDepth(reader) + 1
+	var contentReader io.Reader = &ownedReader{buf: content, depth: contentDepth}
+	var zlibReader *lazyZlibReader
 	if flags.Compression {
 		// Decompression is lazy, like Rust's `ZlibDecoder`: a corrupt stream
 		// surfaces as a read error, which parsers that tolerate a short read
-		// keep tolerating.
-		contentReader = &lazyZlibReader{src: content}
+		// keep tolerating. Output beyond the allocation limit is not
+		// tolerated, see the check below.
+		zlibReader = &lazyZlibReader{src: content, depth: contentDepth}
+		contentReader = zlibReader
 	}
 	if flags.Encryption.IsSome() {
 		// Nothing further we can do with encrypted frames. Rust reads exactly
@@ -429,6 +435,9 @@ func parsedFrameRead(reader io.Reader, version Id3v2Version, tagFlags Id3v2TagFl
 	}
 
 	frame, result, err := parseFrame(contentReader, id, size, flags, version, parseOptions)
+	if zlibReader != nil && zlibReader.allocErr != nil {
+		return nil, 0, frameParseError(meta.Some(id), zlibReader.allocErr)
+	}
 	if err == nil && result == parsedFrameSkip {
 		// Rust's `skip_frame(None, reader, size)?`: draining can only fail for
 		// a corrupt compressed stream.
@@ -481,6 +490,9 @@ func readerUpperBound(r io.Reader) (int64, bool) {
 // available data. It never allocates more than the data actually available.
 func readFrameContent(r io.Reader, size uint32) ([]byte, error) {
 	n := int64(size)
+	if o, ok := r.(*ownedReader); ok {
+		return o.take(n), nil
+	}
 	if avail, ok := readerUpperBound(r); ok {
 		if avail < n {
 			n = avail
@@ -497,12 +509,21 @@ func readFrameContent(r io.Reader, size uint32) ([]byte, error) {
 
 // lazyZlibReader decompresses src on first read, mirroring Rust's lazily
 // initialized `flate2::read::ZlibDecoder`.
+//
+// The decompressed output is bounded by the global allocation limit; exceeding
+// it fails with a [util.AllocationError] (also kept in allocErr, since
+// parsers tolerate other read errors as short reads).
 type lazyZlibReader struct {
-	src  []byte
-	r    io.Reader
-	err  error
-	init bool
+	src      []byte
+	depth    int
+	r        io.Reader
+	err      error
+	allocErr error
+	total    int64
+	init     bool
 }
+
+func (z *lazyZlibReader) nestingDepth() int { return z.depth }
 
 func (z *lazyZlibReader) Read(p []byte) (int, error) {
 	if !z.init {
@@ -517,11 +538,77 @@ func (z *lazyZlibReader) Read(p []byte) (int, error) {
 	if z.err != nil {
 		return 0, z.err
 	}
+	limit := int64(util.GetGlobalOptions().AllocationLimit)
+	// Allow one byte past the limit so an overflow is detectable.
+	if room := limit - z.total + 1; int64(len(p)) > room {
+		p = p[:room]
+	}
 	n, err := z.r.Read(p)
+	z.total += int64(n)
+	if z.total > limit {
+		n -= int(z.total - limit)
+		z.total = limit
+		z.allocErr = &util.AllocationError{Kind: util.AllocationLimitExceeded}
+		z.err = z.allocErr
+		return n, z.err
+	}
 	if err != nil && err != io.EOF {
 		z.err = err
 	}
 	return n, err
+}
+
+// ownedReader reads from a byte slice that is private to the frame being
+// parsed, so nested frames can take sub-slices of it without copying.
+type ownedReader struct {
+	buf   []byte
+	off   int
+	depth int
+}
+
+func (o *ownedReader) nestingDepth() int { return o.depth }
+
+func (o *ownedReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if o.off >= len(o.buf) {
+		return 0, io.EOF
+	}
+	n := copy(p, o.buf[o.off:])
+	o.off += n
+	return n, nil
+}
+
+func (o *ownedReader) ReadByte() (byte, error) {
+	if o.off >= len(o.buf) {
+		return 0, io.EOF
+	}
+	b := o.buf[o.off]
+	o.off++
+	return b, nil
+}
+
+func (o *ownedReader) remainingUpperBound() int64 { return int64(len(o.buf) - o.off) }
+
+// take returns up to n of the remaining bytes as a capacity-limited sub-slice.
+func (o *ownedReader) take(n int64) []byte {
+	if rem := int64(len(o.buf) - o.off); n > rem {
+		n = rem
+	}
+	end := o.off + int(n)
+	s := o.buf[o.off:end:end]
+	o.off = end
+	return s
+}
+
+// readerDepth reports how many CHAP/CTOC-style container levels enclose the
+// frames read from r (0 for the tag's top-level frame list).
+func readerDepth(r io.Reader) int {
+	if d, ok := r.(interface{ nestingDepth() int }); ok {
+		return d.nestingDepth()
+	}
+	return 0
 }
 
 func (f *BinaryFrame) withFlags(flags FrameFlags) *BinaryFrame {

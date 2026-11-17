@@ -226,7 +226,10 @@ func ReadFormat(fTy FileType, reader io.ReadSeeker, options ParseOptions) (*Tagg
 		}
 		return lookupResolver(fTy.customName).ReadFrom(reader, options)
 	}
-	if r, ok := formatReaders[fTy.kind]; ok {
+	registryMu.RLock()
+	r, ok := formatReaders[fTy.kind]
+	registryMu.RUnlock()
+	if ok {
 		tf, err := r(reader, options)
 		if err != nil {
 			return nil, err

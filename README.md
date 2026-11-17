@@ -114,10 +114,9 @@ symbols to a subpackage with `go run ./scripts/facadegen`.
 
 ## Dependencies
 
-Only two, both deliberate (`go.mod`):
+Only one, deliberate (`go.mod`):
 
 - `github.com/bogem/id3v2/v2` — test-only ID3v2 parse oracle (production read/write is the native `id3v2` package)
-- `github.com/go-flac/go-flac/v2` — FLAC metadata blocks
 
 MP4 atom traversal, Ogg page read/write, and Latin-1/UTF-16 codecs are
 hand-rolled where Lofty semantics diverge from off-the-shelf libraries

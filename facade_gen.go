@@ -280,11 +280,15 @@ type (
 
 // from mpc
 type (
-	MpcProfile    = mpc.MpcProfile
-	MpcLink       = mpc.MpcLink
-	MpcProperties = mpc.MpcProperties
-	MusepackFile  = mpc.MusepackFile
-	MpcParseError = mpc.MpcParseError
+	MpcProfile         = mpc.MpcProfile
+	MpcLink            = mpc.MpcLink
+	MpcStreamVersion   = mpc.MpcStreamVersion
+	MpcSv8StreamHeader = mpc.MpcSv8StreamHeader
+	MpcSv8ReplayGain   = mpc.MpcSv8ReplayGain
+	MpcSv8EncoderInfo  = mpc.MpcSv8EncoderInfo
+	MpcProperties      = mpc.MpcProperties
+	MusepackFile       = mpc.MusepackFile
+	MpcParseError      = mpc.MpcParseError
 )
 
 // from aac
@@ -297,221 +301,258 @@ type (
 
 // from meta
 const (
-	PictureTypeOther                     = meta.PictureTypeOther
-	PictureTypeIcon                      = meta.PictureTypeIcon
-	PictureTypeOtherIcon                 = meta.PictureTypeOtherIcon
-	PictureTypeCoverFront                = meta.PictureTypeCoverFront
-	PictureTypeCoverBack                 = meta.PictureTypeCoverBack
-	PictureTypeLeaflet                   = meta.PictureTypeLeaflet
-	PictureTypeMedia                     = meta.PictureTypeMedia
-	PictureTypeLeadArtist                = meta.PictureTypeLeadArtist
-	PictureTypeArtist                    = meta.PictureTypeArtist
-	PictureTypeConductor                 = meta.PictureTypeConductor
-	PictureTypeBand                      = meta.PictureTypeBand
-	PictureTypeComposer                  = meta.PictureTypeComposer
-	PictureTypeLyricist                  = meta.PictureTypeLyricist
-	PictureTypeRecordingLocation         = meta.PictureTypeRecordingLocation
-	PictureTypeDuringRecording           = meta.PictureTypeDuringRecording
-	PictureTypeDuringPerformance         = meta.PictureTypeDuringPerformance
-	PictureTypeScreenCapture             = meta.PictureTypeScreenCapture
-	PictureTypeBrightFish                = meta.PictureTypeBrightFish
-	PictureTypeIllustration              = meta.PictureTypeIllustration
-	PictureTypeBandLogo                  = meta.PictureTypeBandLogo
-	PictureTypePublisherLogo             = meta.PictureTypePublisherLogo
-	StarRatingOne                        = meta.StarRatingOne
-	StarRatingTwo                        = meta.StarRatingTwo
-	StarRatingThree                      = meta.StarRatingThree
-	StarRatingFour                       = meta.StarRatingFour
-	StarRatingFive                       = meta.StarRatingFive
-	PopularimeterWMPEmail                = meta.PopularimeterWMPEmail
-	PopularimeterMusicBeeEmail           = meta.PopularimeterMusicBeeEmail
-	PopularimeterPicardEmail             = meta.PopularimeterPicardEmail
-	ChannelMaskFrontLeft                 = meta.ChannelMaskFrontLeft
-	ChannelMaskFrontRight                = meta.ChannelMaskFrontRight
-	ChannelMaskFrontCenter               = meta.ChannelMaskFrontCenter
-	ChannelMaskLowFrequency              = meta.ChannelMaskLowFrequency
-	ChannelMaskBackLeft                  = meta.ChannelMaskBackLeft
-	ChannelMaskBackRight                 = meta.ChannelMaskBackRight
-	ChannelMaskFrontLeftOfCenter         = meta.ChannelMaskFrontLeftOfCenter
-	ChannelMaskFrontRightOfCenter        = meta.ChannelMaskFrontRightOfCenter
-	ChannelMaskBackCenter                = meta.ChannelMaskBackCenter
-	ChannelMaskSideLeft                  = meta.ChannelMaskSideLeft
-	ChannelMaskSideRight                 = meta.ChannelMaskSideRight
-	ChannelMaskTopCenter                 = meta.ChannelMaskTopCenter
-	ChannelMaskTopFrontLeft              = meta.ChannelMaskTopFrontLeft
-	ChannelMaskTopFrontCenter            = meta.ChannelMaskTopFrontCenter
-	ChannelMaskTopFrontRight             = meta.ChannelMaskTopFrontRight
-	ChannelMaskTopBackLeft               = meta.ChannelMaskTopBackLeft
-	ChannelMaskTopBackCenter             = meta.ChannelMaskTopBackCenter
-	ChannelMaskTopBackRight              = meta.ChannelMaskTopBackRight
-	ChannelMaskMono                      = meta.ChannelMaskMono
-	ChannelMaskStereo                    = meta.ChannelMaskStereo
-	ChannelMaskLinearSurround            = meta.ChannelMaskLinearSurround
-	MpegVersion1                         = meta.MpegVersion1
-	MpegVersion2                         = meta.MpegVersion2
-	MpegVersion25                        = meta.MpegVersion25
-	MpegVersion4                         = meta.MpegVersion4
-	AudioObjectTypeNull                  = meta.AudioObjectTypeNull
-	AudioObjectTypeAacMain               = meta.AudioObjectTypeAacMain
-	AudioObjectTypeAacLowComplexity      = meta.AudioObjectTypeAacLowComplexity
-	AudioObjectTypeAacScalableSampleRate = meta.AudioObjectTypeAacScalableSampleRate
-	AudioObjectTypeAacLongTermPrediction = meta.AudioObjectTypeAacLongTermPrediction
-	AudioObjectTypeAudioLosslessCoding   = meta.AudioObjectTypeAudioLosslessCoding
-	ParsingModeBestAttempt               = meta.ParsingModeBestAttempt
-	ParsingModeStrict                    = meta.ParsingModeStrict
-	ParsingModeRelaxed                   = meta.ParsingModeRelaxed
-	DefaultMaxJunkBytes                  = meta.DefaultMaxJunkBytes
-	DefaultPreferredPadding              = meta.DefaultPreferredPadding
-	DefaultAllocationLimit               = meta.DefaultAllocationLimit
-	AllocationLimitExceeded              = meta.AllocationLimitExceeded
-	AllocationReserveError               = meta.AllocationReserveError
-	TextEncodingLatin1                   = meta.TextEncodingLatin1
-	TextEncodingUTF16                    = meta.TextEncodingUTF16
-	TextEncodingUTF16BE                  = meta.TextEncodingUTF16BE
-	TextEncodingUTF8                     = meta.TextEncodingUTF8
-	TimestampMaxLength                   = meta.TimestampMaxLength
-	TimestampFieldYear                   = meta.TimestampFieldYear
-	TimestampFieldMonth                  = meta.TimestampFieldMonth
-	TimestampFieldDay                    = meta.TimestampFieldDay
-	TimestampFieldHour                   = meta.TimestampFieldHour
-	TimestampFieldMinute                 = meta.TimestampFieldMinute
-	TimestampFieldSecond                 = meta.TimestampFieldSecond
-	TimestampParseErrorEmpty             = meta.TimestampParseErrorEmpty
-	TimestampParseErrorBadYear           = meta.TimestampParseErrorBadYear
-	TimestampParseErrorMissingSeparator  = meta.TimestampParseErrorMissingSeparator
-	TimestampParseErrorSegmentTooShort   = meta.TimestampParseErrorSegmentTooShort
-	TimestampParseErrorContainsSpaces    = meta.TimestampParseErrorContainsSpaces
-	TimestampParseErrorUnexpectedChar    = meta.TimestampParseErrorUnexpectedChar
-	TimestampParseErrorFieldTooLarge     = meta.TimestampParseErrorFieldTooLarge
-	TimestampParseErrorIo                = meta.TimestampParseErrorIo
-	Id3v2Version2                        = meta.Id3v2Version2
-	Id3v2Version3                        = meta.Id3v2Version3
-	Id3v2Version4                        = meta.Id3v2Version4
-	ItemValueKindText                    = meta.ItemValueKindText
-	ItemValueKindLocator                 = meta.ItemValueKindLocator
-	ItemValueKindBinary                  = meta.ItemValueKindBinary
-	ItemKeyAlbumTitle                    = meta.ItemKeyAlbumTitle
-	ItemKeySetSubtitle                   = meta.ItemKeySetSubtitle
-	ItemKeyShowName                      = meta.ItemKeyShowName
-	ItemKeyContentGroup                  = meta.ItemKeyContentGroup
-	ItemKeyAppleId3v2ContentGroup        = meta.ItemKeyAppleId3v2ContentGroup
-	ItemKeyTrackTitle                    = meta.ItemKeyTrackTitle
-	ItemKeyTrackSubtitle                 = meta.ItemKeyTrackSubtitle
-	ItemKeyOriginalAlbumTitle            = meta.ItemKeyOriginalAlbumTitle
-	ItemKeyOriginalArtist                = meta.ItemKeyOriginalArtist
-	ItemKeyOriginalLyricist              = meta.ItemKeyOriginalLyricist
-	ItemKeyAlbumTitleSortOrder           = meta.ItemKeyAlbumTitleSortOrder
-	ItemKeyAlbumArtistSortOrder          = meta.ItemKeyAlbumArtistSortOrder
-	ItemKeyTrackTitleSortOrder           = meta.ItemKeyTrackTitleSortOrder
-	ItemKeyTrackArtistSortOrder          = meta.ItemKeyTrackArtistSortOrder
-	ItemKeyShowNameSortOrder             = meta.ItemKeyShowNameSortOrder
-	ItemKeyComposerSortOrder             = meta.ItemKeyComposerSortOrder
-	ItemKeyAlbumArtist                   = meta.ItemKeyAlbumArtist
-	ItemKeyAlbumArtists                  = meta.ItemKeyAlbumArtists
-	ItemKeyTrackArtist                   = meta.ItemKeyTrackArtist
-	ItemKeyTrackArtists                  = meta.ItemKeyTrackArtists
-	ItemKeyArranger                      = meta.ItemKeyArranger
-	ItemKeyWriter                        = meta.ItemKeyWriter
-	ItemKeyComposer                      = meta.ItemKeyComposer
-	ItemKeyConductor                     = meta.ItemKeyConductor
-	ItemKeyDirector                      = meta.ItemKeyDirector
-	ItemKeyEngineer                      = meta.ItemKeyEngineer
-	ItemKeyLyricist                      = meta.ItemKeyLyricist
-	ItemKeyMixDj                         = meta.ItemKeyMixDj
-	ItemKeyMixEngineer                   = meta.ItemKeyMixEngineer
-	ItemKeyPerformer                     = meta.ItemKeyPerformer
-	ItemKeyProducer                      = meta.ItemKeyProducer
-	ItemKeyPublisher                     = meta.ItemKeyPublisher
-	ItemKeyLabel                         = meta.ItemKeyLabel
-	ItemKeyInternetRadioStationName      = meta.ItemKeyInternetRadioStationName
-	ItemKeyInternetRadioStationOwner     = meta.ItemKeyInternetRadioStationOwner
-	ItemKeyRemixer                       = meta.ItemKeyRemixer
-	ItemKeyDiscNumber                    = meta.ItemKeyDiscNumber
-	ItemKeyDiscTotal                     = meta.ItemKeyDiscTotal
-	ItemKeyTrackNumber                   = meta.ItemKeyTrackNumber
-	ItemKeyTrackTotal                    = meta.ItemKeyTrackTotal
-	ItemKeyPopularimeter                 = meta.ItemKeyPopularimeter
-	ItemKeyParentalAdvisory              = meta.ItemKeyParentalAdvisory
-	ItemKeyRecordingDate                 = meta.ItemKeyRecordingDate
-	ItemKeyYear                          = meta.ItemKeyYear
-	ItemKeyReleaseDate                   = meta.ItemKeyReleaseDate
-	ItemKeyOriginalReleaseDate           = meta.ItemKeyOriginalReleaseDate
-	ItemKeyIsrc                          = meta.ItemKeyIsrc
-	ItemKeyBarcode                       = meta.ItemKeyBarcode
-	ItemKeyAcoustId                      = meta.ItemKeyAcoustId
-	ItemKeyAcoustIdFingerprint           = meta.ItemKeyAcoustIdFingerprint
-	ItemKeyCatalogNumber                 = meta.ItemKeyCatalogNumber
-	ItemKeyWork                          = meta.ItemKeyWork
-	ItemKeyMovement                      = meta.ItemKeyMovement
-	ItemKeyMovementNumber                = meta.ItemKeyMovementNumber
-	ItemKeyMovementTotal                 = meta.ItemKeyMovementTotal
-	ItemKeyReleaseCountry                = meta.ItemKeyReleaseCountry
-	ItemKeyMusicBrainzRecordingId        = meta.ItemKeyMusicBrainzRecordingId
-	ItemKeyMusicBrainzTrackId            = meta.ItemKeyMusicBrainzTrackId
-	ItemKeyMusicBrainzReleaseId          = meta.ItemKeyMusicBrainzReleaseId
-	ItemKeyMusicBrainzReleaseGroupId     = meta.ItemKeyMusicBrainzReleaseGroupId
-	ItemKeyMusicBrainzArtistId           = meta.ItemKeyMusicBrainzArtistId
-	ItemKeyMusicBrainzReleaseArtistId    = meta.ItemKeyMusicBrainzReleaseArtistId
-	ItemKeyMusicBrainzWorkId             = meta.ItemKeyMusicBrainzWorkId
-	ItemKeyMusicBrainzReleaseType        = meta.ItemKeyMusicBrainzReleaseType
-	ItemKeyFlagCompilation               = meta.ItemKeyFlagCompilation
-	ItemKeyFlagPodcast                   = meta.ItemKeyFlagPodcast
-	ItemKeyFileOwner                     = meta.ItemKeyFileOwner
-	ItemKeyTaggingTime                   = meta.ItemKeyTaggingTime
-	ItemKeyLength                        = meta.ItemKeyLength
-	ItemKeyOriginalFileName              = meta.ItemKeyOriginalFileName
-	ItemKeyOriginalMediaType             = meta.ItemKeyOriginalMediaType
-	ItemKeyEncodedBy                     = meta.ItemKeyEncodedBy
-	ItemKeyEncoderSoftware               = meta.ItemKeyEncoderSoftware
-	ItemKeyEncoderSettings               = meta.ItemKeyEncoderSettings
-	ItemKeyEncodingTime                  = meta.ItemKeyEncodingTime
-	ItemKeyReplayGainAlbumGain           = meta.ItemKeyReplayGainAlbumGain
-	ItemKeyReplayGainAlbumPeak           = meta.ItemKeyReplayGainAlbumPeak
-	ItemKeyReplayGainTrackGain           = meta.ItemKeyReplayGainTrackGain
-	ItemKeyReplayGainTrackPeak           = meta.ItemKeyReplayGainTrackPeak
-	ItemKeyR128TrackGain                 = meta.ItemKeyR128TrackGain
-	ItemKeyR128AlbumGain                 = meta.ItemKeyR128AlbumGain
-	ItemKeyAudioFileUrl                  = meta.ItemKeyAudioFileUrl
-	ItemKeyAudioSourceUrl                = meta.ItemKeyAudioSourceUrl
-	ItemKeyCommercialInformationUrl      = meta.ItemKeyCommercialInformationUrl
-	ItemKeyCopyrightUrl                  = meta.ItemKeyCopyrightUrl
-	ItemKeyTrackArtistUrl                = meta.ItemKeyTrackArtistUrl
-	ItemKeyRadioStationUrl               = meta.ItemKeyRadioStationUrl
-	ItemKeyPaymentUrl                    = meta.ItemKeyPaymentUrl
-	ItemKeyPublisherUrl                  = meta.ItemKeyPublisherUrl
-	ItemKeyGenre                         = meta.ItemKeyGenre
-	ItemKeyInitialKey                    = meta.ItemKeyInitialKey
-	ItemKeyColor                         = meta.ItemKeyColor
-	ItemKeyMood                          = meta.ItemKeyMood
-	ItemKeyBpm                           = meta.ItemKeyBpm
-	ItemKeyIntegerBpm                    = meta.ItemKeyIntegerBpm
-	ItemKeyCopyrightMessage              = meta.ItemKeyCopyrightMessage
-	ItemKeyLicense                       = meta.ItemKeyLicense
-	ItemKeyPodcastDescription            = meta.ItemKeyPodcastDescription
-	ItemKeyPodcastSeriesCategory         = meta.ItemKeyPodcastSeriesCategory
-	ItemKeyPodcastUrl                    = meta.ItemKeyPodcastUrl
-	ItemKeyPodcastGlobalUniqueId         = meta.ItemKeyPodcastGlobalUniqueId
-	ItemKeyPodcastKeywords               = meta.ItemKeyPodcastKeywords
-	ItemKeyComment                       = meta.ItemKeyComment
-	ItemKeyDescription                   = meta.ItemKeyDescription
-	ItemKeyLanguage                      = meta.ItemKeyLanguage
-	ItemKeyScript                        = meta.ItemKeyScript
-	ItemKeyLyrics                        = meta.ItemKeyLyrics
-	ItemKeyUnsyncLyrics                  = meta.ItemKeyUnsyncLyrics
-	ItemKeyAppleXid                      = meta.ItemKeyAppleXid
-	ItemKeyUnknown                       = meta.ItemKeyUnknown
-	TagSupportUnsupported                = meta.TagSupportUnsupported
-	TagSupportReadOnly                   = meta.TagSupportReadOnly
-	TagSupportReadWrite                  = meta.TagSupportReadWrite
-	TagTypeApe                           = meta.TagTypeApe
-	TagTypeID3v1                         = meta.TagTypeID3v1
-	TagTypeID3v2                         = meta.TagTypeID3v2
-	TagTypeLyrics3                       = meta.TagTypeLyrics3
-	TagTypeLyrics3v2                     = meta.TagTypeLyrics3v2
-	TagTypeMp4Ilst                       = meta.TagTypeMp4Ilst
-	TagTypeVorbisComments                = meta.TagTypeVorbisComments
-	TagTypeRiffInfo                      = meta.TagTypeRiffInfo
-	TagTypeAiffText                      = meta.TagTypeAiffText
+	PictureTypeOther                                            = meta.PictureTypeOther
+	PictureTypeIcon                                             = meta.PictureTypeIcon
+	PictureTypeOtherIcon                                        = meta.PictureTypeOtherIcon
+	PictureTypeCoverFront                                       = meta.PictureTypeCoverFront
+	PictureTypeCoverBack                                        = meta.PictureTypeCoverBack
+	PictureTypeLeaflet                                          = meta.PictureTypeLeaflet
+	PictureTypeMedia                                            = meta.PictureTypeMedia
+	PictureTypeLeadArtist                                       = meta.PictureTypeLeadArtist
+	PictureTypeArtist                                           = meta.PictureTypeArtist
+	PictureTypeConductor                                        = meta.PictureTypeConductor
+	PictureTypeBand                                             = meta.PictureTypeBand
+	PictureTypeComposer                                         = meta.PictureTypeComposer
+	PictureTypeLyricist                                         = meta.PictureTypeLyricist
+	PictureTypeRecordingLocation                                = meta.PictureTypeRecordingLocation
+	PictureTypeDuringRecording                                  = meta.PictureTypeDuringRecording
+	PictureTypeDuringPerformance                                = meta.PictureTypeDuringPerformance
+	PictureTypeScreenCapture                                    = meta.PictureTypeScreenCapture
+	PictureTypeBrightFish                                       = meta.PictureTypeBrightFish
+	PictureTypeIllustration                                     = meta.PictureTypeIllustration
+	PictureTypeBandLogo                                         = meta.PictureTypeBandLogo
+	PictureTypePublisherLogo                                    = meta.PictureTypePublisherLogo
+	StarRatingOne                                               = meta.StarRatingOne
+	StarRatingTwo                                               = meta.StarRatingTwo
+	StarRatingThree                                             = meta.StarRatingThree
+	StarRatingFour                                              = meta.StarRatingFour
+	StarRatingFive                                              = meta.StarRatingFive
+	PopularimeterWMPEmail                                       = meta.PopularimeterWMPEmail
+	PopularimeterMusicBeeEmail                                  = meta.PopularimeterMusicBeeEmail
+	PopularimeterPicardEmail                                    = meta.PopularimeterPicardEmail
+	ChannelMaskFrontLeft                                        = meta.ChannelMaskFrontLeft
+	ChannelMaskFrontRight                                       = meta.ChannelMaskFrontRight
+	ChannelMaskFrontCenter                                      = meta.ChannelMaskFrontCenter
+	ChannelMaskLowFrequency                                     = meta.ChannelMaskLowFrequency
+	ChannelMaskBackLeft                                         = meta.ChannelMaskBackLeft
+	ChannelMaskBackRight                                        = meta.ChannelMaskBackRight
+	ChannelMaskFrontLeftOfCenter                                = meta.ChannelMaskFrontLeftOfCenter
+	ChannelMaskFrontRightOfCenter                               = meta.ChannelMaskFrontRightOfCenter
+	ChannelMaskBackCenter                                       = meta.ChannelMaskBackCenter
+	ChannelMaskSideLeft                                         = meta.ChannelMaskSideLeft
+	ChannelMaskSideRight                                        = meta.ChannelMaskSideRight
+	ChannelMaskTopCenter                                        = meta.ChannelMaskTopCenter
+	ChannelMaskTopFrontLeft                                     = meta.ChannelMaskTopFrontLeft
+	ChannelMaskTopFrontCenter                                   = meta.ChannelMaskTopFrontCenter
+	ChannelMaskTopFrontRight                                    = meta.ChannelMaskTopFrontRight
+	ChannelMaskTopBackLeft                                      = meta.ChannelMaskTopBackLeft
+	ChannelMaskTopBackCenter                                    = meta.ChannelMaskTopBackCenter
+	ChannelMaskTopBackRight                                     = meta.ChannelMaskTopBackRight
+	ChannelMaskMono                                             = meta.ChannelMaskMono
+	ChannelMaskStereo                                           = meta.ChannelMaskStereo
+	ChannelMaskLinearSurround                                   = meta.ChannelMaskLinearSurround
+	MpegVersion1                                                = meta.MpegVersion1
+	MpegVersion2                                                = meta.MpegVersion2
+	MpegVersion25                                               = meta.MpegVersion25
+	MpegVersion4                                                = meta.MpegVersion4
+	AudioObjectTypeNull                                         = meta.AudioObjectTypeNull
+	AudioObjectTypeAacMain                                      = meta.AudioObjectTypeAacMain
+	AudioObjectTypeAacLowComplexity                             = meta.AudioObjectTypeAacLowComplexity
+	AudioObjectTypeAacScalableSampleRate                        = meta.AudioObjectTypeAacScalableSampleRate
+	AudioObjectTypeAacLongTermPrediction                        = meta.AudioObjectTypeAacLongTermPrediction
+	AudioObjectTypeSpectralBandReplication                      = meta.AudioObjectTypeSpectralBandReplication
+	AudioObjectTypeAACScalable                                  = meta.AudioObjectTypeAACScalable
+	AudioObjectTypeTwinVQ                                       = meta.AudioObjectTypeTwinVQ
+	AudioObjectTypeCodeExcitedLinearPrediction                  = meta.AudioObjectTypeCodeExcitedLinearPrediction
+	AudioObjectTypeHarmonicVectorExcitationCoding               = meta.AudioObjectTypeHarmonicVectorExcitationCoding
+	AudioObjectTypeTextToSpeechtInterface                       = meta.AudioObjectTypeTextToSpeechtInterface
+	AudioObjectTypeMainSynthetic                                = meta.AudioObjectTypeMainSynthetic
+	AudioObjectTypeWavetableSynthesis                           = meta.AudioObjectTypeWavetableSynthesis
+	AudioObjectTypeGeneralMIDI                                  = meta.AudioObjectTypeGeneralMIDI
+	AudioObjectTypeAlgorithmicSynthesis                         = meta.AudioObjectTypeAlgorithmicSynthesis
+	AudioObjectTypeErrorResilientAacLowComplexity               = meta.AudioObjectTypeErrorResilientAacLowComplexity
+	AudioObjectTypeErrorResilientAacLongTermPrediction          = meta.AudioObjectTypeErrorResilientAacLongTermPrediction
+	AudioObjectTypeErrorResilientAacScalable                    = meta.AudioObjectTypeErrorResilientAacScalable
+	AudioObjectTypeErrorResilientAacTwinVQ                      = meta.AudioObjectTypeErrorResilientAacTwinVQ
+	AudioObjectTypeErrorResilientAacBitSlicedArithmeticCoding   = meta.AudioObjectTypeErrorResilientAacBitSlicedArithmeticCoding
+	AudioObjectTypeErrorResilientAacLowDelay                    = meta.AudioObjectTypeErrorResilientAacLowDelay
+	AudioObjectTypeErrorResilientCodeExcitedLinearPrediction    = meta.AudioObjectTypeErrorResilientCodeExcitedLinearPrediction
+	AudioObjectTypeErrorResilientHarmonicVectorExcitationCoding = meta.AudioObjectTypeErrorResilientHarmonicVectorExcitationCoding
+	AudioObjectTypeErrorResilientHarmonicIndividualLinesNoise   = meta.AudioObjectTypeErrorResilientHarmonicIndividualLinesNoise
+	AudioObjectTypeErrorResilientParametric                     = meta.AudioObjectTypeErrorResilientParametric
+	AudioObjectTypeSinuSoidalCoding                             = meta.AudioObjectTypeSinuSoidalCoding
+	AudioObjectTypeParametricStereo                             = meta.AudioObjectTypeParametricStereo
+	AudioObjectTypeMpegSurround                                 = meta.AudioObjectTypeMpegSurround
+	AudioObjectTypeMpegLayer1                                   = meta.AudioObjectTypeMpegLayer1
+	AudioObjectTypeMpegLayer2                                   = meta.AudioObjectTypeMpegLayer2
+	AudioObjectTypeMpegLayer3                                   = meta.AudioObjectTypeMpegLayer3
+	AudioObjectTypeDirectStreamTransfer                         = meta.AudioObjectTypeDirectStreamTransfer
+	AudioObjectTypeAudioLosslessCoding                          = meta.AudioObjectTypeAudioLosslessCoding
+	AudioObjectTypeScalableLosslessCoding                       = meta.AudioObjectTypeScalableLosslessCoding
+	AudioObjectTypeScalableLosslessCodingNoneCore               = meta.AudioObjectTypeScalableLosslessCodingNoneCore
+	AudioObjectTypeErrorResilientAacEnhancedLowDelay            = meta.AudioObjectTypeErrorResilientAacEnhancedLowDelay
+	AudioObjectTypeSymbolicMusicRepresentationSimple            = meta.AudioObjectTypeSymbolicMusicRepresentationSimple
+	AudioObjectTypeSymbolicMusicRepresentationMain              = meta.AudioObjectTypeSymbolicMusicRepresentationMain
+	AudioObjectTypeUnifiedSpeechAudioCoding                     = meta.AudioObjectTypeUnifiedSpeechAudioCoding
+	AudioObjectTypeSpatialAudioObjectCoding                     = meta.AudioObjectTypeSpatialAudioObjectCoding
+	AudioObjectTypeLowDelayMpegSurround                         = meta.AudioObjectTypeLowDelayMpegSurround
+	AudioObjectTypeSpatialAudioObjectCodingDialogueEnhancement  = meta.AudioObjectTypeSpatialAudioObjectCodingDialogueEnhancement
+	AudioObjectTypeAudioSync                                    = meta.AudioObjectTypeAudioSync
+	ParsingModeBestAttempt                                      = meta.ParsingModeBestAttempt
+	ParsingModeStrict                                           = meta.ParsingModeStrict
+	ParsingModeRelaxed                                          = meta.ParsingModeRelaxed
+	DefaultMaxJunkBytes                                         = meta.DefaultMaxJunkBytes
+	DefaultPreferredPadding                                     = meta.DefaultPreferredPadding
+	DefaultAllocationLimit                                      = meta.DefaultAllocationLimit
+	AllocationLimitExceeded                                     = meta.AllocationLimitExceeded
+	AllocationReserveError                                      = meta.AllocationReserveError
+	TextEncodingLatin1                                          = meta.TextEncodingLatin1
+	TextEncodingUTF16                                           = meta.TextEncodingUTF16
+	TextEncodingUTF16BE                                         = meta.TextEncodingUTF16BE
+	TextEncodingUTF8                                            = meta.TextEncodingUTF8
+	TimestampMaxLength                                          = meta.TimestampMaxLength
+	TimestampFieldYear                                          = meta.TimestampFieldYear
+	TimestampFieldMonth                                         = meta.TimestampFieldMonth
+	TimestampFieldDay                                           = meta.TimestampFieldDay
+	TimestampFieldHour                                          = meta.TimestampFieldHour
+	TimestampFieldMinute                                        = meta.TimestampFieldMinute
+	TimestampFieldSecond                                        = meta.TimestampFieldSecond
+	TimestampParseErrorEmpty                                    = meta.TimestampParseErrorEmpty
+	TimestampParseErrorBadYear                                  = meta.TimestampParseErrorBadYear
+	TimestampParseErrorMissingSeparator                         = meta.TimestampParseErrorMissingSeparator
+	TimestampParseErrorSegmentTooShort                          = meta.TimestampParseErrorSegmentTooShort
+	TimestampParseErrorContainsSpaces                           = meta.TimestampParseErrorContainsSpaces
+	TimestampParseErrorUnexpectedChar                           = meta.TimestampParseErrorUnexpectedChar
+	TimestampParseErrorFieldTooLarge                            = meta.TimestampParseErrorFieldTooLarge
+	TimestampParseErrorIo                                       = meta.TimestampParseErrorIo
+	Id3v2Version2                                               = meta.Id3v2Version2
+	Id3v2Version3                                               = meta.Id3v2Version3
+	Id3v2Version4                                               = meta.Id3v2Version4
+	ItemValueKindText                                           = meta.ItemValueKindText
+	ItemValueKindLocator                                        = meta.ItemValueKindLocator
+	ItemValueKindBinary                                         = meta.ItemValueKindBinary
+	ItemKeyAlbumTitle                                           = meta.ItemKeyAlbumTitle
+	ItemKeySetSubtitle                                          = meta.ItemKeySetSubtitle
+	ItemKeyShowName                                             = meta.ItemKeyShowName
+	ItemKeyContentGroup                                         = meta.ItemKeyContentGroup
+	ItemKeyAppleId3v2ContentGroup                               = meta.ItemKeyAppleId3v2ContentGroup
+	ItemKeyTrackTitle                                           = meta.ItemKeyTrackTitle
+	ItemKeyTrackSubtitle                                        = meta.ItemKeyTrackSubtitle
+	ItemKeyOriginalAlbumTitle                                   = meta.ItemKeyOriginalAlbumTitle
+	ItemKeyOriginalArtist                                       = meta.ItemKeyOriginalArtist
+	ItemKeyOriginalLyricist                                     = meta.ItemKeyOriginalLyricist
+	ItemKeyAlbumTitleSortOrder                                  = meta.ItemKeyAlbumTitleSortOrder
+	ItemKeyAlbumArtistSortOrder                                 = meta.ItemKeyAlbumArtistSortOrder
+	ItemKeyTrackTitleSortOrder                                  = meta.ItemKeyTrackTitleSortOrder
+	ItemKeyTrackArtistSortOrder                                 = meta.ItemKeyTrackArtistSortOrder
+	ItemKeyShowNameSortOrder                                    = meta.ItemKeyShowNameSortOrder
+	ItemKeyComposerSortOrder                                    = meta.ItemKeyComposerSortOrder
+	ItemKeyAlbumArtist                                          = meta.ItemKeyAlbumArtist
+	ItemKeyAlbumArtists                                         = meta.ItemKeyAlbumArtists
+	ItemKeyTrackArtist                                          = meta.ItemKeyTrackArtist
+	ItemKeyTrackArtists                                         = meta.ItemKeyTrackArtists
+	ItemKeyArranger                                             = meta.ItemKeyArranger
+	ItemKeyWriter                                               = meta.ItemKeyWriter
+	ItemKeyComposer                                             = meta.ItemKeyComposer
+	ItemKeyConductor                                            = meta.ItemKeyConductor
+	ItemKeyDirector                                             = meta.ItemKeyDirector
+	ItemKeyEngineer                                             = meta.ItemKeyEngineer
+	ItemKeyLyricist                                             = meta.ItemKeyLyricist
+	ItemKeyMixDj                                                = meta.ItemKeyMixDj
+	ItemKeyMixEngineer                                          = meta.ItemKeyMixEngineer
+	ItemKeyPerformer                                            = meta.ItemKeyPerformer
+	ItemKeyProducer                                             = meta.ItemKeyProducer
+	ItemKeyPublisher                                            = meta.ItemKeyPublisher
+	ItemKeyLabel                                                = meta.ItemKeyLabel
+	ItemKeyInternetRadioStationName                             = meta.ItemKeyInternetRadioStationName
+	ItemKeyInternetRadioStationOwner                            = meta.ItemKeyInternetRadioStationOwner
+	ItemKeyRemixer                                              = meta.ItemKeyRemixer
+	ItemKeyDiscNumber                                           = meta.ItemKeyDiscNumber
+	ItemKeyDiscTotal                                            = meta.ItemKeyDiscTotal
+	ItemKeyTrackNumber                                          = meta.ItemKeyTrackNumber
+	ItemKeyTrackTotal                                           = meta.ItemKeyTrackTotal
+	ItemKeyPopularimeter                                        = meta.ItemKeyPopularimeter
+	ItemKeyParentalAdvisory                                     = meta.ItemKeyParentalAdvisory
+	ItemKeyRecordingDate                                        = meta.ItemKeyRecordingDate
+	ItemKeyYear                                                 = meta.ItemKeyYear
+	ItemKeyReleaseDate                                          = meta.ItemKeyReleaseDate
+	ItemKeyOriginalReleaseDate                                  = meta.ItemKeyOriginalReleaseDate
+	ItemKeyIsrc                                                 = meta.ItemKeyIsrc
+	ItemKeyBarcode                                              = meta.ItemKeyBarcode
+	ItemKeyAcoustId                                             = meta.ItemKeyAcoustId
+	ItemKeyAcoustIdFingerprint                                  = meta.ItemKeyAcoustIdFingerprint
+	ItemKeyCatalogNumber                                        = meta.ItemKeyCatalogNumber
+	ItemKeyWork                                                 = meta.ItemKeyWork
+	ItemKeyMovement                                             = meta.ItemKeyMovement
+	ItemKeyMovementNumber                                       = meta.ItemKeyMovementNumber
+	ItemKeyMovementTotal                                        = meta.ItemKeyMovementTotal
+	ItemKeyReleaseCountry                                       = meta.ItemKeyReleaseCountry
+	ItemKeyMusicBrainzRecordingId                               = meta.ItemKeyMusicBrainzRecordingId
+	ItemKeyMusicBrainzTrackId                                   = meta.ItemKeyMusicBrainzTrackId
+	ItemKeyMusicBrainzReleaseId                                 = meta.ItemKeyMusicBrainzReleaseId
+	ItemKeyMusicBrainzReleaseGroupId                            = meta.ItemKeyMusicBrainzReleaseGroupId
+	ItemKeyMusicBrainzArtistId                                  = meta.ItemKeyMusicBrainzArtistId
+	ItemKeyMusicBrainzReleaseArtistId                           = meta.ItemKeyMusicBrainzReleaseArtistId
+	ItemKeyMusicBrainzWorkId                                    = meta.ItemKeyMusicBrainzWorkId
+	ItemKeyMusicBrainzReleaseType                               = meta.ItemKeyMusicBrainzReleaseType
+	ItemKeyFlagCompilation                                      = meta.ItemKeyFlagCompilation
+	ItemKeyFlagPodcast                                          = meta.ItemKeyFlagPodcast
+	ItemKeyFileOwner                                            = meta.ItemKeyFileOwner
+	ItemKeyTaggingTime                                          = meta.ItemKeyTaggingTime
+	ItemKeyLength                                               = meta.ItemKeyLength
+	ItemKeyOriginalFileName                                     = meta.ItemKeyOriginalFileName
+	ItemKeyOriginalMediaType                                    = meta.ItemKeyOriginalMediaType
+	ItemKeyEncodedBy                                            = meta.ItemKeyEncodedBy
+	ItemKeyEncoderSoftware                                      = meta.ItemKeyEncoderSoftware
+	ItemKeyEncoderSettings                                      = meta.ItemKeyEncoderSettings
+	ItemKeyEncodingTime                                         = meta.ItemKeyEncodingTime
+	ItemKeyReplayGainAlbumGain                                  = meta.ItemKeyReplayGainAlbumGain
+	ItemKeyReplayGainAlbumPeak                                  = meta.ItemKeyReplayGainAlbumPeak
+	ItemKeyReplayGainTrackGain                                  = meta.ItemKeyReplayGainTrackGain
+	ItemKeyReplayGainTrackPeak                                  = meta.ItemKeyReplayGainTrackPeak
+	ItemKeyR128TrackGain                                        = meta.ItemKeyR128TrackGain
+	ItemKeyR128AlbumGain                                        = meta.ItemKeyR128AlbumGain
+	ItemKeyAudioFileUrl                                         = meta.ItemKeyAudioFileUrl
+	ItemKeyAudioSourceUrl                                       = meta.ItemKeyAudioSourceUrl
+	ItemKeyCommercialInformationUrl                             = meta.ItemKeyCommercialInformationUrl
+	ItemKeyCopyrightUrl                                         = meta.ItemKeyCopyrightUrl
+	ItemKeyTrackArtistUrl                                       = meta.ItemKeyTrackArtistUrl
+	ItemKeyRadioStationUrl                                      = meta.ItemKeyRadioStationUrl
+	ItemKeyPaymentUrl                                           = meta.ItemKeyPaymentUrl
+	ItemKeyPublisherUrl                                         = meta.ItemKeyPublisherUrl
+	ItemKeyGenre                                                = meta.ItemKeyGenre
+	ItemKeyInitialKey                                           = meta.ItemKeyInitialKey
+	ItemKeyColor                                                = meta.ItemKeyColor
+	ItemKeyMood                                                 = meta.ItemKeyMood
+	ItemKeyBpm                                                  = meta.ItemKeyBpm
+	ItemKeyIntegerBpm                                           = meta.ItemKeyIntegerBpm
+	ItemKeyCopyrightMessage                                     = meta.ItemKeyCopyrightMessage
+	ItemKeyLicense                                              = meta.ItemKeyLicense
+	ItemKeyPodcastDescription                                   = meta.ItemKeyPodcastDescription
+	ItemKeyPodcastSeriesCategory                                = meta.ItemKeyPodcastSeriesCategory
+	ItemKeyPodcastUrl                                           = meta.ItemKeyPodcastUrl
+	ItemKeyPodcastGlobalUniqueId                                = meta.ItemKeyPodcastGlobalUniqueId
+	ItemKeyPodcastKeywords                                      = meta.ItemKeyPodcastKeywords
+	ItemKeyComment                                              = meta.ItemKeyComment
+	ItemKeyDescription                                          = meta.ItemKeyDescription
+	ItemKeyLanguage                                             = meta.ItemKeyLanguage
+	ItemKeyScript                                               = meta.ItemKeyScript
+	ItemKeyLyrics                                               = meta.ItemKeyLyrics
+	ItemKeyUnsyncLyrics                                         = meta.ItemKeyUnsyncLyrics
+	ItemKeyAppleXid                                             = meta.ItemKeyAppleXid
+	ItemKeyUnknown                                              = meta.ItemKeyUnknown
+	TagSupportUnsupported                                       = meta.TagSupportUnsupported
+	TagSupportReadOnly                                          = meta.TagSupportReadOnly
+	TagSupportReadWrite                                         = meta.TagSupportReadWrite
+	TagTypeApe                                                  = meta.TagTypeApe
+	TagTypeID3v1                                                = meta.TagTypeID3v1
+	TagTypeID3v2                                                = meta.TagTypeID3v2
+	TagTypeLyrics3                                              = meta.TagTypeLyrics3
+	TagTypeLyrics3v2                                            = meta.TagTypeLyrics3v2
+	TagTypeMp4Ilst                                              = meta.TagTypeMp4Ilst
+	TagTypeVorbisComments                                       = meta.TagTypeVorbisComments
+	TagTypeRiffInfo                                             = meta.TagTypeRiffInfo
+	TagTypeAiffText                                             = meta.TagTypeAiffText
 )
 
 // from util
@@ -699,13 +740,15 @@ const (
 	MpcLinkLoudEnd             = mpc.MpcLinkLoudEnd
 	MpcLinkLoudStart           = mpc.MpcLinkLoudStart
 	MpcLinkLoudStartAndEnd     = mpc.MpcLinkLoudStartAndEnd
+	MpcStreamVersionSv8        = mpc.MpcStreamVersionSv8
+	MpcStreamVersionSv7        = mpc.MpcStreamVersionSv7
+	MpcStreamVersionSv4to6     = mpc.MpcStreamVersionSv4to6
 )
 
 // --- vars ---
 
 // from meta
 var (
-	Extensions           = meta.Extensions
 	FileTypeAac          = meta.FileTypeAac
 	FileTypeAiff         = meta.FileTypeAiff
 	FileTypeApe          = meta.FileTypeApe
@@ -719,7 +762,6 @@ var (
 	FileTypeSpeex        = meta.FileTypeSpeex
 	FileTypeWav          = meta.FileTypeWav
 	FileTypeWavPack      = meta.FileTypeWavPack
-	FileTypeVariants     = meta.FileTypeVariants
 	ApePictureTypes      = meta.ApePictureTypes
 	MimeTypePng          = meta.MimeTypePng
 	MimeTypeJpeg         = meta.MimeTypeJpeg
@@ -737,13 +779,13 @@ var (
 	TimestampParseString = meta.TimestampParseString
 	LangEnglish          = meta.LangEnglish
 	LangUnknown          = meta.LangUnknown
-	TagTypeVariants      = meta.TagTypeVariants
 )
 
 // from util
 var (
 	ErrNotEnoughData        = util.ErrNotEnoughData
 	RevSearchEndStreamStart = util.RevSearchEndStreamStart
+	RevSearchEndFromCurrent = util.RevSearchEndFromCurrent
 )
 
 // from id3v1
@@ -824,8 +866,16 @@ func BoundTaggedFileFrom(file FileLike, parseOptions ParseOptions) (*BoundTagged
 	return meta.BoundTaggedFileFrom(file, parseOptions)
 }
 
+func Extensions() []string {
+	return meta.Extensions()
+}
+
 func FileTypeCustom(name string) FileType {
 	return meta.FileTypeCustom(name)
+}
+
+func FileTypeVariants() []FileType {
+	return meta.FileTypeVariants()
 }
 
 func FileTypeFromExt(ext string) (FileType, bool) {
@@ -968,6 +1018,10 @@ func NewTagItemChecked(tagType TagType, itemKey ItemKey, itemValue ItemValue) (T
 	return meta.NewTagItemChecked(tagType, itemKey, itemValue)
 }
 
+func ItemKeyVariants() []ItemKey {
+	return meta.ItemKeyVariants()
+}
+
 func ItemKeySupportedKeys(tagType TagType) []ItemKey {
 	return meta.ItemKeySupportedKeys(tagType)
 }
@@ -980,28 +1034,8 @@ func ItemKeyOrUnknown(tagType TagType, key string) ItemKey {
 	return meta.ItemKeyOrUnknown(tagType, key)
 }
 
-func RegisterFormat(fileType FileType, reader FormatReader, writer FormatWriter) {
-	meta.RegisterFormat(fileType, reader, writer)
-}
-
-func RegisterFormatReader(fileType FileType, reader FormatReader) {
-	meta.RegisterFormatReader(fileType, reader)
-}
-
-func RegisterFormatWriter(fileType FileType, writer FormatFileWriter) {
-	meta.RegisterFormatWriter(fileType, writer)
-}
-
-func RegisterTagDumper(tagType TagType, dumper TagDumper) {
-	meta.RegisterTagDumper(tagType, dumper)
-}
-
-func RegisterConcreteTagWriter(fileType FileType, tagType TagType, writer ConcreteTagWriter) {
-	meta.RegisterConcreteTagWriter(fileType, tagType, writer)
-}
-
-func WriteConcreteTag(file *VerifiedFile, tagType TagType, tag any, writeOptions WriteOptions) (bool, error) {
-	return meta.WriteConcreteTag(file, tagType, tag, writeOptions)
+func TagTypeVariants() []TagType {
+	return meta.TagTypeVariants()
 }
 
 func WriteTag(tag *Tag, file *VerifiedFile, writeOptions WriteOptions) error {
@@ -1014,10 +1048,6 @@ func DumpTag(tag *Tag, writer io.Writer, writeOptions WriteOptions) error {
 
 func RemoveTag(tagType TagType, file *VerifiedFile, writeOptions WriteOptions) error {
 	return meta.RemoveTag(tagType, file, writeOptions)
-}
-
-func SaveTagFields(file FileLike, format FileType, tags []*Tag, writeOptions WriteOptions) error {
-	return meta.SaveTagFields(file, format, tags, writeOptions)
 }
 
 func NewVerifiedFile(file FileLike, parseOptions ParseOptions) (*VerifiedFile, error) {
@@ -1037,10 +1067,6 @@ func NewVerifiedFileOf(format FileType, file FileLike) *VerifiedFile {
 }
 
 // from util
-func TryMake[T any](size int) ([]T, error) {
-	return util.TryMake[T](size)
-}
-
 func TryByteSlice(size int) ([]byte, error) {
 	return util.TryByteSlice(size)
 }
@@ -1071,30 +1097,6 @@ func SearchForFrameSync(reader io.Reader) (int64, error) {
 
 func SearchForFrameSyncSeeking(r io.ReadSeeker, max int64) (int64, error) {
 	return util.SearchForFrameSyncSeeking(r, max)
-}
-
-func DurationFromSeconds(s float64) time.Duration {
-	return util.DurationFromSeconds(s)
-}
-
-func Itoa(n int) string {
-	return util.Itoa(n)
-}
-
-func Atoi(s string) (int, error) {
-	return util.Atoi(s)
-}
-
-func IndexOfStr(s []string, v string) int {
-	return util.IndexOfStr(s, v)
-}
-
-func Latin1EncodeMust(s string) []byte {
-	return util.Latin1EncodeMust(s)
-}
-
-func OptionFromPtr[T any](p *T) Option[*T] {
-	return util.OptionFromPtr[T](p)
 }
 
 func U32FromString(s string) (uint32, bool) {
@@ -1137,6 +1139,26 @@ func NewRevPatternSearcher(reader io.ReadSeeker, pattern []byte) *RevPatternSear
 	return util.NewRevPatternSearcher(reader, pattern)
 }
 
+func DurationFromMillis(ms uint64) time.Duration {
+	return util.DurationFromMillis(ms)
+}
+
+func SaturatingMul(a uint64, b uint64) uint64 {
+	return util.SaturatingMul(a, b)
+}
+
+func MulDiv(a uint64, b uint64, c uint64) uint64 {
+	return util.MulDiv(a, b, c)
+}
+
+func MulDivRound(a uint64, b uint64, c uint64) uint64 {
+	return util.MulDivRound(a, b, c)
+}
+
+func F64ToU32(f float64) uint32 {
+	return util.F64ToU32(f)
+}
+
 func StringToOption(s string) Option[string] {
 	return util.StringToOption(s)
 }
@@ -1167,6 +1189,10 @@ func Utf16Encode(text string, order ByteOrder, bom bool, terminated bool) []byte
 
 func AppendUint16(b []byte, v uint16, order ByteOrder) []byte {
 	return util.AppendUint16(b, v, order)
+}
+
+func NewTextDecodeOptions() TextDecodeOptions {
+	return util.NewTextDecodeOptions()
 }
 
 func DecodeText(reader io.Reader, options TextDecodeOptions) (DecodeTextResult, error) {

@@ -2,10 +2,13 @@ package lyrics3
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/subframe7536/lofty-go/internal/meta"
+	"github.com/subframe7536/lofty-go/internal/util"
 )
 
 // Ported from id3/lyrics3/v1/tests.rs
@@ -311,5 +314,160 @@ func TestIgnoreUnknownLyrics3v2Fields(t *testing.T) {
 	}
 	if v, ok := parsed.ExtendedAlbumName.Get(); !ok || v != "Lofty Stuff" {
 		t.Fatalf("eal = %q", v)
+	}
+}
+
+func lyrics3v2WithImages(images string) []byte {
+	body := append([]byte(nil), lyrics3v2Header...)
+	body = append(body, "IND00003000"...)
+	body = append(body, fmt.Sprintf("IMG%05d%s", len(images), images)...)
+	out := append(body, fmt.Sprintf("%06d", len(body))...)
+	return append(out, lyrics3v2Footer...)
+}
+
+// Rust splits IMG entries with `str::lines`, which keeps blank lines.
+func TestLyrics3v2ImgKeepsBlankLines(t *testing.T) {
+	data := lyrics3v2WithImages("a||b||[00:01]\r\n\r\nc||d||[00:02]\r\n")
+
+	opts := meta.NewParseOptions()
+	opts.ParsingMode = meta.ParsingModeRelaxed
+	parsed, err := ParseLyrics3v2Tag(data, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Images) != 3 {
+		t.Fatalf("got %d images, want 3: %+v", len(parsed.Images), parsed.Images)
+	}
+	if parsed.Images[0].Filename != "a" || parsed.Images[1].Filename != "" || parsed.Images[2].Filename != "c" {
+		t.Fatalf("images = %+v", parsed.Images)
+	}
+
+	// The blank entry has no description, which strict mode rejects
+	opts.ParsingMode = meta.ParsingModeStrict
+	if _, err := ParseLyrics3v2Tag(data, opts); err == nil {
+		t.Fatal("strict mode accepted a blank image entry")
+	}
+}
+
+func TestRustLines(t *testing.T) {
+	for in, want := range map[string][]string{
+		"":          nil,
+		"a":         {"a"},
+		"a\n":       {"a"},
+		"a\r\nb":    {"a", "b"},
+		"a\n\nb\n":  {"a", "", "b"},
+		"a\rb\r\n":  {"a\rb"},
+		"\n":        {""},
+		"a\r":       {"a\r"},
+		"\r\n\r\nx": {"", "", "x"},
+	} {
+		got := rustLines(in)
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Errorf("rustLines(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Rust's `is_empty` ignores the IND flags.
+func TestLyrics3v2IsEmptyIgnoresFlags(t *testing.T) {
+	tag := &Lyrics3v2Tag{Flags: Lyrics3v2TagFlags{SynchronizedLyrics: true, RandomSelection: true}}
+	if !tag.IsEmpty() {
+		t.Fatal("flags must not make the tag non-empty")
+	}
+	tag.Images = []Lyrics3v2Image{{Filename: "x"}}
+	if tag.IsEmpty() {
+		t.Fatal("an image makes the tag non-empty")
+	}
+}
+
+// Characters past the cut are never encoded (Rust encodes lazily, `take(max)`).
+func TestLatin1FieldLazyTruncation(t *testing.T) {
+	wo := meta.NewWriteOptions()
+	wo.LossyTextEncoding = false
+	wo.ImplicitTruncation = true
+
+	enc, err := writeLatin1Field("abc€", 3, wo, errors.New("bad"))
+	if err != nil || string(enc) != "abc" {
+		t.Fatalf("got %q, %v", enc, err)
+	}
+
+	// Within the cut it is a real encoding error, reported like Rust's `b?`
+	_, err = writeLatin1Field("a€c", 3, wo, errors.New("bad"))
+	var tee *util.TextEncodingError
+	if !errors.As(err, &tee) {
+		t.Fatalf("got %v, want a TextEncodingError", err)
+	}
+
+	// Too long without implicit truncation is TooMuchData
+	wo.ImplicitTruncation = false
+	_, err = writeLatin1Field("abcd", 3, wo, errors.New("bad"))
+	var tmd *meta.TooMuchDataError
+	if !errors.As(err, &tmd) {
+		t.Fatalf("got %v, want TooMuchDataError", err)
+	}
+
+	// 0xFF fails with the caller's error, ordered with the other characters
+	bad := errors.New("bad")
+	if _, err = writeLatin1Field("a\u00ffb", 5, wo, bad); err != bad {
+		t.Fatalf("got %v, want the caller's error", err)
+	}
+}
+
+func TestFindLyrics3ReadIgnoresReadTags(t *testing.T) {
+	data := lyrics3v1TagBytes()
+	opts := meta.NewParseOptions()
+	opts.ReadTags = false
+
+	r := bytes.NewReader(data)
+	if _, err := r.Seek(0, 2); err != nil {
+		t.Fatal(err)
+	}
+	_, _, got, found, err := FindLyrics3(r, true, opts)
+	if err != nil || !found {
+		t.Fatalf("found=%v err=%v", found, err)
+	}
+	if l, ok := got.(*Lyrics3Tag); !ok || l.Lyrics != lyrics3v1Expected().Lyrics {
+		t.Fatalf("tag = %#v", got)
+	}
+
+	// `read` = false never parses
+	if _, err := r.Seek(0, 2); err != nil {
+		t.Fatal(err)
+	}
+	opts.ReadTags = true
+	if _, _, got, _, _ = FindLyrics3(r, false, opts); got != nil {
+		t.Fatalf("parsed a tag with read=false: %#v", got)
+	}
+}
+
+func TestFindLyrics3NegativeSeekIsAnError(t *testing.T) {
+	r := bytes.NewReader([]byte("12345"))
+	if _, err := r.Seek(0, 2); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, found, err := FindLyrics3(r, false, meta.NewParseOptions()); err == nil || found {
+		t.Fatalf("found=%v err=%v, want an error", found, err)
+	}
+}
+
+// A footer without a header is corrupt; writing must surface that instead of
+// silently inserting a second tag.
+func TestLyrics3WritePropagatesFindErrors(t *testing.T) {
+	file := append(bytes.Repeat([]byte{'x'}, 64), "LYRICSEND"...)
+	id3v1 := make([]byte, 128)
+	copy(id3v1, "TAG")
+	file = append(file, id3v1...)
+
+	wo := meta.NewWriteOptions()
+	v1 := &Lyrics3Tag{Lyrics: "hello"}
+	if err := Lyrics3v1WriteTo(meta.NewBytesFile(append([]byte(nil), file...)), v1, wo); err == nil {
+		t.Fatal("v1 write ignored a corrupt Lyrics3 footer")
+	}
+
+	file = append(bytes.Repeat([]byte{'x'}, 64), "LYRICS200"...)
+	file = append(file, id3v1...)
+	v2 := &Lyrics3v2Tag{Lyrics: meta.Some("hello")}
+	if err := Lyrics3v2WriteTo(meta.NewBytesFile(file), v2, wo); err == nil {
+		t.Fatal("v2 write ignored a corrupt Lyrics3 footer")
 	}
 }

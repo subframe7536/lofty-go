@@ -208,10 +208,38 @@ func (r DecodeTextResult) TextOrNone() Option[string] {
 }
 
 // TextDecodeOptions specifies how to decode the provided text.
+//
+// NOTE: The Go zero value uses [TextEncodingLatin1] (the zero [TextEncoding]),
+// unlike Rust's `Default`, which uses UTF-8. Use [NewTextDecodeOptions] to get
+// Rust's defaults: UTF-8, not terminated, no byte order mark.
 type TextDecodeOptions struct {
 	Encoding   TextEncoding
 	Terminated bool
 	BOM        [2]byte
+}
+
+// NewTextDecodeOptions returns the Rust-default [TextDecodeOptions]: UTF-8,
+// not null terminated, and no byte order mark.
+func NewTextDecodeOptions() TextDecodeOptions {
+	return TextDecodeOptions{Encoding: TextEncodingUTF8}
+}
+
+// WithEncoding returns a copy of the options with the encoding set.
+func (o TextDecodeOptions) WithEncoding(encoding TextEncoding) TextDecodeOptions {
+	o.Encoding = encoding
+	return o
+}
+
+// WithTerminated returns a copy of the options with the terminated flag set.
+func (o TextDecodeOptions) WithTerminated(terminated bool) TextDecodeOptions {
+	o.Terminated = terminated
+	return o
+}
+
+// WithBOM returns a copy of the options with the byte order mark set.
+func (o TextDecodeOptions) WithBOM(bom [2]byte) TextDecodeOptions {
+	o.BOM = bom
+	return o
 }
 
 func DecodeText(reader io.Reader, options TextDecodeOptions) (DecodeTextResult, error) {

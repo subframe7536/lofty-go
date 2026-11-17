@@ -321,17 +321,39 @@ func verifyFrame(f Frame) error {
 		if id != "CTOC" {
 			return bad()
 		}
+	case *SynchronizedTextFrame:
+		if id != "SYLT" {
+			return bad()
+		}
+	case *GeneralEncapsulatedObject:
+		if id != "GEOB" {
+			return bad()
+		}
+	case *AudioTextFrame:
+		if id != "ATXT" {
+			return bad()
+		}
+	case *OwnershipFrame:
+		// Rust's `verify_frame` omits OWNE/ETCO, so a parsed tag containing
+		// them cannot be written back there; allow them (valid IDs only).
+		if id != "OWNE" {
+			return bad()
+		}
+	case *EventTimingCodesFrame:
+		if id != "ETCO" {
+			return bad()
+		}
 	case *TextInformationFrame:
 		switch id {
 		case "WFED", "GRP1", "MVNM", "MVIN", "TCMP", "PCST":
 			// allowed non-'T' IDs
 		default:
-			if id[0] != 'T' {
+			if id == "" || id[0] != 'T' {
 				return bad()
 			}
 		}
 	case *UrlLinkFrame:
-		if id != "TCMP" && id != "PCST" && id[0] != 'W' {
+		if id != "TCMP" && id != "PCST" && (id == "" || id[0] != 'W') {
 			return bad()
 		}
 	default:

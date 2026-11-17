@@ -148,12 +148,13 @@ func DsfFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Dsf
 		// Rust truncates bit_depth to u8 before the bitrate calculation
 		p.AudioBitrate = uint32(util.DivRound(uint64(channels)*uint64(sampleFreq)*uint64(p.BitDepth), 1000))
 		if sampleFreq > 0 && sampleCount > 0 {
-			millis := util.DivRound(sampleCount*1000, uint64(sampleFreq))
-			p.Duration = time.Duration(millis) * time.Millisecond
+			// Rust: (u128(sample_count) * 1000).div_round(u128(sample_rate))
+			millis := util.MulDivRound(sampleCount, 1000, uint64(sampleFreq))
+			p.Duration = util.DurationFromMillis(millis)
 			if millis > 0 {
 				// Rust uses the declared total_file_size, not the actual
 				// stream length
-				p.OverallBitrate = uint32(util.DivRound(totalFileSize*8, millis))
+				p.OverallBitrate = uint32(util.DivRound(util.SaturatingMul(totalFileSize, 8), millis))
 			}
 		}
 	}

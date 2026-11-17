@@ -1,6 +1,10 @@
 package meta
 
-import "io"
+import (
+	"io"
+	"os"
+	"slices"
+)
 
 // TaggedFile is a collection of [Tag]s and [FileProperties] parsed from a file.
 type TaggedFile struct {
@@ -57,7 +61,7 @@ func (t *TaggedFile) PrimaryTagMutOrInsert() *Tag {
 		return tag
 	}
 	tag := NewTag(t.fileType.PrimaryTagType())
-	t.tags = append(t.tags, tag)
+	t.tags = append(slices.Clip(t.tags), tag)
 	return tag
 }
 
@@ -94,7 +98,7 @@ func (t *TaggedFile) InsertTag(tag *Tag) *Tag {
 		return nil
 	}
 	replaced := t.removeFirst(tag.tagType)
-	t.tags = append(t.tags, tag)
+	t.tags = append(slices.Clip(t.tags), tag)
 	return replaced
 }
 
@@ -113,24 +117,32 @@ func (t *TaggedFile) removeFirst(tagType TagType) *Tag {
 }
 
 // Remove removes the provided tag, returning true if it was found.
+//
+// The tag list is rebuilt rather than edited in place, so slices previously
+// returned by [TaggedFile.Tags] (or shared with a copy of the file) are not
+// modified.
 func (t *TaggedFile) Remove(target *Tag) bool {
 	for i, tag := range t.tags {
 		if tag == target {
-			t.tags = append(t.tags[:i], t.tags[i+1:]...)
+			kept := make([]*Tag, 0, len(t.tags)-1)
+			kept = append(kept, t.tags[:i]...)
+			kept = append(kept, t.tags[i+1:]...)
+			t.tags = kept
 			return true
 		}
 	}
 	return false
 }
 
-// RemoveTagType removes the first tag of the specified [TagType].
-func (t *TaggedFile) RemoveTagType(tagType TagType) {
-	t.removeFirst(tagType)
+// RemoveTagType removes the first tag of the specified [TagType], returning
+// it, or nil if the file has no such tag (Rust `TaggedFileExt::remove`).
+func (t *TaggedFile) RemoveTagType(tagType TagType) *Tag {
+	return t.removeFirst(tagType)
 }
 
 // RemoveTags removes all tags of the specified [TagType].
 func (t *TaggedFile) RemoveTags(tagType TagType) {
-	kept := t.tags[:0]
+	kept := make([]*Tag, 0, len(t.tags))
 	for _, tag := range t.tags {
 		if tag.tagType != tagType {
 			kept = append(kept, tag)
@@ -215,6 +227,24 @@ func (t *TaggedFile) Save(file FileLike, writeOptions WriteOptions) error {
 	return nil
 }
 
+// SaveToPath writes all tags to the file at `path`, which is opened for
+// reading and writing (Rust `AudioFile::save_to_path`).
+//
+// [BoundTaggedFile] inherits this method, which, like Rust, writes to `path`
+// rather than to its bound file.
+func (t *TaggedFile) SaveToPath(path string, writeOptions WriteOptions) (err error) {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return &FileEncodingError{Source: err}
+	}
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = &FileEncodingError{Source: cerr}
+		}
+	}()
+	return t.Save(NewOSFile(f), writeOptions)
+}
+
 // BoundTaggedFile is a [TaggedFile] that is bound to a [FileLike].
 type BoundTaggedFile struct {
 	TaggedFile
@@ -253,7 +283,7 @@ func (b *BoundTaggedFile) Save(writeOptions WriteOptions) error {
 		return err
 	}
 	// Rust `BoundTaggedFile::save` drops emptied tags afterwards.
-	kept := b.tags[:0]
+	kept := make([]*Tag, 0, len(b.tags))
 	for _, tag := range b.tags {
 		if !tag.IsEmpty() {
 			kept = append(kept, tag)

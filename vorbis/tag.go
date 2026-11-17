@@ -724,7 +724,7 @@ func ParseVorbisComments(content []byte, parseOptions meta.ParseOptions) (*Vorbi
 			return nil, &VorbisCommentsParseError{Source: err}
 		}
 		if uint64(itemLen) > uint64(len(content)-pos) {
-			return nil, &VorbisCommentsParseError{Source: io.ErrUnexpectedEOF}
+			return nil, &VorbisCommentsParseError{Source: &util.SizeMismatchError{}}
 		}
 		if err := allocCheck(uint64(itemLen)); err != nil {
 			return nil, &VorbisCommentsParseError{Source: err}
@@ -1067,6 +1067,16 @@ func (t *VorbisCommentsTag) DumpTo(writer io.Writer, writeOptions meta.WriteOpti
 	data = PadMetadataPacket(data, writeOptions.PreferredPadding)
 	_, err = writer.Write(data)
 	return err
+}
+
+func init() {
+	// Rust `dump_tag` (tag/utils.rs) builds a `VorbisCommentsRef` through
+	// `create_vorbis_comments_ref` — the ENCODER item stays a comment, items
+	// are written verbatim, pictures become METADATA_BLOCK_PICTURE comments —
+	// and calls `VorbisCommentsRef::dump_to`, which applies preferred_padding.
+	meta.RegisterTagDumper(meta.TagTypeVorbisComments, func(tag *meta.Tag, writer io.Writer, writeOptions meta.WriteOptions) error {
+		return VorbisCommentsTagForWriteRef(tag, true).DumpTo(writer, writeOptions)
+	})
 }
 
 // SaveTo writes the tag into a Vorbis/Opus/Speex/FLAC file, mirroring Rust

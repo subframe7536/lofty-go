@@ -1,6 +1,14 @@
 package meta
 
-import "io"
+import (
+	"io"
+	"sync"
+)
+
+// registryMu guards the format/tag registries below. Registration normally
+// happens in package init(), but lookups may run concurrently with late
+// registrations (e.g. from tests or user code).
+var registryMu sync.RWMutex
 
 // FormatFileWriter writes a tag into a verified file of a specific format.
 type FormatFileWriter func(file *VerifiedFile, tag *Tag, writeOptions WriteOptions) error
@@ -28,16 +36,24 @@ func RegisterFormatReader(fileType FileType, reader FormatReader) {
 	if fileType.kind == fileTypeCustom {
 		panic("lofty: RegisterFormatReader cannot be used for custom file types")
 	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
 	if _, exists := formatReaders[fileType.kind]; exists {
 		panic("lofty: format `" + fileType.String() + "` already registered!")
 	}
 	formatReaders[fileType.kind] = reader
 }
 
-// RegisterFormatWriter registers only the writer for `fileType`.
+// RegisterFormatWriter registers only the writer for `fileType`. It panics if
+// a writer is already registered for the file type.
 func RegisterFormatWriter(fileType FileType, writer FormatFileWriter) {
 	if fileType.kind == fileTypeCustom {
 		panic("lofty: RegisterFormatWriter cannot be used for custom file types")
+	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	if _, exists := formatWriters[fileType.kind]; exists {
+		panic("lofty: format writer for `" + fileType.String() + "` already registered!")
 	}
 	formatWriters[fileType.kind] = writer
 }
@@ -49,6 +65,8 @@ type TagDumper func(tag *Tag, writer io.Writer, writeOptions WriteOptions) error
 // Tag implementation packages call this from their init(); it panics on
 // duplicates, mirroring [RegisterCustomResolver].
 func RegisterTagDumper(tagType TagType, dumper TagDumper) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
 	if _, exists := tagDumpers[tagType]; exists {
 		panic("lofty: tag dumper for `" + tagType.String() + "` already registered!")
 	}
@@ -79,6 +97,8 @@ func RegisterConcreteTagWriter(fileType FileType, tagType TagType, writer Concre
 	if fileType.kind == fileTypeCustom {
 		panic("lofty: RegisterConcreteTagWriter cannot be used for custom file types")
 	}
+	registryMu.Lock()
+	defer registryMu.Unlock()
 	inner := concreteTagWriters[fileType.kind]
 	if inner == nil {
 		inner = map[TagType]ConcreteTagWriter{}
@@ -93,7 +113,10 @@ func RegisterConcreteTagWriter(fileType FileType, tagType TagType, writer Concre
 // WriteConcreteTag invokes the registered [ConcreteTagWriter] for the
 // verified file's format and `tagType`, reporting whether one exists.
 func WriteConcreteTag(file *VerifiedFile, tagType TagType, tag any, writeOptions WriteOptions) (bool, error) {
-	if w, ok := concreteTagWriters[file.Format().kind][tagType]; ok {
+	registryMu.RLock()
+	w, ok := concreteTagWriters[file.Format().kind][tagType]
+	registryMu.RUnlock()
+	if ok {
 		return true, w(file, tag, writeOptions)
 	}
 	return false, nil
@@ -113,7 +136,10 @@ func WriteTag(tag *Tag, file *VerifiedFile, writeOptions WriteOptions) error {
 	if support == TagSupportUnsupported || (!support.IsWritable() && !tag.IsEmpty()) {
 		return &FileEncodingError{FileType: format, Source: &UnsupportedTagError{}}
 	}
-	if w, ok := formatWriters[format.kind]; ok {
+	registryMu.RLock()
+	w, ok := formatWriters[format.kind]
+	registryMu.RUnlock()
+	if ok {
 		err := w(file, tag, writeOptions)
 		if err != nil {
 			if fe, ok := err.(*FileEncodingError); ok {
@@ -128,7 +154,10 @@ func WriteTag(tag *Tag, file *VerifiedFile, writeOptions WriteOptions) error {
 
 // DumpTag writes a tag to a writer (tag data only).
 func DumpTag(tag *Tag, writer io.Writer, writeOptions WriteOptions) error {
-	if d, ok := tagDumpers[tag.tagType]; ok {
+	registryMu.RLock()
+	d, ok := tagDumpers[tag.tagType]
+	registryMu.RUnlock()
+	if ok {
 		err := d(tag, writer, writeOptions)
 		if err != nil {
 			if te, ok := err.(*TagEncodingError); ok {

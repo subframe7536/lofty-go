@@ -178,6 +178,7 @@ func mpcId3v24(frames []byte, footer, extHeader bool) []byte {
 	return b
 }
 
+//nolint:unparam // text kept for explicit call sites
 func mpcTIT2(text string) []byte {
 	body := append([]byte{0x00}, text...)
 	f := append([]byte("TIT2"), mpcSynchsafe(len(body))...)

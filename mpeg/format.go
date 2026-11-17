@@ -134,7 +134,7 @@ var mpegPaddingSizes = [3]uint32{4, 1, 1}
 var errBadHeader = &MpegParseError{Message: "invalid MPEG header"}
 
 // parseMpegHeader parses a 4-byte MPEG frame header.
-func parseMpegHeader(b []byte, firstHeader *mpegHeader) (*mpegHeader, error) {
+func parseMpegHeader(b []byte) (*mpegHeader, error) {
 	if len(b) < 4 {
 		return nil, errBadHeader
 	}
@@ -217,13 +217,6 @@ func parseMpegHeader(b []byte, firstHeader *mpegHeader) (*mpegHeader, error) {
 		return nil, errBadHeader
 	}
 
-	// Consecutive headers must match in version/layer/sample rate
-	if firstHeader != nil {
-		if h2.version != firstHeader.version || h2.layer != firstHeader.layer ||
-			h2.sampleRate != firstHeader.sampleRate {
-			return nil, errBadHeader
-		}
-	}
 	return h2, nil
 }
 
@@ -346,7 +339,7 @@ func findNextFrame(reader io.ReadSeeker) (*mpegHeader, int64, error) {
 			return nil, 0, err
 		}
 		raw := binary.BigEndian.Uint32(hb[:])
-		foundHeader, err := parseMpegHeader(hb[:], nil)
+		foundHeader, err := parseMpegHeader(hb[:])
 		if err == nil {
 			// cmp_header: the next frame at abs+frameLen must match
 			// (masked). Undetermined (seek/read failure) ends the
@@ -418,7 +411,7 @@ func mpegReadProperties(
 	data io.ReadSeeker,
 	firstHeader *mpegHeader,
 	firstFrameOffset uint64,
-	streamLen uint64,
+	endOffset uint64,
 	fileLength uint64,
 ) (*MpegProperties, error) {
 	p := &MpegProperties{
@@ -476,7 +469,9 @@ func mpegReadProperties(
 	}
 
 	// Search for the last frame, starting at the end of the frames
-	lastFrameOffset := firstFrameOffset + streamLen
+	// Rust starts the reverse search at the end of the frames; a stream end
+	// before the first frame (overlapping tags) simply finds nothing.
+	lastFrameOffset := endOffset
 	var lastFrame *mpegHeader
 	pos := lastFrameOffset
 	for pos > 0 {
@@ -538,7 +533,7 @@ func revSearchForFrameHeader(data io.ReadSeeker, pos uint64) (*mpegHeader, uint6
 		if i+3 > len(buf) {
 			continue
 		}
-		h, err := parseMpegHeader(buf[i-1:i+3], nil)
+		h, err := parseMpegHeader(buf[i-1 : i+3])
 		if err != nil {
 			continue
 		}
@@ -768,11 +763,10 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp
 
 	var properties *MpegProperties
 	if parseOptions.ReadProperties {
-		streamLen := endOffset - firstFrameOffset
 		if _, err := reader.Seek(int64(firstFrameOffset), io.SeekStart); err != nil {
 			return nil, &meta.FileParseError{Source: err}
 		}
-		props, err := mpegReadProperties(reader, firstHeader, firstFrameOffset, streamLen, uint64(streamEnd))
+		props, err := mpegReadProperties(reader, firstHeader, firstFrameOffset, endOffset, uint64(streamEnd))
 		if err != nil {
 			return nil, err
 		}

@@ -24,9 +24,11 @@ type WavPackProperties struct {
 	AudioBitrate   uint32
 	SampleRate     uint32
 	BitDepth       uint8
-	Channels       uint8
-	ChannelMask    meta.Option[meta.ChannelMask]
-	IsLossless     bool
+	// Channels is a u16 since WavPack supports "unlimited" streams;
+	// [WavPackProperties.FileProperties] truncates it to u8 like Rust.
+	Channels    uint16
+	ChannelMask meta.Option[meta.ChannelMask]
+	IsLossless  bool
 }
 
 // FileProperties converts to generic [FileProperties].
@@ -43,7 +45,7 @@ func (p WavPackProperties) FileProperties() meta.FileProperties {
 		meta.Some(p.AudioBitrate),
 		meta.Some(p.SampleRate),
 		meta.Some(p.BitDepth),
-		meta.Some(p.Channels),
+		meta.Some(uint8(p.Channels)),
 		channelMask,
 	)
 }
@@ -73,7 +75,7 @@ func WavPackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (
 	}
 	streamLen := uint64(streamEnd - start)
 
-	// Check for end tags (ID3v1, Lyrics3, APE)
+	// Check for end tags (ID3v1, APE)
 	newLen, id3v1Tag, apeTag, err := ape.ReadEndTags(reader, start, streamLen, parseOptions)
 	if err != nil {
 		return nil, &meta.FileParseError{Source: err}
@@ -304,9 +306,10 @@ func wvReadProperties(reader io.ReadSeeker, streamLen, fileLen uint64, mode meta
 	}
 
 	length := float64(totalSamples) * 1000 / float64(p.SampleRate)
-	p.Duration = time.Duration(uint64(length+0.5)) * time.Millisecond
-	p.AudioBitrate = uint32(float64(streamLen)*8/length + 0.5)
-	p.OverallBitrate = uint32(float64(fileLen)*8/length + 0.5)
+	p.Duration = util.DurationFromMillis(uint64(length + 0.5))
+	// Rust's saturating float-to-int `as` casts.
+	p.AudioBitrate = util.F64ToU32(float64(streamLen)*8/length + 0.5)
+	p.OverallBitrate = util.F64ToU32(float64(fileLen)*8/length + 0.5)
 	return nil
 }
 
@@ -402,7 +405,7 @@ func wvExtendedMetaInfo(content []byte, p *WavPackProperties, mode meta.ParsingM
 			}
 			// Rust stores channels as u16; FileProperties truncates to u8, and
 			// assigns the mask unconditionally (a zero mask clears it).
-			p.Channels = uint8(channels)
+			p.Channels = channels
 			p.ChannelMask = meta.Some(meta.ChannelMask(mask))
 		}
 		if size > len(content)-pos {

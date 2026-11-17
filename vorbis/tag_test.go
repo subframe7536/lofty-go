@@ -1,10 +1,13 @@
 package vorbis
 
 import (
+	"bytes"
 	"encoding/binary"
+	"errors"
 	"testing"
 
 	meta "github.com/subframe7536/lofty-go/internal/meta"
+	"github.com/subframe7536/lofty-go/internal/util"
 )
 
 // vcTestPayload builds the vendor+items region of a comment packet.
@@ -69,5 +72,58 @@ func TestUnknownItemDropped(t *testing.T) {
 	}
 	if vc := VorbisCommentsTagForWriteRef(input, false); len(vc.Pairs()) != 1 {
 		t.Fatalf("ForWriteRef pairs = %v, want 1 item", vc.Pairs())
+	}
+}
+
+// TestParseItemLengthBeyondRemaining: an item longer than the remaining data
+// is a SizeMismatchError, like Rust's `read_comments`.
+func TestParseItemLengthBeyondRemaining(t *testing.T) {
+	payload := vcTestPayload("v", "TITLE=Foo")
+	// Inflate the item length past the end of the payload
+	itemLenPos := 4 + 1 + 4
+	binary.LittleEndian.PutUint32(payload[itemLenPos:], 1000)
+
+	_, err := ParseVorbisComments(payload, meta.NewParseOptions())
+	var sm *util.SizeMismatchError
+	if !errors.As(err, &sm) {
+		t.Fatalf("err = %v, want SizeMismatchError", err)
+	}
+}
+
+// TestDumpTagKeepsEncoderAndPads: the registered Vorbis comments dumper
+// follows Rust's `create_vorbis_comments_ref` + `VorbisCommentsRef::dump_to`:
+// ENCODER stays a comment (and is the vendor), and preferred_padding applies.
+func TestDumpTagKeepsEncoderAndPads(t *testing.T) {
+	tag := meta.NewTag(meta.TagTypeVorbisComments)
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyEncoderSoftware, meta.ItemValueText("enc")))
+	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyTrackTitle, meta.ItemValueText("T")))
+
+	var buf bytes.Buffer
+	if err := tag.DumpTo(&buf, meta.WriteOptions{}); err != nil {
+		t.Fatalf("dump: %v", err)
+	}
+	vc, err := ParseVorbisComments(buf.Bytes(), meta.NewParseOptions())
+	if err != nil {
+		t.Fatalf("parse dump: %v", err)
+	}
+	if vc.Vendor != "enc" {
+		t.Fatalf("vendor = %q, want enc", vc.Vendor)
+	}
+	if v, ok := vc.Get("ENCODER"); !ok || v != "enc" {
+		t.Fatalf("ENCODER comment = %q,%v", v, ok)
+	}
+	if v, _ := vc.Get("TITLE"); v != "T" {
+		t.Fatalf("TITLE = %q", v)
+	}
+	if buf.Len()%8160 == 0 {
+		t.Fatal("unpadded dump is unexpectedly page-aligned")
+	}
+
+	buf.Reset()
+	if err := tag.DumpTo(&buf, meta.WriteOptions{PreferredPadding: 100}); err != nil {
+		t.Fatalf("padded dump: %v", err)
+	}
+	if buf.Len() != 8160 {
+		t.Fatalf("padded dump length = %d, want 8160", buf.Len())
 	}
 }

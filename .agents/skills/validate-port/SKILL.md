@@ -136,7 +136,7 @@ Enumerate every fixture under the vendored test dirs (order by path):
 find lofty-rs/lofty/tests -type f \
   \( -path '*/files/*' -o -path '*/tags/*' -o -path '*/taglib/*' \) \
   ! -name '*.rs' ! -name '*.log' | sort > /tmp/corpus.txt
-wc -l /tmp/corpus.txt   # 157 files as of the last full run
+wc -l /tmp/corpus.txt   # 472 files as of the last full run
 ```
 
 ### Run
@@ -151,14 +151,16 @@ diff /tmp/rust_dump.txt /tmp/go_dump.txt > /tmp/dump_diff.txt
 
 ### Expected output
 
-The only permitted diffs are these three files where Rust prints `ERR` but
+The only permitted diffs are these five files where Rust prints `ERR` but
 Go successfully reads — all documented intentional deviations (see
 `AGENTS.md` "APE remaining size" and `TODO.md`): Go sniffs content where
 Rust's `read_from_path` rejects by extension / upstream bug.
 
 - `lofty-rs/lofty/tests/taglib/data/empty_vorbis.oga`
-- `lofty-rs/lofty/tests/taglib/data/longloop.ape`
 - `lofty-rs/lofty/tests/taglib/data/no-tags.3g2`
+- `lofty-rs/lofty/tests/tags/assets/id3v2/test.atxt`
+- `lofty-rs/lofty/tests/tags/assets/id3v2/test.geob`
+- `lofty-rs/lofty/tests/tags/assets/id3v2/trailing_nulls.id3v24`
 
 Verify each diff hunk maps to exactly those `FILE` lines (grep the line
 numbers from `diff` back into the dump files). **Any other diff is a parity
