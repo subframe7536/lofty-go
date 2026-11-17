@@ -125,8 +125,7 @@ hand-rolled where Lofty semantics diverge from off-the-shelf libraries
 ## Status
 
 Feature-complete port of readers/writers and the generic tag API, with
-~400 ported Rust test cases passing. Progress, coverage, and known parity
-notes are tracked in [TODO.md](TODO.md). Agent/developer notes — build
+~400 ported Rust test cases passing. Agent/developer notes — build
 commands, layout rules, port-parity gotchas — live in
 [AGENTS.md](AGENTS.md).
 

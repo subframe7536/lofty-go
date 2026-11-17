@@ -24,7 +24,6 @@ govulncheck ./...
 ```
 
 No codegen, no cgo. Module: `github.com/subframe7536/lofty-go` (Go 1.27+).
-Progress is tracked in `TODO.md` — update it when you finish a module.
 
 ## Layout
 
@@ -142,7 +141,7 @@ most debugging:
 - TagLib corpus: `lofty-rs/lofty/tests/taglib/data/`
 - ID3v1: `lofty-rs/lofty/tests/tags/id3v1/assets/` (+ `generation.log`)
 
-## Known gaps (see TODO.md)
+## Known gaps
 
 ID3v2 is a full native port — `Id3v2Tag`/`FrameList`/`Frame`/`FrameId`/
 `FrameFlags`, typed frames, v2.2/v2.3/v2.4 headers, footer/CRC/

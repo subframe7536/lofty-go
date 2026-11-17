@@ -153,7 +153,7 @@ diff /tmp/rust_dump.txt /tmp/go_dump.txt > /tmp/dump_diff.txt
 
 The only permitted diffs are these five files where Rust prints `ERR` but
 Go successfully reads — all documented intentional deviations (see
-`AGENTS.md` "APE remaining size" and `TODO.md`): Go sniffs content where
+`AGENTS.md` "APE remaining size" and "Intentional deviations"): Go sniffs content where
 Rust's `read_from_path` rejects by extension / upstream bug.
 
 - `lofty-rs/lofty/tests/taglib/data/empty_vorbis.oga`
