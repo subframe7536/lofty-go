@@ -45,6 +45,9 @@ func Splice(f FileLike, start, end uint64, replacement []byte) error {
 	if err != nil {
 		return err
 	}
+	if fileLen64 < 0 {
+		return errors.New("lofty: negative file length")
+	}
 	fileLen := uint64(fileLen64)
 
 	if start > end {
@@ -226,6 +229,9 @@ func (f *BytesFile) Read(b []byte) (int, error) {
 
 // Write implements [io.Writer]. Writing past the end zero-fills the gap.
 func (f *BytesFile) Write(b []byte) (int, error) {
+	if len(b) == 0 {
+		return 0, nil
+	}
 	end := f.pos + int64(len(b))
 	oldLen := int64(len(f.buf))
 	if end > oldLen {

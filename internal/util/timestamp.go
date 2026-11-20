@@ -111,6 +111,25 @@ const (
 	TimestampFieldSecond
 )
 
+func (f TimestampField) String() string {
+	switch f {
+	case TimestampFieldYear:
+		return "Year"
+	case TimestampFieldMonth:
+		return "Month"
+	case TimestampFieldDay:
+		return "Day"
+	case TimestampFieldHour:
+		return "Hour"
+	case TimestampFieldMinute:
+		return "Minute"
+	case TimestampFieldSecond:
+		return "Second"
+	default:
+		return fmt.Sprintf("TimestampField(%d)", int(f))
+	}
+}
+
 // TimestampParseError is an error that can occur while parsing [Timestamp]s.
 type TimestampParseError struct {
 	Kind   TimestampParseErrorKind
@@ -134,9 +153,17 @@ func (e *TimestampParseError) Error() string {
 	case TimestampParseErrorUnexpectedChar:
 		return fmt.Sprintf("unexpected character %q", e.Char)
 	case TimestampParseErrorFieldTooLarge:
-		return fmt.Sprintf("field %d exceeds its limits", e.Field)
+		return fmt.Sprintf("field '%s' exceeds its limits", e.Field)
+	case TimestampParseErrorIo:
+		if e.Source != nil {
+			return e.Source.Error()
+		}
+		return "timestamp I/O error"
 	default:
-		return e.Source.Error()
+		if e.Source != nil {
+			return e.Source.Error()
+		}
+		return "timestamp parse error"
 	}
 }
 
