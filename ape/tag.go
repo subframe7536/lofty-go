@@ -422,11 +422,11 @@ func (t *ApeTag) insertNumberPair(key string, number, total meta.Option[uint32])
 	tot, hasT := total.Get()
 	switch {
 	case hasN && hasT:
-		value = util.Itoa(int(n)) + "/" + util.Itoa(int(tot))
+		value = strconv.FormatUint(uint64(n), 10) + "/" + strconv.FormatUint(uint64(tot), 10)
 	case hasN:
-		value = util.Itoa(int(n))
+		value = strconv.FormatUint(uint64(n), 10)
 	case hasT:
-		value = "0/" + util.Itoa(int(tot))
+		value = "0/" + strconv.FormatUint(uint64(tot), 10)
 	default:
 		return
 	}
@@ -465,7 +465,7 @@ func (t *ApeTag) RemoveTrackTotal() {
 	num, _ := t.splitNumPair("Track")
 	t.Remove("Track")
 	if n, ok := num.Get(); ok {
-		t.SetText("Track", util.Itoa(int(n)))
+		t.SetText("Track", strconv.FormatUint(uint64(n), 10))
 	}
 }
 
@@ -501,7 +501,7 @@ func (t *ApeTag) RemoveDiskTotal() {
 	num, _ := t.splitNumPair("Disc")
 	t.Remove("Disc")
 	if n, ok := num.Get(); ok {
-		t.SetText("Disc", util.Itoa(int(n)))
+		t.SetText("Disc", strconv.FormatUint(uint64(n), 10))
 	}
 }
 
@@ -869,22 +869,17 @@ func ApeWriteTo(file meta.FileLike, tag *ApeTag, writeOptions meta.WriteOptions)
 			}
 		}
 		tags := &apeTags{}
-		var preamble [8]byte
-		if _, err := io.ReadFull(file, preamble[:]); err != nil {
-			return nil, err
-		}
 		start, err := file.Seek(0, io.SeekCurrent)
 		if err != nil {
 			return nil, err
 		}
-		start -= 8
 		// An APE tag at the start is against the spec; it is removed and
 		// rewritten at the end.
 		if _, header, err := ReadApeTag(file, false, writeOptions.ParseOptions); err == nil && header != nil {
 			tags.header = [2]int64{start, start + int64(header.Size)}
 			tags.headerFound = true
 		} else {
-			if _, err := file.Seek(start+8, io.SeekStart); err != nil {
+			if _, err := file.Seek(start, io.SeekStart); err != nil {
 				return nil, err
 			}
 		}
@@ -926,6 +921,9 @@ func ApeWriteTo(file meta.FileLike, tag *ApeTag, writeOptions meta.WriteOptions)
 		if _, header, err := ReadApeTag(file, true, writeOptions.ParseOptions); err == nil && header != nil {
 			// The tag region ends at start+32 and spans header.Size total
 			// (header.Size includes a 32-byte header when CONTAINS_HEADER).
+			if int64(header.Size) > start+32 {
+				return nil, &meta.SizeMismatchError{}
+			}
 			tags.footer = [2]int64{start + 32 - int64(header.Size), start + 32}
 			tags.footerFound = true
 		} else {
@@ -1220,17 +1218,31 @@ func (f *ApeFile) SavePath(path string, writeOptions meta.WriteOptions) error {
 
 // SaveFile writes the tags back to an open file.
 func (f *ApeFile) SaveFile(file meta.FileLike, writeOptions meta.WriteOptions) error {
-	var tags []*meta.Tag
 	if t, ok := f.ID3v1.Get(); ok {
-		tags = append(tags, t.Tag())
+		if err := id3v1.WriteId3v1(file, t, writeOptions); err != nil {
+			return err
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return &meta.FileEncodingError{FileType: meta.FileTypeApe, Source: err}
+		}
 	}
 	if t, ok := f.ID3v2.Get(); ok {
-		tags = append(tags, t.Tag())
+		if !t.IsEmpty() {
+			return &meta.FileEncodingError{FileType: meta.FileTypeApe, Source: &meta.UnsupportedTagError{}}
+		}
+		if err := t.SaveToVerified(meta.NewVerifiedFileOf(meta.FileTypeApe, file), writeOptions); err != nil {
+			return err
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return &meta.FileEncodingError{FileType: meta.FileTypeApe, Source: err}
+		}
 	}
 	if t, ok := f.Ape.Get(); ok {
-		tags = append(tags, t.Tag())
+		if err := ApeWriteTo(file, t, writeOptions); err != nil {
+			return err
+		}
 	}
-	return meta.SaveTagFields(file, meta.FileTypeApe, tags, writeOptions)
+	return nil
 }
 
 // RemoveFromPath removes a tag type from the file at `path`.
