@@ -334,7 +334,7 @@ func main() {
 		if werr := os.WriteFile("facade_gen.go.bad", out.Bytes(), 0o644); werr != nil {
 			fmt.Fprintln(os.Stderr, werr)
 		}
-		return
+		os.Exit(1)
 	}
 	if err := os.WriteFile("facade_gen.go", formatted, 0o644); err != nil {
 		panic(err)

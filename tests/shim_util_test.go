@@ -22,9 +22,8 @@ var (
 )
 
 var (
-	tryParseTimestamp = util.TryParseTimestamp
-	synchsafe32       = util.Synchsafe32
-	unsynchsafe32     = util.Unsynchsafe32
+	synchsafe32   = util.Synchsafe32
+	unsynchsafe32 = util.Unsynchsafe32
 )
 
 var (
@@ -40,5 +39,4 @@ var (
 
 var (
 	id3v2TagFromTag = id3v2.Id3v2TagFromTag
-	id3v2TagToTag   = id3v2.Id3v2TagToTag
 )
