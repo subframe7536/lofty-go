@@ -1,4 +1,4 @@
-package lofty
+package lofty_test
 
 import (
 	"bytes"
@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/subframe7536/lofty-go/id3v2"
+
+	. "github.com/subframe7536/lofty-go"
 )
 
 // removeTagTest mirrors Rust util::remove_tag_test: copy the asset, verify the

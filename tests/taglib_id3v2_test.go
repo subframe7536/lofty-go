@@ -1,4 +1,4 @@
-package lofty
+package lofty_test
 
 import (
 	"bytes"
@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/subframe7536/lofty-go/id3v2"
+
+	. "github.com/subframe7536/lofty-go"
 )
 
 // --- tests/taglib/test_id3v2.rs ---

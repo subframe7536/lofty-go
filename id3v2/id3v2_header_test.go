@@ -1,8 +1,10 @@
-package lofty
+package id3v2_test
 
 import (
 	"bytes"
 	"testing"
+
+	. "github.com/subframe7536/lofty-go"
 )
 
 // Ported from id3/v2/header.rs tests

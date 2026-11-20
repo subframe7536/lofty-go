@@ -1,4 +1,4 @@
-package lofty
+package id3v1_test
 
 // Ports of lofty-rs src/id3/v1/tag.rs unit tests.
 
@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	. "github.com/subframe7536/lofty-go"
 )
 
 func TestId3v1YearRoundtrip(t *testing.T) {
@@ -88,7 +90,7 @@ func TestId3v1ImplicitTruncation(t *testing.T) {
 
 func readId3v1Asset(t *testing.T) *Id3v1Tag {
 	t.Helper()
-	data, err := os.ReadFile("lofty-rs/lofty/tests/tags/assets/test.id3v1")
+	data, err := os.ReadFile("../lofty-rs/lofty/tests/tags/assets/test.id3v1")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,13 +1,15 @@
-package lofty
+package meta_test
 
 import (
 	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
+
+	. "github.com/subframe7536/lofty-go/internal/meta"
 )
 
-var pictureAssetDir = filepath.Join("lofty-rs", "lofty", "tests", "picture", "assets")
+var pictureAssetDir = filepath.Join("..", "..", "lofty-rs", "lofty", "tests", "picture", "assets")
 
 func pictureAsset(t *testing.T, name string) []byte {
 	t.Helper()

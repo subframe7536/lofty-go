@@ -1,14 +1,16 @@
-package lofty
+package lofty_test
 
 import (
 	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
+
+	. "github.com/subframe7536/lofty-go"
 )
 
 func taglibData(parts ...string) string {
-	p := append([]string{"lofty-rs", "lofty", "tests", "taglib", "data"}, parts...)
+	p := append([]string{"..", "lofty-rs", "lofty", "tests", "taglib", "data"}, parts...)
 	return filepath.Join(p...)
 }
 

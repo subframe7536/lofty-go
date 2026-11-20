@@ -1,4 +1,4 @@
-package lofty
+package lofty_test
 
 import (
 	"io"
@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	. "github.com/subframe7536/lofty-go"
 )
 
 // noProps is ParseOptions with ReadProperties disabled.
@@ -13,7 +15,7 @@ var noProps = ParseOptions{ReadProperties: false, ReadTags: true, ParsingMode: P
 
 // testAsset returns the path to a lofty-rs test asset, reusing the Rust repo's files.
 func testAsset(parts ...string) string {
-	p := append([]string{"lofty-rs", "lofty", "tests", "files", "assets"}, parts...)
+	p := append([]string{"..", "lofty-rs", "lofty", "tests", "files", "assets"}, parts...)
 	return filepath.Join(p...)
 }
 
@@ -322,7 +324,7 @@ func mustOpen(t *testing.T, path string) *os.File {
 // tests/fuzz/*_read_from.rs — every corpus file must be readable without a
 // panic or an unbounded hang (Rust `oom_test` gives each read 3 seconds).
 func TestFuzzCorpusReadFrom(t *testing.T) {
-	base := filepath.Join("lofty-rs", "lofty", "tests", "fuzz", "assets")
+	base := filepath.Join("..", "lofty-rs", "lofty", "tests", "fuzz", "assets")
 	entries, err := os.ReadDir(base)
 	if err != nil {
 		t.Skip("fuzz corpus missing:", err)

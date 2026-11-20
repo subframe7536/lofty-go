@@ -34,13 +34,14 @@ unchanged — `lofty.X` resolves through generated aliases.
 | Path | Rust counterpart | Contents |
 |---|---|---|
 | `internal/util` | `util/{alloc,io,text}.rs`, `config/` | `Option[T]`, Global/Parse/WriteOptions, error types, alloc limits, FileLike/Splice, text codecs, synchsafe/frame-sync helpers |
-| `internal/meta` | `tag/`, `file/`, `probe.rs`, `resolve.rs` | `Tag`/`TagItem`/`ItemKey`, `TaggedFile`, `FileType`, `Probe`, format/tag registries, read/write dispatch, `verifiedFile` |
+| `internal/meta` | `tag/`, `file/`, `probe.rs`, `resolve.rs` | `Tag`/`TagItem`/`ItemKey`, `TaggedFile`, `FileType`, `Probe`, format/tag registries, read/write dispatch, `verifiedFile`. Internal tests are `package meta`; ported facade-level tests of `Tag`/`Picture`/resolvers are `package meta_test` alongside them — they must NOT import `lofty`, `mpeg` or `flac`, because `helpers_test.go` init-registers stub readers/writers for MPEG+FLAC and the real registrations would panic on the duplicate |
 | `internal/tagpos` | — | ID3v1 tail-locator shared by `id3v1`/`lyrics3`/`mpeg` (breaks the id3v1↔lyrics3 cycle) |
 | `internal/testutil` | — | fixture path resolution + shared test helpers; tests live in the package whose internals they exercise |
 | `id3v1`, `id3v2`, `vorbis`, `lyrics3` | `id3/v1`, `id3/v2`, `ogg/tag`, `id3/lyrics3` | tag implementations (`id3v2` is a native port: `tag.go` tag+header, `read.go`/`write.go` frame walk+serialize, `frame.go`/`framelist.go`/`items*.go` typed frames, `convert.go` generic-Tag split/merge) |
 | `ape`, `ogg`, `flac`, `mp4`, `iff`, `mpeg`, `dsf`, `wavpack`, `mpc`, `aac` | `<format>/` | file readers/writers; `mp4` includes `Ilst`/`Atom`/`AtomData` |
-| root (`package lofty`) | — | **pure facade**: `facade_gen.go` re-exports every moved public symbol (regenerate with `go run ./scripts/facadegen`); `shim_util_test.go` holds internal bridges for root tests |
-| `*_test.go` | Rust `tests/` + `src/**/tests.rs` | ported test cases, distributed to their owning package |
+| root (`package lofty`) | — | **pure facade**: `facade_gen.go` re-exports every moved public symbol (regenerate with `go run ./scripts/facadegen`); no test files at root |
+| `tests/` (`package lofty_test`) | Rust `tests/` | black-box integration tests: file read/write dispatch, TagLib corpus, fuzz/bench. Dot-imports the facade so ported call sites stay unqualified; `shim_util_test.go` holds internal bridges |
+| `*_test.go` | Rust `tests/` + `src/**/tests.rs` | ported test cases, distributed to their owning package; format-specific ports are external `<pkg>_test` files dot-importing the facade (e.g. `id3v2/id3v2_header_test.go`) |
 
 Dependency rule: `internal/util` ← `internal/meta` ← format packages ← root
 facade. Format packages never import the root; they register themselves in

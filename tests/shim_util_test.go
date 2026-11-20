@@ -1,7 +1,7 @@
-package lofty
+package lofty_test
 
 // Test-only bridges: unqualified aliases to internal/util, internal/meta and
-// format-package helpers that the root package tests use. No non-test root
+// format-package helpers that the lofty_test package files use. No non-test
 // file references them, so they live in a _test.go file.
 
 import (

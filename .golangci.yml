@@ -21,6 +21,11 @@ linters:
       # Test files reuse Rust fixture helpers and tolerate looser errcheck
       - path: _test\.go$
         linters: [errcheck]
+      # Black-box test packages dot-import the package under test to keep the
+      # ported Rust test call sites unqualified
+      - path: _test\.go$
+        linters: [staticcheck]
+        text: "dot import"
       # "Humour"/"theatre" are real Winamp ID3v1 genre names, not typos
       - linters: [misspell]
         text: "([Hh]umour|theatre)"

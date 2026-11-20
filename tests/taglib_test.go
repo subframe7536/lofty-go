@@ -1,4 +1,4 @@
-package lofty
+package lofty_test
 
 import (
 	"bytes"
@@ -13,9 +13,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	. "github.com/subframe7536/lofty-go"
 )
 
-var taglibDataDir = filepath.Join("lofty-rs", "lofty", "tests", "taglib", "data")
+var taglibDataDir = filepath.Join("..", "lofty-rs", "lofty", "tests", "taglib", "data")
 
 func taglibPath(name string) string { return filepath.Join(taglibDataDir, name) }
 
@@ -25,6 +27,7 @@ func taglibFile(t *testing.T, name string) *os.File {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { f.Close() })
 	return f
 }
 
@@ -38,6 +41,7 @@ func taglibTempFile(t *testing.T, name string) *os.File {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { f.Close() })
 	if _, err := f.Write(data); err != nil {
 		t.Fatal(err)
 	}
@@ -3579,7 +3583,7 @@ func TestTaglibFlacZeroSizedPadding1(t *testing.T) {
 // --- tests/tags/id3v1/mod.rs ---
 
 func TestTaglibId3v1Suite(t *testing.T) {
-	dir := filepath.Join("lofty-rs", "lofty", "tests", "tags", "id3v1", "assets")
+	dir := filepath.Join("..", "lofty-rs", "lofty", "tests", "tags", "id3v1", "assets")
 	logBytes, err := os.ReadFile(filepath.Join(dir, "generation.log"))
 	if err != nil {
 		t.Skip("generation.log missing:", err)
@@ -3759,7 +3763,7 @@ func wavFmtGroundTruth(t *testing.T, path string) (channels uint16, rate uint32,
 }
 
 func TestTaglibHound(t *testing.T) {
-	houndDir := filepath.Join("lofty-rs", "lofty", "tests", "files", "assets", "hound")
+	houndDir := filepath.Join("..", "lofty-rs", "lofty", "tests", "files", "assets", "hound")
 	entries, err := os.ReadDir(houndDir)
 	if err != nil {
 		t.Skip("hound assets missing:", err)
@@ -3801,7 +3805,7 @@ func TestTaglibHound(t *testing.T) {
 }
 
 func TestTaglibHoundFuzz(t *testing.T) {
-	fuzzDir := filepath.Join("lofty-rs", "lofty", "tests", "files", "assets", "hound", "fuzz")
+	fuzzDir := filepath.Join("..", "lofty-rs", "lofty", "tests", "files", "assets", "hound", "fuzz")
 	entries, err := os.ReadDir(fuzzDir)
 	if err != nil {
 		t.Skip("hound fuzz assets missing:", err)

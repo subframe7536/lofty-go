@@ -1,4 +1,4 @@
-package lofty
+package lofty_test
 
 import (
 	"bytes"
@@ -6,11 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	. "github.com/subframe7536/lofty-go"
 )
 
 // --- src/probe.rs ---
 
-var probeAssetsDir = filepath.Join("lofty-rs", "lofty", "tests", "files", "assets")
+var probeAssetsDir = filepath.Join("..", "lofty-rs", "lofty", "tests", "files", "assets")
 
 func testProbeFile(t *testing.T, name string, want FileType) {
 	t.Helper()

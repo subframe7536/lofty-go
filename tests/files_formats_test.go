@@ -1,8 +1,10 @@
-package lofty
+package lofty_test
 
 import (
 	"os"
 	"testing"
+
+	. "github.com/subframe7536/lofty-go"
 )
 
 // probeRead reads a TaggedFile via Probe+GuessFileType.

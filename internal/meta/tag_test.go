@@ -1,4 +1,4 @@
-package lofty
+package meta_test
 
 import (
 	"bytes"
@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	. "github.com/subframe7536/lofty-go/internal/meta"
 )
 
 // Ported from tag/tests.rs::should_preserve_empty_title

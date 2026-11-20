@@ -1,16 +1,18 @@
-package lofty
+package lofty_test
 
 import (
 	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
+
+	. "github.com/subframe7536/lofty-go"
 )
 
 // FuzzReadFrom replays arbitrary bytes through every format reader, seeded
 // with the Rust fuzz corpus. The fuzz engine treats panics as crashes.
 func FuzzReadFrom(f *testing.F) {
-	base := filepath.Join("lofty-rs", "lofty", "tests", "fuzz", "assets")
+	base := filepath.Join("..", "lofty-rs", "lofty", "tests", "fuzz", "assets")
 	_ = filepath.WalkDir(base, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil

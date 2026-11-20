@@ -1,10 +1,12 @@
-package lofty
+package lofty_test
 
 import (
 	"bytes"
 	"io"
 	"os"
 	"testing"
+
+	. "github.com/subframe7536/lofty-go"
 )
 
 func TestPairsSetNumber(t *testing.T) {
@@ -35,7 +37,7 @@ func TestPairsSetNumber(t *testing.T) {
 
 // --- src/util/io.rs ---
 
-const ioTestAsset = "lofty-rs/lofty/tests/files/assets/minimal/full_test.mp3"
+const ioTestAsset = "../lofty-rs/lofty/tests/files/assets/minimal/full_test.mp3"
 
 func ioAlterTag(file *MpegFile) {
 	tag := file.ID3v2.MustGet()

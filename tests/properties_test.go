@@ -1,4 +1,4 @@
-package lofty
+package lofty_test
 
 import (
 	"bytes"
@@ -7,11 +7,13 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	. "github.com/subframe7536/lofty-go"
 )
 
 // --- src/properties/tests.rs ---
 
-var minimalAssets = filepath.Join("lofty-rs", "lofty", "tests", "files", "assets", "minimal")
+var minimalAssets = filepath.Join("..", "lofty-rs", "lofty", "tests", "files", "assets", "minimal")
 
 func readAsset(t *testing.T, name string) []byte {
 	t.Helper()

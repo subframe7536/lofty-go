@@ -1,4 +1,4 @@
-package lofty
+package lofty_test
 
 import (
 	"bytes"
@@ -7,6 +7,8 @@ import (
 	bogem "github.com/bogem/id3v2/v2"
 
 	"github.com/subframe7536/lofty-go/id3v2"
+
+	. "github.com/subframe7536/lofty-go"
 )
 
 func xfmtId3v2Dump(t *testing.T, tag *Tag, useV23 bool) []byte {

@@ -1,15 +1,17 @@
-package lofty
+package vorbis_test
 
 import (
 	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
+
+	. "github.com/subframe7536/lofty-go"
 )
 
 // --- src/ogg/tag.rs ---
 
-var tagAssetsDir = filepath.Join("lofty-rs", "lofty", "tests", "tags", "assets")
+var tagAssetsDir = filepath.Join("..", "lofty-rs", "lofty", "tests", "tags", "assets")
 
 func readVCTest(t *testing.T, name string, po ParseOptions) *VorbisCommentsTag {
 	t.Helper()

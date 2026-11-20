@@ -1,9 +1,11 @@
-package lofty
+package meta_test
 
 import (
 	"io"
 	"os"
 	"testing"
+
+	. "github.com/subframe7536/lofty-go/internal/meta"
 )
 
 // --- src/resolve.rs ---
@@ -29,7 +31,7 @@ func TestCustomResolver(t *testing.T) {
 	RegisterCustomResolver("MyFile", myFileResolver{})
 	defer UnregisterCustomResolver("MyFile")
 
-	path := "lofty-rs/examples/custom_resolver/test_asset.myfile"
+	path := "../../lofty-rs/examples/custom_resolver/test_asset.myfile"
 	read, err := ReadFromPath(path)
 	if err != nil {
 		t.Fatal(err)
