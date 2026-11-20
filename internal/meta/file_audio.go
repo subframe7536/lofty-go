@@ -29,8 +29,11 @@ func SaveToPath(path string, f AudioFile, writeOptions WriteOptions) error {
 	if err != nil {
 		return &FileEncodingError{Source: err}
 	}
-	defer osFile.Close()
-	return f.SaveFile(NewOSFile(osFile), writeOptions)
+	err = f.SaveFile(NewOSFile(osFile), writeOptions)
+	if cerr := osFile.Close(); cerr != nil && err == nil {
+		return &FileEncodingError{Source: cerr}
+	}
+	return err
 }
 
 // RemoveTagFromPath removes `tagType` from the file at `path`, taking the file's

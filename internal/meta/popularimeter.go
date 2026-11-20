@@ -44,6 +44,9 @@ var (
 // By default, the fallback provider will be [DefaultRatingProvider].
 // It returns false if a custom provider has already been set.
 func SetCustomRatingProvider(provider RatingProvider) bool {
+	if provider == nil {
+		return false
+	}
 	customProviderMu.Lock()
 	defer customProviderMu.Unlock()
 	if customProvider != nil {
@@ -107,6 +110,8 @@ func (MusicBeeProvider) Rate(tagType TagType, rating StarRating) uint8 {
 			return 196
 		case StarRatingFive:
 			return 255
+		default:
+			return 0
 		}
 	}
 	return saturatingMul(uint8(rating), 20)

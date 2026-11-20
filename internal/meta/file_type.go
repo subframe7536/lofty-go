@@ -115,8 +115,10 @@ func (t FileType) String() string {
 		return "WAV"
 	case fileTypeWavPack:
 		return "WAVPACK"
-	default:
+	case fileTypeCustom:
 		return "CUSTOM:" + t.customName
+	default:
+		return "UNKNOWN"
 	}
 }
 
@@ -143,8 +145,10 @@ func (t FileType) PrimaryTagType() TagType {
 		return TagTypeVorbisComments
 	case fileTypeMp4:
 		return TagTypeMp4Ilst
-	default:
+	case fileTypeCustom:
 		return lookupResolver(t.customName).PrimaryTagType()
+	default:
+		panic("lofty: PrimaryTagType called on zero/invalid FileType")
 	}
 }
 
