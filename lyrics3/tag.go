@@ -443,19 +443,22 @@ func Lyrics3v2TagFromTag(input *meta.Tag) *Lyrics3v2Tag {
 	if util.GetGlobalOptions().PreserveFormatSpecificItems {
 		if comp, ok := input.CompanionTag().(*Lyrics3v2Tag); ok && comp != nil {
 			merged = *comp
+			if len(comp.Images) > 0 {
+				merged.Images = append([]Lyrics3v2Image(nil), comp.Images...)
+			}
 		}
 	}
-	take := func(key meta.ItemKey, dst *meta.Option[string]) {
-		if strs := input.TakeStrings(key); len(strs) > 0 {
-			*dst = meta.Some(strs[0])
+	get := func(key meta.ItemKey, dst *meta.Option[string]) {
+		if s, ok := input.GetString(key); ok {
+			*dst = meta.Some(s)
 		}
 	}
-	take(meta.ItemKeyLyrics, &merged.Lyrics)
-	take(meta.ItemKeyComment, &merged.Info)
-	take(meta.ItemKeyLyricist, &merged.Author)
-	take(meta.ItemKeyAlbumTitle, &merged.ExtendedAlbumName)
-	take(meta.ItemKeyTrackArtist, &merged.ExtendedArtistName)
-	take(meta.ItemKeyTrackTitle, &merged.ExtendedTrackTitle)
+	get(meta.ItemKeyLyrics, &merged.Lyrics)
+	get(meta.ItemKeyComment, &merged.Info)
+	get(meta.ItemKeyLyricist, &merged.Author)
+	get(meta.ItemKeyAlbumTitle, &merged.ExtendedAlbumName)
+	get(meta.ItemKeyTrackArtist, &merged.ExtendedArtistName)
+	get(meta.ItemKeyTrackTitle, &merged.ExtendedTrackTitle)
 	return &merged
 }
 
@@ -568,7 +571,13 @@ func (t *Lyrics3v2Tag) encode(writeOptions meta.WriteOptions) ([]byte, error) {
 		v, ok := o.Get()
 		return v, ok && v != ""
 	}
-	if t.isContentEmpty() {
+	_, hasLyrics := filter(t.Lyrics)
+	_, hasInfo := filter(t.Info)
+	_, hasAuthor := filter(t.Author)
+	_, hasEAL := filter(t.ExtendedAlbumName)
+	_, hasEAR := filter(t.ExtendedArtistName)
+	_, hasETT := filter(t.ExtendedTrackTitle)
+	if !hasLyrics && !hasInfo && !hasAuthor && !hasEAL && !hasEAR && !hasETT && len(t.Images) == 0 {
 		return nil, nil // Stripping
 	}
 
