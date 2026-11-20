@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"math"
 	"time"
 
 	"github.com/subframe7536/lofty-go/id3v2"
@@ -220,11 +221,12 @@ func (f *DsfFile) SavePath(path string, wo meta.WriteOptions) error {
 
 // SaveFile implements AudioFile.
 func (f *DsfFile) SaveFile(file meta.FileLike, wo meta.WriteOptions) error {
-	var tags []*meta.Tag
 	if t, ok := f.ID3v2.Get(); ok {
-		tags = append(tags, t.Tag())
+		if err := t.SaveToVerified(meta.NewVerifiedFileOf(meta.FileTypeDsf, file), wo); err != nil {
+			return err
+		}
 	}
-	return meta.SaveTagFields(file, meta.FileTypeDsf, tags, wo)
+	return nil
 }
 
 // RemoveFromPath implements AudioFile.
@@ -264,6 +266,14 @@ func dsfWriteId3v2Chunk(file meta.FileLike, encoded []byte) error {
 	totalFileSize := binary.LittleEndian.Uint64(dsd[12:])
 	metadataPtr := binary.LittleEndian.Uint64(dsd[20:])
 
+	end, err := file.Seek(0, io.SeekEnd)
+	if err != nil {
+		return &meta.FileEncodingError{Source: err}
+	}
+	if end < 0 {
+		return &meta.FileEncodingError{Source: errors.New("negative file length")}
+	}
+	encLen := uint64(len(encoded))
 	var newTotalFileSize, newMetadataPtr uint64
 	if metadataPtr > 0 {
 		if metadataPtr > totalFileSize {
@@ -274,7 +284,10 @@ func dsfWriteId3v2Chunk(file meta.FileLike, encoded []byte) error {
 			newTotalFileSize = metadataPtr
 			newMetadataPtr = 0
 		} else {
-			newTotalFileSize = metadataPtr + uint64(len(encoded))
+			if metadataPtr > math.MaxUint64-encLen {
+				return &meta.FileEncodingError{Source: &meta.TooMuchDataError{}}
+			}
+			newTotalFileSize = metadataPtr + encLen
 			newMetadataPtr = metadataPtr
 		}
 	} else {
@@ -282,8 +295,17 @@ func dsfWriteId3v2Chunk(file meta.FileLike, encoded []byte) error {
 			// No tag to overwrite, nothing to do
 			return nil
 		}
-		newTotalFileSize = totalFileSize + uint64(len(encoded))
+		if totalFileSize > math.MaxUint64-encLen {
+			return &meta.FileEncodingError{Source: &meta.TooMuchDataError{}}
+		}
+		newTotalFileSize = totalFileSize + encLen
 		newMetadataPtr = totalFileSize
+	}
+	if newTotalFileSize > math.MaxInt64 {
+		return &meta.FileEncodingError{Source: &meta.TooMuchDataError{}}
+	}
+	if newMetadataPtr > 0 && newMetadataPtr > uint64(end) {
+		return &meta.FileEncodingError{Source: &meta.SizeMismatchError{}}
 	}
 
 	if _, err := file.Seek(12, io.SeekStart); err != nil {
@@ -297,13 +319,15 @@ func dsfWriteId3v2Chunk(file meta.FileLike, encoded []byte) error {
 	}
 
 	if newMetadataPtr == 0 {
-		return file.Truncate(int64(newTotalFileSize))
+		if err := file.Truncate(int64(newTotalFileSize)); err != nil {
+			return &meta.FileEncodingError{Source: err}
+		}
+		return nil
 	}
-	end, err := file.Seek(0, io.SeekEnd)
-	if err != nil {
+	if err := meta.Splice(file, newMetadataPtr, uint64(end), encoded); err != nil {
 		return &meta.FileEncodingError{Source: err}
 	}
-	return meta.Splice(file, newMetadataPtr, uint64(end), encoded)
+	return nil
 }
 
 func channelMaskFromDsfChannelType(channelType uint32) meta.Option[meta.ChannelMask] {

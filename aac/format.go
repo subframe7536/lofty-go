@@ -219,9 +219,9 @@ func AacFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Aac
 					for _, fr := range t.Frames.Frames() {
 						existing.Frames.Insert(fr)
 					}
-					continue
+				} else {
+					file.ID3v2 = meta.Some(t)
 				}
-				file.ID3v2 = meta.Some(t)
 			} else if _, err := reader.Seek(int64(header.Size-header.ExtendedSize), io.SeekCurrent); err != nil {
 				// Rust leaves the content unskipped here and relies on frame
 				// validation to step over it; skipping it is equivalent
@@ -314,7 +314,7 @@ func AacFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Aac
 		if avg > 0 {
 			p.AudioBitrate = avg
 			p.OverallBitrate = avg
-			p.Duration = time.Duration((streamLen*8)/uint64(avg)) * time.Millisecond
+			p.Duration = util.DurationFromMillis(util.SaturatingMul(streamLen, 8) / uint64(avg))
 		}
 	}
 	return &file, nil
@@ -382,7 +382,20 @@ func (f *AacFile) SavePath(path string, wo meta.WriteOptions) error {
 
 // SaveFile implements AudioFile.
 func (f *AacFile) SaveFile(file meta.FileLike, wo meta.WriteOptions) error {
-	return f.TaggedFile().Save(file, wo)
+	if t, ok := f.ID3v2.Get(); ok {
+		if err := t.SaveToVerified(meta.NewVerifiedFileOf(meta.FileTypeAac, file), wo); err != nil {
+			return err
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return &meta.FileEncodingError{FileType: meta.FileTypeAac, Source: err}
+		}
+	}
+	if t, ok := f.ID3v1.Get(); ok {
+		if err := id3v1.WriteId3v1(file, t, wo); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // RemoveFromPath implements AudioFile.
