@@ -325,7 +325,7 @@ func IlstFromTag(tag *meta.Tag) *Ilst {
 		if !ok {
 			continue
 		}
-		text, isText := item.Value().IntoString()
+		text, isText := item.Value().Text()
 		if !isText {
 			continue
 		}
@@ -696,7 +696,7 @@ func ParseIlst(reader io.ReadSeeker, end int64, parseOptions meta.ParseOptions) 
 		if name == "----" {
 			// Rust `parse_freeform` runs inside `AtomInfo::read`, so its
 			// errors are swallowed by `while let Ok` — the scan just ends.
-			id, err := mp4ParseFreeform(cursor, atom, atomEnd)
+			id, err := mp4ParseFreeform(cursor, atom, atomEnd, parseOptions.ParsingMode)
 			if err != nil {
 				break
 			}
@@ -955,7 +955,7 @@ func parseBEInt(b []byte, signed bool) (int32, error) {
 
 // mp4ParseFreeform parses a `----` atom's ordered `mean`/`name` sub-boxes,
 // mirroring Rust's `parse_freeform`/`freeform_chunk` (errors propagate).
-func mp4ParseFreeform(reader io.ReadSeeker, atom *mp4BoxHeader, atomEnd int64) (AtomIdent, error) {
+func mp4ParseFreeform(reader io.ReadSeeker, atom *mp4BoxHeader, atomEnd int64, mode meta.ParsingMode) (AtomIdent, error) {
 	if atom.size < 24 {
 		return AtomIdent{}, &Mp4ParseError{Source: util.NewNotEnoughDataError(24)}
 	}
@@ -965,7 +965,7 @@ func mp4ParseFreeform(reader io.ReadSeeker, atom *mp4BoxHeader, atomEnd int64) (
 	var values [2]string
 	for i, want := range [2]string{"mean", "name"} {
 		pos, _ := reader.Seek(0, io.SeekCurrent)
-		ch, err := mp4ReadBoxBound(reader, uint64(atomEnd-pos), meta.ParsingModeRelaxed)
+		ch, err := mp4ReadBoxBound(reader, uint64(atomEnd-pos), mode)
 		if err != nil {
 			return AtomIdent{}, err
 		}
@@ -974,6 +974,9 @@ func mp4ParseFreeform(reader io.ReadSeeker, atom *mp4BoxHeader, atomEnd int64) (
 		}
 		if ch.size < 4 {
 			return AtomIdent{}, &Mp4ParseError{Source: util.NewNotEnoughDataError(12)}
+		}
+		if ch.pos+int64(ch.size) > atomEnd {
+			return AtomIdent{}, &meta.SizeMismatchError{}
 		}
 		if _, err := reader.Seek(4, io.SeekCurrent); err != nil {
 			return AtomIdent{}, &Mp4ParseError{Source: err}
