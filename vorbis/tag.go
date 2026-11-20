@@ -351,7 +351,7 @@ func (t *VorbisCommentsTag) Track() (uint32, bool) {
 func (t *VorbisCommentsTag) SetTrack(value uint32) {
 	t.RemoveKey("TRACKNUMBER")
 	t.RemoveKey("TRACKNUM")
-	t.InsertKV("TRACKNUMBER", util.Itoa(int(value)))
+	t.InsertKV("TRACKNUMBER", strconv.FormatUint(uint64(value), 10))
 }
 
 // RemoveTrack removes the track number.
@@ -375,7 +375,7 @@ func (t *VorbisCommentsTag) TrackTotal() (uint32, bool) {
 
 // SetTrackTotal sets the total tracks, normalizing to TRACKTOTAL.
 func (t *VorbisCommentsTag) SetTrackTotal(value uint32) {
-	t.InsertKV("TRACKTOTAL", util.Itoa(int(value)))
+	t.InsertKV("TRACKTOTAL", strconv.FormatUint(uint64(value), 10))
 	t.RemoveKey("TOTALTRACKS")
 }
 
@@ -395,7 +395,9 @@ func (t *VorbisCommentsTag) Disk() (uint32, bool) {
 }
 
 // SetDisk sets the disc number.
-func (t *VorbisCommentsTag) SetDisk(value uint32) { t.InsertKV("DISCNUMBER", util.Itoa(int(value))) }
+func (t *VorbisCommentsTag) SetDisk(value uint32) {
+	t.InsertKV("DISCNUMBER", strconv.FormatUint(uint64(value), 10))
+}
 
 // RemoveDisk removes the disc number.
 func (t *VorbisCommentsTag) RemoveDisk() { t.RemoveKey("DISCNUMBER") }
@@ -415,7 +417,7 @@ func (t *VorbisCommentsTag) DiskTotal() (uint32, bool) {
 
 // SetDiskTotal sets the total discs, normalizing to DISCTOTAL.
 func (t *VorbisCommentsTag) SetDiskTotal(value uint32) {
-	t.InsertKV("DISCTOTAL", util.Itoa(int(value)))
+	t.InsertKV("DISCTOTAL", strconv.FormatUint(uint64(value), 10))
 	t.RemoveKey("TOTALDISCS")
 }
 

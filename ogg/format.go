@@ -312,7 +312,7 @@ func oggReadTaggedAs(reader io.ReadSeeker, parseOptions meta.ParseOptions, fType
 	if err != nil {
 		return nil, nil, headerErr(&OggParseError{Source: err})
 	}
-	if len(packets) < 2 {
+	if len(packets) < 1 || (parseOptions.ReadTags && len(packets) < 2) {
 		return nil, nil, headerErr(&OggParseError{Message: "missing Ogg header packets"})
 	}
 	ident := packets[0]
@@ -580,9 +580,6 @@ func OggReadCountPackets(reader io.ReadSeeker, count int) ([][]byte, *OggPage, u
 			}
 		}
 	}
-	if len(packets) < count {
-		return nil, nil, 0, &OggParseError{Message: "not enough data"}
-	}
 	return packets, remainder, serial, nil
 }
 
@@ -633,6 +630,12 @@ func oggPaginate(packets [][]byte, serial uint32, abgp uint64, flags byte) []*Og
 	for _, packet := range packets {
 		freshPacket = true
 		lastSegSize = byte(len(packet) % 255)
+		if len(packet) == 0 {
+			packetFinished = true
+			flush()
+			firstPage = false
+			continue
+		}
 		pkt := packet
 		for len(pkt) > 0 {
 			n := remaining
@@ -655,7 +658,7 @@ func oggPaginate(packets [][]byte, serial uint32, abgp uint64, flags byte) []*Og
 			flush()
 		}
 		// A packet exactly filling a page needs a nil page to mark its end
-		if len(packet) != 0 && len(packet)%(255*oggMaxWrittenSegmentCount) == 0 {
+		if len(packet)%(255*oggMaxWrittenSegmentCount) == 0 {
 			packetFinished = true
 			flush()
 		}
@@ -732,12 +735,12 @@ func oggWriteVorbisCommentsImpl(file meta.FileLike, ft meta.FileType, writeOptio
 	if len(comment) < off+4 {
 		return &meta.FileEncodingError{Source: &OggParseError{Source: io.ErrUnexpectedEOF}}
 	}
-	vlen := int(binary.LittleEndian.Uint32(comment[off:]))
-	if vlen > len(comment)-off-4 {
+	vlen := binary.LittleEndian.Uint32(comment[off:])
+	if uint64(vlen) > uint64(len(comment)-off-4) {
 		return &meta.FileEncodingError{Source: &OggParseError{Source: io.ErrUnexpectedEOF}}
 	}
 	var vendor string
-	if vb := comment[off+4 : off+4+vlen]; utf8.Valid(vb) {
+	if vb := comment[off+4 : off+4+int(vlen)]; utf8.Valid(vb) {
 		vendor = string(vb)
 	}
 
