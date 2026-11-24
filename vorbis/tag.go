@@ -560,11 +560,6 @@ func (t *VorbisCommentsTag) Tag() *meta.Tag {
 		remainder.Vendor = t.Vendor
 		tag.SetCompanionTag(remainder)
 	}
-	// Preserve the vendor string as an EncoderSoftware item if one does
-	// not already exist.
-	if t.Vendor != "" && !tag.Contains(meta.ItemKeyEncoderSoftware) {
-		tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyEncoderSoftware, meta.ItemValueText(t.Vendor)))
-	}
 	for _, pic := range t.pictures {
 		tag.PushPicture(pic.Picture)
 	}
@@ -583,12 +578,6 @@ func VorbisCommentsTagFromTag(input *meta.Tag, vendor string) *VorbisCommentsTag
 			if vc.Vendor == "" {
 				vc.Vendor = comp.Vendor
 			}
-		}
-	}
-	// The first EncoderSoftware item becomes the vendor string.
-	if taken := input.Take(meta.ItemKeyEncoderSoftware); len(taken) > 0 {
-		if s, ok := taken[0].Value().Text(); ok {
-			vc.Vendor = s
 		}
 	}
 	for _, item := range input.Items() {
@@ -957,8 +946,7 @@ func (e *VorbisCommentsEncodingError) Unwrap() error { return e.Source }
 
 // VorbisCommentsTagForWrite builds a [VorbisCommentsTag] for encoding: all tag
 // items are kept as comments, and the given vendor is used for the vendor
-// field unless the tag carries an EncoderSoftware item (mirroring Rust's
-// `create_vorbis_comments_ref` write path).
+// field (mirroring Rust's `VorbisComments::as_tag_ref` write path).
 func VorbisCommentsTagForWrite(input *meta.Tag, vendor string) *VorbisCommentsTag {
 	return VorbisCommentsTagForWritePics(input, vendor, true)
 }
@@ -974,16 +962,13 @@ func VorbisCommentsTagForWritePics(input *meta.Tag, vendor string, withPics bool
 	return vc
 }
 
-// VorbisCommentsTagForWriteRef is Rust's `create_vorbis_comments_ref`: the
-// vendor is the tag's EncoderSoftware (or empty), text and locator items with
-// a field mapping are kept verbatim (no flag or popularimeter conversion —
-// that only happens when merging into a concrete tag), and pictures carry
-// their extracted information. Writers replace the vendor with the file's own.
+// VorbisCommentsTagForWriteRef is Rust's `VorbisComments::as_tag_ref`: the
+// vendor is empty, text and locator items with a field mapping are kept
+// verbatim (no flag or popularimeter conversion — that only happens when
+// merging into a concrete tag), and pictures carry their extracted
+// information. Writers replace the vendor with the file's own.
 func VorbisCommentsTagForWriteRef(input *meta.Tag, withPics bool) *VorbisCommentsTag {
 	vc := &VorbisCommentsTag{}
-	if s, ok := input.GetString(meta.ItemKeyEncoderSoftware); ok {
-		vc.Vendor = s
-	}
 	for _, item := range input.Items() {
 		if _, ok := item.Value().IntoString(); !ok {
 			continue

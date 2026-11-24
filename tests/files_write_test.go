@@ -358,8 +358,8 @@ func TestFlacRemoveVorbisComments(t *testing.T) {
 	removeTagTest(t, testAsset("minimal", "full_test.flac"), TagTypeVorbisComments)
 }
 
-// For Ogg formats the metadata packet is mandatory: removal leaves only the
-// retained vendor string (1 item).
+// For Ogg formats the metadata packet is mandatory: removal leaves an empty
+// tag.
 func oggRemoveTest(t *testing.T, assetPath string) {
 	t.Helper()
 	f := tempFile(t, assetPath)
@@ -373,8 +373,8 @@ func oggRemoveTest(t *testing.T, assetPath string) {
 	if err != nil {
 		t.Fatalf("read failed: %v", err)
 	}
-	if tag := tagged.Tag(TagTypeVorbisComments); tag == nil || tag.ItemCount() != 2 {
-		t.Fatalf("expected a 2-item tag before removal")
+	if tag := tagged.Tag(TagTypeVorbisComments); tag == nil || tag.ItemCount() != 1 {
+		t.Fatalf("expected a 1-item tag before removal")
 	}
 
 	if _, err := f.Seek(0, 0); err != nil {
@@ -400,8 +400,8 @@ func oggRemoveTest(t *testing.T, assetPath string) {
 		t.Fatalf("read failed after remove: %v", err)
 	}
 	tag := tagged.Tag(TagTypeVorbisComments)
-	if tag == nil || tag.ItemCount() != 1 {
-		t.Fatalf("expected a vendor-only tag after removal, got %v", tag)
+	if tag == nil || !tag.IsEmpty() {
+		t.Fatalf("expected an empty tag after removal, got %v", tag)
 	}
 }
 
@@ -1196,8 +1196,7 @@ func TestVorbisCommentsDisabledPadding(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const commentDelta = 25
-	if got, want := oggCommentsLen(t, f), originalLen+commentDelta; got != want {
+	if got, want := oggCommentsLen(t, f), originalLen; got != want {
 		t.Fatalf("comment len = %d, want %d", got, want)
 	}
 }

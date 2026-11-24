@@ -75,6 +75,8 @@ func verifyArtist(t *testing.T, file *TaggedFile, tagType TagType, expected stri
 }
 
 // setArtist verifies the artist, sets a new value, and saves.
+//
+//nolint:unparam // expectedItemCount mirrors lofty-rs crate::util::set_artist
 func setArtist(t *testing.T, file *BoundTaggedFile, tagType TagType, expected, newValue string, expectedItemCount int) {
 	t.Helper()
 	verifyArtist(t, &file.TaggedFile, tagType, expected, expectedItemCount)

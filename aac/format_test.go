@@ -2,6 +2,7 @@ package aac
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
@@ -34,7 +35,8 @@ func TestUndersizedADTSFrame(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected strict-mode error for undersized ADTS frame")
 	}
-	if !strings.Contains(err.Error(), "shorter than its header") {
-		t.Fatalf("strict error = %v, want substring %q", err, "shorter than its header")
+	unwrapped := errors.Unwrap(err)
+	if unwrapped == nil || !strings.Contains(unwrapped.Error(), "shorter than its header") {
+		t.Fatalf("strict error = %v (unwrapped: %v), want substring %q", err, unwrapped, "shorter than its header")
 	}
 }
