@@ -72,7 +72,7 @@ and guarded by a mutex. Call `ApplyGlobalOptions` during application initializat
 | ADTS/AAC | ID3v2 | ✅ | ✅ |
 | DSF | ID3v2 | ✅ | ✅ |
 | Musepack (SV7–SV8) | APEv2 | ✅ | ✅ |
-| WavPack | APEv2 | ✅ | read |
+| WavPack | APEv2, ID3v1 | ✅ | ✅ |
 
 Audio properties (duration, bitrate, sample rate, channels, bit depth,
 codec details) are parsed per format.
