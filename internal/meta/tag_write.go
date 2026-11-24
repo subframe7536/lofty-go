@@ -174,25 +174,3 @@ func DumpTag(tag *Tag, writer io.Writer, writeOptions WriteOptions) error {
 func RemoveTag(tagType TagType, file *VerifiedFile, writeOptions WriteOptions) error {
 	return WriteTag(NewTag(tagType), file, writeOptions)
 }
-
-// SaveTagFields writes each of the file's present tag fields, in order, via
-// the format's writer — mirroring the per-field `save_to` calls Rust's
-// generated AudioFile impl performs. Empty tags remove the on-disk tag.
-func SaveTagFields(file FileLike, format FileType, tags []*Tag, writeOptions WriteOptions) error {
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return &FileEncodingError{Source: err}
-	}
-	vf := &VerifiedFile{format: format, file: file}
-	for _, tag := range tags {
-		if tag == nil {
-			continue
-		}
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			return &FileEncodingError{Source: err}
-		}
-		if err := WriteTag(tag, vf, writeOptions); err != nil {
-			return err
-		}
-	}
-	return nil
-}

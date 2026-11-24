@@ -302,6 +302,10 @@ func tagitemsIntoRiff(tag *meta.Tag) []riffInfoItem {
 		}
 		items = append(items, riffInfoItem{key, s})
 	}
+	// An existing companion's items replay unconditionally (Rust's TagRef).
+	if comp, ok := tag.CompanionTag().(*RiffInfoTag); ok && comp != nil {
+		items = append(items, comp.items...)
+	}
 	return items
 }
 
@@ -908,20 +912,23 @@ func (f *WavFile) SavePath(path string, wo meta.WriteOptions) error {
 	return meta.SaveToPath(path, f, wo)
 }
 
+// TagTypes implements meta.AudioFile.
+func (f *WavFile) TagTypes() []meta.TagType {
+	return meta.PresentTagTypes(f.ContainsTagType, meta.TagTypeRiffInfo, meta.TagTypeID3v2)
+}
+
+// Conflicts implements meta.AudioFile.
+func (f *WavFile) Conflicts() [][2]meta.TagType { return nil }
+
 // SaveFile implements meta.AudioFile.
 func (f *WavFile) SaveFile(file meta.FileLike, wo meta.WriteOptions) error {
 	if t, ok := f.RiffInfo.Get(); ok {
-		if err := wavWriteRiffInfoTag(file, t, wo); err != nil {
+		if err := t.SaveTo(file, wo); err != nil {
 			return err
-		}
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			return &meta.FileEncodingError{Source: err}
 		}
 	}
 	if t, ok := f.ID3v2.Get(); ok {
-		if err := t.SaveToVerified(meta.NewVerifiedFileOf(meta.FileTypeWav, file), wo); err != nil {
-			return err
-		}
+		return t.SaveTo(file, wo)
 	}
 	return nil
 }
@@ -1784,20 +1791,23 @@ func (f *AiffFile) SavePath(path string, wo meta.WriteOptions) error {
 	return meta.SaveToPath(path, f, wo)
 }
 
+// TagTypes implements meta.AudioFile.
+func (f *AiffFile) TagTypes() []meta.TagType {
+	return meta.PresentTagTypes(f.ContainsTagType, meta.TagTypeAiffText, meta.TagTypeID3v2)
+}
+
+// Conflicts implements meta.AudioFile.
+func (f *AiffFile) Conflicts() [][2]meta.TagType { return nil }
+
 // SaveFile implements meta.AudioFile.
 func (f *AiffFile) SaveFile(file meta.FileLike, wo meta.WriteOptions) error {
 	if t, ok := f.TextChunks.Get(); ok {
-		if err := aiffWriteTextChunks(file, t, wo); err != nil {
+		if err := t.SaveTo(file, wo); err != nil {
 			return err
-		}
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			return &meta.FileEncodingError{Source: err}
 		}
 	}
 	if t, ok := f.ID3v2.Get(); ok {
-		if err := t.SaveToVerified(meta.NewVerifiedFileOf(meta.FileTypeAiff, file), wo); err != nil {
-			return err
-		}
+		return t.SaveTo(file, wo)
 	}
 	return nil
 }
@@ -1914,10 +1924,10 @@ func aiffWriteText(file meta.FileLike, tag *meta.Tag, wo meta.WriteOptions) erro
 	return aiffWriteTextChunks(file, aiffTextFromGeneric(tag), wo)
 }
 
-// aiffTextFromGeneric builds an AiffTextTag from a generic Tag's items only,
+// aiffTextFromGeneric builds an AiffTextTag from a generic Tag's items,
 // matching Rust's AiffTextChunksRef conversion: name/author/copyright from
-// the mapped strings, annotations from Comment items, and comments: None
-// (COMT comments only survive concrete-tag writes).
+// the mapped strings, annotations from Comment items, and COMT comments
+// replayed from the preserved companion tag.
 func aiffTextFromGeneric(tag *meta.Tag) *AiffTextTag {
 	t := &AiffTextTag{}
 	if s, ok := tag.GetString(meta.ItemKeyTrackTitle); ok {
@@ -1930,6 +1940,10 @@ func aiffTextFromGeneric(tag *meta.Tag) *AiffTextTag {
 		t.Copyright = meta.Some(s)
 	}
 	t.Annotations = tag.GetStrings(meta.ItemKeyComment)
+	// Only COMT comments come from the companion (Rust's TagRef appends it).
+	if comp, ok := tag.CompanionTag().(*AiffTextTag); ok && comp != nil {
+		t.Comments = comp.Comments
+	}
 	return t
 }
 

@@ -875,7 +875,11 @@ func ApeWriteTo(file meta.FileLike, tag *ApeTag, writeOptions meta.WriteOptions)
 		}
 		// An APE tag at the start is against the spec; it is removed and
 		// rewritten at the end.
-		if _, header, err := ReadApeTag(file, false, writeOptions.ParseOptions); err == nil && header != nil {
+		_, header, err := ReadApeTag(file, false, writeOptions.ParseOptions)
+		if err != nil {
+			return nil, err
+		}
+		if header != nil {
 			tags.header = [2]int64{start, start + int64(header.Size)}
 			tags.headerFound = true
 		} else {
@@ -912,13 +916,17 @@ func ApeWriteTo(file meta.FileLike, tag *ApeTag, writeOptions meta.WriteOptions)
 		tags.writePosition = apePos
 
 		if _, err := file.Seek(-32, io.SeekCurrent); err != nil {
-			return tags, nil
+			return nil, err
 		}
 		start, err = file.Seek(0, io.SeekCurrent)
 		if err != nil {
 			return nil, err
 		}
-		if _, header, err := ReadApeTag(file, true, writeOptions.ParseOptions); err == nil && header != nil {
+		_, header, err = ReadApeTag(file, true, writeOptions.ParseOptions)
+		if err != nil {
+			return nil, err
+		}
+		if header != nil {
 			// The tag region ends at start+32 and spans header.Size total
 			// (header.Size includes a 32-byte header when CONTAINS_HEADER).
 			if int64(header.Size) > start+32 {
@@ -1216,31 +1224,28 @@ func (f *ApeFile) SavePath(path string, writeOptions meta.WriteOptions) error {
 	return meta.SaveToPath(path, f, writeOptions)
 }
 
+// TagTypes implements AudioFile.
+func (f *ApeFile) TagTypes() []meta.TagType {
+	return meta.PresentTagTypes(f.ContainsTagType, meta.TagTypeID3v1, meta.TagTypeID3v2, meta.TagTypeApe)
+}
+
+// Conflicts implements AudioFile.
+func (f *ApeFile) Conflicts() [][2]meta.TagType { return nil }
+
 // SaveFile writes the tags back to an open file.
 func (f *ApeFile) SaveFile(file meta.FileLike, writeOptions meta.WriteOptions) error {
 	if t, ok := f.ID3v1.Get(); ok {
-		if err := id3v1.WriteId3v1(file, t, writeOptions); err != nil {
+		if err := t.SaveTo(file, writeOptions); err != nil {
 			return err
-		}
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			return &meta.FileEncodingError{FileType: meta.FileTypeApe, Source: err}
 		}
 	}
 	if t, ok := f.ID3v2.Get(); ok {
-		if !t.IsEmpty() {
-			return &meta.FileEncodingError{FileType: meta.FileTypeApe, Source: &meta.UnsupportedTagError{}}
-		}
-		if err := t.SaveToVerified(meta.NewVerifiedFileOf(meta.FileTypeApe, file), writeOptions); err != nil {
+		if err := t.SaveTo(file, writeOptions); err != nil {
 			return err
-		}
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			return &meta.FileEncodingError{FileType: meta.FileTypeApe, Source: err}
 		}
 	}
 	if t, ok := f.Ape.Get(); ok {
-		if err := ApeWriteTo(file, t, writeOptions); err != nil {
-			return err
-		}
+		return t.SaveTo(file, writeOptions)
 	}
 	return nil
 }

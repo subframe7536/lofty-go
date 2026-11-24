@@ -844,39 +844,50 @@ func (f *MpegFile) SavePath(path string, writeOptions meta.WriteOptions) error {
 	return meta.SaveToPath(path, f, writeOptions)
 }
 
+// TagTypes implements AudioFile.
+func (f *MpegFile) TagTypes() []meta.TagType {
+	return meta.PresentTagTypes(f.ContainsTagType,
+		meta.TagTypeID3v2, meta.TagTypeID3v1, meta.TagTypeLyrics3, meta.TagTypeLyrics3v2, meta.TagTypeApe)
+}
+
+// Conflicts implements AudioFile. Lyrics3 and Lyrics3v2 cannot coexist.
+func (f *MpegFile) Conflicts() [][2]meta.TagType {
+	if f.Lyrics3.IsSome() && f.Lyrics3v2.IsSome() {
+		return [][2]meta.TagType{{meta.TagTypeLyrics3, meta.TagTypeLyrics3v2}}
+	}
+	return nil
+}
+
 // SaveFile writes tags to an open file.
 func (f *MpegFile) SaveFile(file meta.FileLike, writeOptions meta.WriteOptions) error {
-	if f.Lyrics3.IsSome() && f.Lyrics3v2.IsSome() {
+	if c := f.Conflicts(); len(c) > 0 {
 		return &meta.FileEncodingError{
 			FileType: meta.FileTypeMpeg,
-			Source:   &meta.ConflictingTagError{First: meta.TagTypeLyrics3, Second: meta.TagTypeLyrics3v2},
+			Source:   &meta.ConflictingTagError{First: c[0][0], Second: c[0][1]},
 		}
 	}
-	// Write ID3v2 at the start, ID3v1 at the end
 	if t, ok := f.ID3v2.Get(); ok {
-		if err := t.SaveToVerified(meta.NewVerifiedFileOf(meta.FileTypeMpeg, file), writeOptions); err != nil {
+		if err := t.SaveTo(file, writeOptions); err != nil {
 			return err
 		}
 	}
 	if t, ok := f.ID3v1.Get(); ok {
-		if err := id3v1.WriteId3v1(file, t, writeOptions); err != nil {
-			return err
-		}
-	}
-	if t, ok := f.APE.Get(); ok {
-		if err := ape.ApeWriteTo(file, t, writeOptions); err != nil {
-			return err
-		}
-	}
-	if t, ok := f.Lyrics3v2.Get(); ok {
-		if err := lyrics3.Lyrics3v2WriteTo(file, t, writeOptions); err != nil {
+		if err := t.SaveTo(file, writeOptions); err != nil {
 			return err
 		}
 	}
 	if t, ok := f.Lyrics3.Get(); ok {
-		if err := lyrics3.Lyrics3v1WriteTo(file, t, writeOptions); err != nil {
+		if err := t.SaveTo(file, writeOptions); err != nil {
 			return err
 		}
+	}
+	if t, ok := f.Lyrics3v2.Get(); ok {
+		if err := t.SaveTo(file, writeOptions); err != nil {
+			return err
+		}
+	}
+	if t, ok := f.APE.Get(); ok {
+		return t.SaveTo(file, writeOptions)
 	}
 	return nil
 }

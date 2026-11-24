@@ -823,9 +823,15 @@ func (f *OggVorbisFile) SavePath(path string, wo meta.WriteOptions) error {
 	return meta.SaveToPath(path, f, wo)
 }
 
+func (f *OggVorbisFile) TagTypes() []meta.TagType {
+	return meta.PresentTagTypes(f.ContainsTagType, meta.TagTypeVorbisComments)
+}
+
+func (f *OggVorbisFile) Conflicts() [][2]meta.TagType { return nil }
+
 func (f *OggVorbisFile) SaveFile(file meta.FileLike, wo meta.WriteOptions) error {
 	if t, ok := f.VorbisComments.Get(); ok {
-		return oggWriteVorbisCommentsImpl(file, f.FileType(), wo, func(string) *vorbis.VorbisCommentsTag { return t })
+		return t.SaveTo(file, wo)
 	}
 	return nil
 }
@@ -856,9 +862,15 @@ func (f *OggOpusFile) SavePath(path string, wo meta.WriteOptions) error {
 	return meta.SaveToPath(path, f, wo)
 }
 
+func (f *OggOpusFile) TagTypes() []meta.TagType {
+	return meta.PresentTagTypes(f.ContainsTagType, meta.TagTypeVorbisComments)
+}
+
+func (f *OggOpusFile) Conflicts() [][2]meta.TagType { return nil }
+
 func (f *OggOpusFile) SaveFile(file meta.FileLike, wo meta.WriteOptions) error {
 	if t, ok := f.VorbisComments.Get(); ok {
-		return oggWriteVorbisCommentsImpl(file, f.FileType(), wo, func(string) *vorbis.VorbisCommentsTag { return t })
+		return t.SaveTo(file, wo)
 	}
 	return nil
 }
@@ -889,9 +901,15 @@ func (f *OggSpeexFile) SavePath(path string, wo meta.WriteOptions) error {
 	return meta.SaveToPath(path, f, wo)
 }
 
+func (f *OggSpeexFile) TagTypes() []meta.TagType {
+	return meta.PresentTagTypes(f.ContainsTagType, meta.TagTypeVorbisComments)
+}
+
+func (f *OggSpeexFile) Conflicts() [][2]meta.TagType { return nil }
+
 func (f *OggSpeexFile) SaveFile(file meta.FileLike, wo meta.WriteOptions) error {
 	if t, ok := f.VorbisComments.Get(); ok {
-		return oggWriteVorbisCommentsImpl(file, f.FileType(), wo, func(string) *vorbis.VorbisCommentsTag { return t })
+		return t.SaveTo(file, wo)
 	}
 	return nil
 }

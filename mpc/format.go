@@ -634,31 +634,28 @@ func (f *MusepackFile) SavePath(path string, wo meta.WriteOptions) error {
 	return meta.SaveToPath(path, f, wo)
 }
 
+// TagTypes implements AudioFile.
+func (f *MusepackFile) TagTypes() []meta.TagType {
+	return meta.PresentTagTypes(f.ContainsTagType, meta.TagTypeID3v2, meta.TagTypeID3v1, meta.TagTypeApe)
+}
+
+// Conflicts implements AudioFile.
+func (f *MusepackFile) Conflicts() [][2]meta.TagType { return nil }
+
 // SaveFile implements AudioFile.
 func (f *MusepackFile) SaveFile(file meta.FileLike, wo meta.WriteOptions) error {
-	if t, ok := f.ID3v1.Get(); ok {
-		if err := id3v1.WriteId3v1(file, t, wo); err != nil {
+	if t, ok := f.ID3v2.Get(); ok {
+		if err := t.SaveTo(file, wo); err != nil {
 			return err
-		}
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			return &meta.FileEncodingError{FileType: meta.FileTypeMpc, Source: err}
 		}
 	}
-	if t, ok := f.ID3v2.Get(); ok {
-		if !t.IsEmpty() {
-			return &meta.FileEncodingError{FileType: meta.FileTypeMpc, Source: &meta.UnsupportedTagError{}}
-		}
-		if err := t.SaveToVerified(meta.NewVerifiedFileOf(meta.FileTypeMpc, file), wo); err != nil {
+	if t, ok := f.ID3v1.Get(); ok {
+		if err := t.SaveTo(file, wo); err != nil {
 			return err
-		}
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			return &meta.FileEncodingError{FileType: meta.FileTypeMpc, Source: err}
 		}
 	}
 	if t, ok := f.Ape.Get(); ok {
-		if err := ape.ApeWriteTo(file, t, wo); err != nil {
-			return err
-		}
+		return t.SaveTo(file, wo)
 	}
 	return nil
 }

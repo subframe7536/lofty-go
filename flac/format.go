@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"slices"
 	"time"
 	"unicode/utf8"
 
@@ -353,35 +354,48 @@ func (f *FlacFile) SavePath(path string, writeOptions meta.WriteOptions) error {
 	return meta.SaveToPath(path, f, writeOptions)
 }
 
+// TagTypes implements AudioFile.
+func (f *FlacFile) TagTypes() []meta.TagType {
+	var types []meta.TagType
+	if f.ID3v2.IsSome() {
+		types = append(types, meta.TagTypeID3v2)
+	}
+	if f.VorbisComments.IsSome() {
+		types = append(types, meta.TagTypeVorbisComments)
+	}
+	return types
+}
+
+// Conflicts implements AudioFile.
+func (f *FlacFile) Conflicts() [][2]meta.TagType { return nil }
+
 // SaveFile writes tags to an open file.
 func (f *FlacFile) SaveFile(file meta.FileLike, writeOptions meta.WriteOptions) error {
 	if t, ok := f.ID3v2.Get(); ok {
-		if !t.IsEmpty() {
-			return &meta.FileEncodingError{FileType: meta.FileTypeFlac, Source: &meta.UnsupportedTagError{}}
-		}
-		if err := t.SaveToVerified(meta.NewVerifiedFileOf(meta.FileTypeFlac, file), writeOptions); err != nil {
+		if err := t.SaveTo(file, writeOptions); err != nil {
 			return err
 		}
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			return &meta.FileEncodingError{FileType: meta.FileTypeFlac, Source: err}
+	}
+	vc, ok := f.VorbisComments.Get()
+	if !ok && len(f.pictures) == 0 {
+		// Rust's write_to still verifies the file before returning Ok(()).
+		if _, err := meta.NewVerifiedFile(file, writeOptions.ParseOptions); err != nil {
+			return &meta.FileEncodingError{Source: err}
 		}
-	}
-	if vc, ok := f.VorbisComments.Get(); ok {
-		// Rust's `FlacFile::write_to` writes the stored (key, value) pairs
-		// verbatim (vendor separate, no synthesized ENCODER comment) and
-		// chains the tag's pictures with the file's pictures.
-		pics := make([]meta.PictureInfoPair, 0, len(vc.Pictures())+len(f.pictures))
-		pics = append(pics, vc.Pictures()...)
-		pics = append(pics, f.pictures...)
-		return flacWriteVorbisCommentsPics(file, vc, pics, writeOptions)
-	}
-	if len(f.pictures) == 0 {
-		// Rust's write_to is a no-op when the tag is absent and there are no
-		// pictures to store; it does not strip the existing VC block.
 		return nil
 	}
-	// A dummy VC tag carrying only the file's pictures (vendor "").
-	return flacWriteVorbisCommentsPics(file, vorbis.NewVorbisCommentsTag(), f.pictures, writeOptions)
+	if !ok {
+		// Pictures but no VC tag: a dummy tag carries them (vendor "").
+		vc = vorbis.NewVorbisCommentsTag()
+	}
+	// Rust's `FlacFile::write_to` writes the stored (key, value) pairs
+	// verbatim (vendor separate, no synthesized ENCODER comment) and
+	// chains the tag's pictures with the file's pictures.
+	withPics := *vc
+	if len(f.pictures) > 0 {
+		withPics.SetPictures(append(slices.Clip(vc.Pictures()), f.pictures...))
+	}
+	return withPics.SaveTo(file, writeOptions)
 }
 
 // RemoveFromPath removes a tag type.

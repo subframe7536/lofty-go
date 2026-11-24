@@ -70,7 +70,7 @@ func main() {
 		"IndexOfStr":                true,
 		"OptionFromPtr":             true,
 		"TryMake":                   true,
-		"SaveTagFields":             true,
+		"PresentTagTypes":           true,
 		"RegisterFormat":            true,
 		"RegisterFormatReader":      true,
 		"RegisterFormatWriter":      true,

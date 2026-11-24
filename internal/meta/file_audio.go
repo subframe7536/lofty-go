@@ -1,6 +1,9 @@
 package meta
 
-import "os"
+import (
+	"os"
+	"slices"
+)
 
 // AudioFile is the shared interface of all audio file types.
 type AudioFile interface {
@@ -12,6 +15,12 @@ type AudioFile interface {
 	ContainsTag() bool
 	// ContainsTagType reports whether a tag of the given type is present.
 	ContainsTagType(tagType TagType) bool
+	// TagTypes returns the types of the file's present tag fields, in
+	// declaration order.
+	TagTypes() []TagType
+	// Conflicts returns the pairs of present tag types that cannot be
+	// written together.
+	Conflicts() [][2]TagType
 	// TaggedFile converts the file to a generic [TaggedFile].
 	TaggedFile() *TaggedFile
 	// SaveFile writes the file's tags to the given [FileLike].
@@ -20,6 +29,13 @@ type AudioFile interface {
 	SavePath(path string, writeOptions WriteOptions) error
 	// RemoveFromPath removes a [TagType] from the file at `path`.
 	RemoveFromPath(path string, tagType TagType) error
+}
+
+// PresentTagTypes returns the subset of `candidates` for which `has` reports
+// a present tag field. Concrete [AudioFile.TagTypes] implementations use it
+// to list their set tag fields in Rust declaration order.
+func PresentTagTypes(has func(TagType) bool, candidates ...TagType) []TagType {
+	return slices.DeleteFunc(candidates, func(t TagType) bool { return !has(t) })
 }
 
 // SaveToPath opens `path` and saves every tag of `f` to it, mirroring Rust's

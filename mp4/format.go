@@ -1128,13 +1128,20 @@ func (f *Mp4File) SavePath(path string, wo meta.WriteOptions) error {
 	return meta.SaveToPath(path, f, wo)
 }
 
+// TagTypes implements meta.AudioFile.
+func (f *Mp4File) TagTypes() []meta.TagType {
+	return meta.PresentTagTypes(f.ContainsTagType, meta.TagTypeMp4Ilst)
+}
+
+// Conflicts implements meta.AudioFile.
+func (f *Mp4File) Conflicts() [][2]meta.TagType { return nil }
+
 // SaveFile implements meta.AudioFile.
 func (f *Mp4File) SaveFile(file meta.FileLike, wo meta.WriteOptions) error {
-	ilst, ok := f.Ilst.Get()
-	if !ok {
-		return nil
+	if t, ok := f.Ilst.Get(); ok {
+		return t.SaveTo(file, wo)
 	}
-	return mp4WriteIlstData(file, ilst, wo)
+	return nil
 }
 
 // RemoveFromPath implements meta.AudioFile.

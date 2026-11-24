@@ -975,6 +975,11 @@ func VorbisCommentsTagForWriteRef(input *meta.Tag, withPics bool) *VorbisComment
 		}
 		vc.pushMapped(item)
 	}
+	// An existing companion's entries replay unconditionally — the
+	// preserve option gates capture, not replay (Rust's TagRef does the same).
+	if comp, ok := input.CompanionTag().(*VorbisCommentsTag); ok && comp != nil {
+		vc.entries = append(vc.entries, comp.entries...)
+	}
 	if withPics {
 		for _, pic := range input.Pictures() {
 			vc.PushPicture(pic)

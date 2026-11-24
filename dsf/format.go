@@ -166,19 +166,12 @@ func DsfFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Dsf
 		if _, err := reader.Seek(start+int64(metadataPtr), io.SeekStart); err != nil {
 			return nil, &meta.FileParseError{Source: err}
 		}
-		header, end, found, err := id3v2.FindId3v2(reader, true, parseOptions)
+		located, err := id3v2.LocateId3v2(reader, true, parseOptions)
 		if err != nil {
 			return nil, &meta.FileParseError{Source: &meta.TagParseError{TagType: meta.TagTypeID3v2, HasTagType: true, Source: err}}
 		}
-		if found {
-			contentStart := end - int64(header.Size)
-			if header.Flags.Footer {
-				contentStart -= 10
-			}
-			if _, err := reader.Seek(contentStart, io.SeekStart); err != nil {
-				return nil, &meta.FileParseError{Source: err}
-			}
-			tag, err := id3v2.ParseId3v2Tag(reader, header, parseOptions)
+		if located != nil {
+			tag, err := located.Parse(parseOptions)
 			if err != nil {
 				return nil, &meta.FileParseError{Source: &meta.TagParseError{TagType: meta.TagTypeID3v2, HasTagType: true, Source: err}}
 			}
@@ -219,12 +212,18 @@ func (f *DsfFile) SavePath(path string, wo meta.WriteOptions) error {
 	return meta.SaveToPath(path, f, wo)
 }
 
+// TagTypes implements AudioFile.
+func (f *DsfFile) TagTypes() []meta.TagType {
+	return meta.PresentTagTypes(f.ContainsTagType, meta.TagTypeID3v2)
+}
+
+// Conflicts implements AudioFile.
+func (f *DsfFile) Conflicts() [][2]meta.TagType { return nil }
+
 // SaveFile implements AudioFile.
 func (f *DsfFile) SaveFile(file meta.FileLike, wo meta.WriteOptions) error {
 	if t, ok := f.ID3v2.Get(); ok {
-		if err := t.SaveToVerified(meta.NewVerifiedFileOf(meta.FileTypeDsf, file), wo); err != nil {
-			return err
-		}
+		return t.SaveTo(file, wo)
 	}
 	return nil
 }

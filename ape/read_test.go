@@ -392,3 +392,41 @@ func TestApeWriteToDoesNotRetainDiskReadOnly(t *testing.T) {
 		t.Fatal("tag-level read-only flag missing from the footer")
 	}
 }
+
+// A malformed existing header or footer tag must abort the write with the
+// real error (Rust propagates it) instead of silently writing anyway.
+func TestApeWriteRejectsMalformedExistingTag(t *testing.T) {
+	mkMarker := func(size, flags uint32) []byte {
+		b := []byte("APETAGEX")
+		b = binary.LittleEndian.AppendUint32(b, 2000)
+		b = binary.LittleEndian.AppendUint32(b, size)
+		b = binary.LittleEndian.AppendUint32(b, 0) // item count
+		b = binary.LittleEndian.AppendUint32(b, flags)
+		return append(b, make([]byte, 8)...)
+	}
+	audio := apeTestMac(3990, 2, 10, 100)
+	cases := []struct {
+		name   string
+		before []byte
+	}{
+		// CONTAINS_FOOTER | CONTAINS_HEADER with an impossible size of 0
+		{"footer", append(bytes.Clone(audio), mkMarker(0, 0xC0000000)...)},
+		// IS_HEADER | CONTAINS_FOOTER | CONTAINS_HEADER with size 0
+		{"header", append(mkMarker(0, 0xE0000000), audio...)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tag := NewApeTag()
+			tag.Push(mustApeItem(t, "Title", meta.ItemValueText("x")))
+			file := meta.NewBytesFile(bytes.Clone(tc.before))
+			err := ApeWriteTo(file, tag, meta.NewWriteOptions())
+			var mismatch *meta.SizeMismatchError
+			if !errors.As(err, &mismatch) {
+				t.Fatalf("ApeWriteTo err = %v, want SizeMismatchError", err)
+			}
+			if !bytes.Equal(file.Bytes(), tc.before) {
+				t.Fatal("ApeWriteTo modified the file on failure")
+			}
+		})
+	}
+}

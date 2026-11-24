@@ -752,9 +752,9 @@ func (t *Id3v2Tag) checkTagSupport(format meta.FileType) error {
 	return nil
 }
 
-// SaveToVerified writes the tag into a [meta.VerifiedFile] without the public
-// support check — mirrors Rust's `TagWriteExt::save_to`, which AudioFile save
-// paths invoke directly (e.g. ID3v2 in FLAC is read-only yet still written).
+// SaveToVerified writes ID3v2 to an already identified destination without
+// checking tag support. Chunked formats require a registered container writer;
+// only formats storing ID3v2 at the start use the prefix writer.
 func (t *Id3v2Tag) SaveToVerified(vf *meta.VerifiedFile, writeOptions meta.WriteOptions) error {
 	format := vf.Format()
 	var encoded []byte
@@ -768,6 +768,12 @@ func (t *Id3v2Tag) SaveToVerified(vf *meta.VerifiedFile, writeOptions meta.Write
 	// Format-specific placement (WAV/AIFF chunk, DSF end-of-stream)
 	if handled, err := meta.WriteConcreteTag(vf, meta.TagTypeID3v2, encoded, writeOptions); handled {
 		return err
+	}
+	switch format {
+	case meta.FileTypeMpeg, meta.FileTypeAac, meta.FileTypeFlac, meta.FileTypeApe, meta.FileTypeMpc:
+		// These store ID3v2 at the beginning.
+	default:
+		return &meta.FileEncodingError{FileType: format, Source: &meta.UnsupportedTagError{}}
 	}
 	file := vf.File()
 	if _, err := file.Seek(0, io.SeekStart); err != nil {

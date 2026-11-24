@@ -70,3 +70,30 @@ func TestDsfPropertiesHugeSampleCountNoOverflow(t *testing.T) {
 		t.Fatalf("overall bitrate = %d, want 0", f.Properties.OverallBitrate)
 	}
 }
+
+// An ID3v2 tag carrying an extended header and a footer parses through
+// LocateId3v2's content capture (Rust find_id3v2), landing at the right
+// content start despite the extra headers.
+func TestDsfID3ExtendedHeader(t *testing.T) {
+	b := dsfBytes(0, 2822400, 28224000)
+	binary.LittleEndian.PutUint64(b[20:28], uint64(len(b)))
+	id3 := "ID3\x04\x00\x50" + // header: v2.4, extended header + footer flags
+		"\x00\x00\x00\x1c" + // content size 28 (syncsafe)
+		"\x00\x00\x00\x06\x01\x00" + // extended header: size 6, 1 flag byte
+		"TIT2\x00\x00\x00\x0c\x00\x00" + // frame: TIT2, size 12, no flags
+		"\x03" + "Audit title" + // UTF-8 text
+		"3DI\x04\x00\x50\x00\x00\x00\x1c" // footer
+	b = append(b, id3...)
+	binary.LittleEndian.PutUint64(b[12:20], uint64(len(b)))
+	f, err := DsfFileReadFrom(bytes.NewReader(b), meta.NewParseOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag, ok := f.ID3v2.Get()
+	if !ok {
+		t.Fatal("expected an ID3v2 tag")
+	}
+	if got := tag.Title(); got != "Audit title" {
+		t.Fatalf("title = %q, want %q", got, "Audit title")
+	}
+}
