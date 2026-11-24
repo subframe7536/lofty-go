@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	meta "github.com/subframe7536/lofty-go/internal/meta"
+	"github.com/subframe7536/lofty-go/internal/tagpos"
 	"github.com/subframe7536/lofty-go/internal/util"
 	"github.com/subframe7536/lofty-go/lyrics3"
 )
@@ -315,25 +316,9 @@ func id3v1Encode(tag *Id3v1Tag, writeOptions meta.WriteOptions) ([]byte, error) 
 
 // FindId3v1 searches for an ID3v1 tag at the end of the reader.
 func FindId3v1(reader io.ReadSeeker, read bool, parseMode meta.ParsingMode) (*Id3v1Tag, int64, int64, bool, error) {
-	if _, err := reader.Seek(-128, io.SeekEnd); err != nil {
-		if _, err2 := reader.Seek(0, io.SeekEnd); err2 != nil {
-			return nil, 0, 0, false, err2
-		}
-		return nil, 0, 0, false, nil
-	}
-	var header [3]byte
-	if _, err := io.ReadFull(reader, header[:]); err != nil {
+	start, end, found, err := tagpos.LocateId3v1(reader)
+	if err != nil || !found {
 		return nil, 0, 0, false, err
-	}
-	start, err := reader.Seek(-3, io.SeekCurrent)
-	if err != nil {
-		return nil, 0, 0, false, err
-	}
-	if !bytes.Equal(header[:], Id3v1TagMarker) {
-		if _, err := reader.Seek(0, io.SeekEnd); err != nil {
-			return nil, 0, 0, false, err
-		}
-		return nil, 0, 0, false, nil
 	}
 	var tag *Id3v1Tag
 	if read {
@@ -350,7 +335,7 @@ func FindId3v1(reader io.ReadSeeker, read bool, parseMode meta.ParsingMode) (*Id
 			return nil, 0, 0, false, err
 		}
 	}
-	return tag, start, start + 128, true, nil
+	return tag, start, end, true, nil
 }
 
 func init() {

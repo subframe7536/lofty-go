@@ -71,7 +71,7 @@ type adtsHeader struct {
 
 // readAdtsHeader reads an ADTS header at the reader's position, mirroring
 // `ADTSHeader::read`. The reader is left after the header (and CRC, if any).
-func readAdtsHeader(reader io.ReadSeeker) (*adtsHeader, error) {
+func readAdtsHeader(reader io.ReadSeeker, parseMode meta.ParsingMode) (*adtsHeader, error) {
 	var h adtsHeader
 	if _, err := io.ReadFull(reader, h.bytes[:]); err != nil {
 		return nil, err
@@ -93,6 +93,17 @@ func readAdtsHeader(reader io.ReadSeeker) (*adtsHeader, error) {
 	h.original = (b[3]>>5)&1 == 1
 	h.copyright = (b[3]>>4)&1 == 1
 	h.length = uint16(b[3]&0b11)<<11 | uint16(b[4])<<3 | uint16(b[5])>>5
+	// The length includes the header, so anything shorter cannot be a frame.
+	headerLen := uint16(7)
+	if h.hasCRC {
+		headerLen = 9
+	}
+	if h.length < headerLen {
+		if parseMode == meta.ParsingModeStrict {
+			return nil, errors.New("file contains a frame shorter than its header")
+		}
+		return nil, nil
+	}
 	h.bitrate = ((uint32(h.length) * h.sampleRate / 1024) * 8) / 1024
 	if h.hasCRC {
 		if _, err := reader.Seek(2, io.SeekCurrent); err != nil {
@@ -110,7 +121,7 @@ const adtsHeaderMask = 0xFFFF_FFE0
 // the header and the absolute offset where the frame ends; the returned end is
 // always strictly greater than the frame's start, so callers that resume
 // scanning from it always make progress.
-func findNextFrame(reader io.ReadSeeker) (*adtsHeader, int64, error) {
+func findNextFrame(reader io.ReadSeeker, parseMode meta.ParsingMode) (*adtsHeader, int64, error) {
 	pos, err := reader.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return nil, 0, err
@@ -123,9 +134,12 @@ func findNextFrame(reader io.ReadSeeker) (*adtsHeader, int64, error) {
 		if _, err := reader.Seek(abs, io.SeekStart); err != nil {
 			return nil, 0, err
 		}
-		h, err := readAdtsHeader(reader)
+		h, err := readAdtsHeader(reader, parseMode)
 		if err != nil {
 			return nil, 0, err
+		}
+		if h == nil {
+			return nil, 0, nil
 		}
 		headerLen := int64(7)
 		if h.hasCRC {
@@ -245,7 +259,7 @@ func AacFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Aac
 		if _, err := reader.Seek(-4, io.SeekCurrent); err != nil {
 			return nil, &meta.FileParseError{Source: err}
 		}
-		h, end, err := findNextFrame(reader)
+		h, end, err := findNextFrame(reader, parseOptions.ParsingMode)
 		if err != nil {
 			return nil, &meta.FileParseError{Source: err}
 		}
@@ -288,7 +302,7 @@ func AacFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Aac
 		bitrateSum := uint64(firstHeader.bitrate)
 		frameCount := uint64(1)
 		for {
-			h, end, err := findNextFrame(reader)
+			h, end, err := findNextFrame(reader, parseOptions.ParsingMode)
 			if err != nil {
 				return nil, &meta.FileParseError{Source: err}
 			}
