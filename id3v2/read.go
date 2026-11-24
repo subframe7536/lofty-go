@@ -99,35 +99,41 @@ func ParseId3v2Tag(reader io.Reader, header Id3v2Header, parseOptions meta.Parse
 
 	// Construct TDRC frame from TYER, TDAT, and TIME frames
 	if parseOptions.ImplicitConversions && header.Version == id3v2Version3 {
-		constructTdrcFromV3(tag)
+		if err := constructTdrcFromV3(tag, parseOptions.ParsingMode); err != nil {
+			return nil, &Id3v2ParseError{Source: err}
+		}
 	}
 
 	return tag, nil
 }
 
-func constructTdrcFromV3(tag *Id3v2Tag) {
+func constructTdrcFromV3(tag *Id3v2Tag, parseMode meta.ParsingMode) error {
+	tyer := FrameIdValid("TYER")
 	tdat := FrameIdValid("TDAT")
 	time_ := FrameIdValid("TIME")
 
 	yearFrame := tag.Frames.Remove(FrameIdValid("TDRC"))
 	if len(yearFrame) == 0 {
-		return
+		return nil
 	}
 	yf, ok := yearFrame[0].(*TimestampFrame)
 	if !ok {
 		tag.Frames.Insert(yearFrame[0])
-		return
+		return nil
 	}
-	// This is not a TYER frame
 	if yf.Timestamp.Month.IsSome() {
-		tag.Frames.Insert(yf)
-		return
+		// Not a spec-compliant TYER frame; some encoders write a full date in TYER
+		// (upstream lofty-rs issue #794). Still allow TDAT and TIME to overwrite it
+		// in non-strict modes.
+		if parseMode == meta.ParsingModeStrict {
+			return frameParseErrorMsg(meta.Some(tyer), "invalid year frame, likely contains a full timestamp")
+		}
 	}
 
-	tdrc := meta.Timestamp{Year: yf.Timestamp.Year}
+	tdrc := yf.Timestamp
 	dateUsed, timeUsed := false, false
 
-	if date, ok := tag.Frames.GetText(tdat); ok && len(date) == 4 && isASCII(date) {
+	if date, ok := tag.Frames.GetText(tdat); ok && len(date) == 4 && isASCII(date) && isASCIIDigits(date) {
 		day, err1 := atoiU8(date[:2])
 		month, err2 := atoiU8(date[2:])
 		if err1 && err2 {
@@ -135,7 +141,7 @@ func constructTdrcFromV3(tag *Id3v2Tag) {
 			tdrc.Day = meta.Some(day)
 			dateUsed = true
 
-			if t, ok := tag.Frames.GetText(time_); ok && len(t) == 4 && isASCII(t) {
+			if t, ok := tag.Frames.GetText(time_); ok && len(t) == 4 && isASCII(t) && isASCIIDigits(t) {
 				hour, err3 := atoiU8(t[:2])
 				minute, err4 := atoiU8(t[2:])
 				if err3 && err4 {
@@ -154,6 +160,16 @@ func constructTdrcFromV3(tag *Id3v2Tag) {
 	if timeUsed {
 		tag.Frames.Remove(time_)
 	}
+	return nil
+}
+
+func isASCIIDigits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func atoiU8(s string) (uint8, bool) {

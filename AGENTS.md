@@ -115,7 +115,7 @@ most debugging:
   diffs on `empty_vorbis.oga`, `no-tags.3g2`, `id3v2/test.atxt`,
   `id3v2/test.geob`, `id3v2/trailing_nulls.id3v24`.
 - **ID3v2:** `verifyFrame` accepts OWNE/ETCO and the Go-only SYLT/GEOB/ATXT
-  frames; `constructTdrcFromV3` keeps a TDRC that already has a month;
+  frames;
   COMM/USLT descriptions apply to every NUL-split item; nested CHAP/CTOC depth
   is capped at 8 and decompressed frames are bounded by `AllocationLimit`.
   `Locator` items are written to URL frames.
