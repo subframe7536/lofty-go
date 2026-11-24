@@ -12,7 +12,6 @@ import (
 	"github.com/subframe7536/lofty-go/internal/meta"
 	"github.com/subframe7536/lofty-go/internal/testutil"
 	"github.com/subframe7536/lofty-go/internal/util"
-	"github.com/subframe7536/lofty-go/lyrics3"
 	"github.com/subframe7536/lofty-go/mp4"
 	"github.com/subframe7536/lofty-go/vorbis"
 
@@ -21,36 +20,11 @@ import (
 	_ "github.com/subframe7536/lofty-go/ogg"
 )
 
-const (
-	littleEndian = util.LittleEndian
-	bigEndian    = util.BigEndian
-)
-
-var (
-	latin1Decode     = util.Latin1Decode
-	utf16DecodeBytes = util.Utf16DecodeBytes
-)
-
 var (
 	tryParseTimestamp = util.TryParseTimestamp
-	synchsafe32       = util.Synchsafe32
-	unsynchsafe32     = util.Unsynchsafe32
-)
-
-var (
-	findLyrics3 = lyrics3.FindLyrics3
-	parseId3v2  = id3v2.ParseId3v2
-)
-
-var (
-	readFormat = meta.ReadFormat
-	writeTag   = meta.WriteTag
-	removeTag  = meta.RemoveTag
-)
-
-var (
-	id3v2TagFromTag = id3v2.Id3v2TagFromTag
-	id3v2TagToTag   = id3v2.Id3v2TagToTag
+	writeTag          = meta.WriteTag
+	id3v2TagFromTag   = id3v2.Id3v2TagFromTag
+	id3v2TagToTag     = id3v2.Id3v2TagToTag
 )
 
 var (

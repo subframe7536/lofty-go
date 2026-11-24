@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -447,5 +450,171 @@ func TestOggWriteBadCommentSignature(t *testing.T) {
 	var pe *OggParseError
 	if !errors.As(err, &fpe) || !errors.As(err, &pe) || pe.Message != "file missing magic signature" {
 		t.Fatalf("err = %v, want FileParseError(OggParseError(file missing magic signature))", err)
+	}
+}
+
+func oggPagerAsset(t *testing.T, name string) []byte {
+	t.Helper()
+	p := filepath.Join("..", "lofty-rs", "ogg_pager", "test_assets", name)
+	b, err := os.ReadFile(p)
+	if err != nil {
+		if os.IsNotExist(err) {
+			t.Skip("ogg_pager test asset missing:", p)
+		}
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestOggPagerOpusIdentHeader(t *testing.T) {
+	content := oggPagerAsset(t, "opus_ident_header.page")
+	page, err := readOggPage(bytes.NewReader(content))
+	if err != nil {
+		t.Fatalf("readOggPage: %v", err)
+	}
+	wantData := []byte{
+		0x4F, 0x70, 0x75, 0x73, 0x48, 0x65, 0x61, 0x64, 0x01, 0x02, 0x38, 0x01, 0x80, 0xBB,
+		0, 0, 0, 0, 0,
+	}
+	if !bytes.Equal(page.data, wantData) {
+		t.Fatalf("data = %x, want %x", page.data, wantData)
+	}
+	if page.start != 0 || page.end != 47 {
+		t.Fatalf("bounds = [%d, %d), want [0, 47)", page.start, page.end)
+	}
+	if page.headerType != 2 || page.granulePos != 0 || page.serial != 1759377061 || page.sequence != 0 || page.crc != 3579522525 {
+		t.Fatalf("header = %+v", page)
+	}
+	if !bytes.Equal(page.segments, []byte{19}) {
+		t.Fatalf("segments = %v, want [19]", page.segments)
+	}
+}
+
+func TestOggPagerPaginateLarge(t *testing.T) {
+	packet := oggPagerAsset(t, "large_comment_packet.page")
+	pages := oggPaginate([][]byte{packet}, 1234, 0, 0)
+	if len(pages) != 130 {
+		t.Fatalf("len(pages) = %d, want 130", len(pages))
+	}
+	last := pages[len(pages)-1]
+	if got := len(last.data) % 255; got != 171 {
+		t.Fatalf("last page len %% 255 = %d, want 171", got)
+	}
+	for i, page := range pages {
+		if page.serial != 1234 {
+			t.Fatalf("page %d serial = %d, want 1234", i, page.serial)
+		}
+		wantGranule := uint64(math.MaxUint64)
+		if i+1 == len(pages) {
+			wantGranule = 0
+		}
+		if page.granulePos != wantGranule {
+			t.Fatalf("page %d granulePos = %d, want %d", i, page.granulePos, wantGranule)
+		}
+		wantType := oggPageContinuation
+		if i == 0 {
+			wantType = 0
+		}
+		if page.headerType != wantType {
+			t.Fatalf("page %d headerType = %d, want %d", i, page.headerType, wantType)
+		}
+		if i+1 == len(pages) {
+			for j := 0; j < len(page.segments)-1; j++ {
+				if page.segments[j] != 255 {
+					t.Fatalf("last page segment %d = %d, want 255", j, page.segments[j])
+				}
+			}
+			if page.segments[len(page.segments)-1] != 171 {
+				t.Fatalf("last page final segment = %d, want 171", page.segments[len(page.segments)-1])
+			}
+		} else {
+			if len(page.segments) != oggMaxWrittenSegmentCount {
+				t.Fatalf("page %d segments len = %d, want %d", i, len(page.segments), oggMaxWrittenSegmentCount)
+			}
+			for j, s := range page.segments {
+				if s != 255 {
+					t.Fatalf("page %d segment %d = %d, want 255", i, j, s)
+				}
+			}
+		}
+	}
+}
+
+func TestOggPagerPaginateLargePerfectlyDivisible(t *testing.T) {
+	const pagesToWrite = 20
+	const packetSize = (oggMaxWrittenSegmentCount * 255) * pagesToWrite
+	packet := make([]byte, packetSize)
+	pages := oggPaginate([][]byte{packet}, 1234, 0, 0)
+	if len(pages) != pagesToWrite+1 {
+		t.Fatalf("len(pages) = %d, want %d", len(pages), pagesToWrite+1)
+	}
+	for i := 0; i < len(pages)-1; i++ {
+		for j, s := range pages[i].segments {
+			if s != 255 {
+				t.Fatalf("page %d segment %d = %d, want 255", i, j, s)
+			}
+		}
+	}
+	last := pages[len(pages)-1]
+	if !bytes.Equal(last.segments, []byte{0}) {
+		t.Fatalf("last segments = %v, want [0]", last.segments)
+	}
+	totalSize := 0
+	for _, p := range pages {
+		for _, s := range p.segments {
+			totalSize += int(s)
+		}
+	}
+	if totalSize != packetSize {
+		t.Fatalf("totalSize = %d, want %d", totalSize, packetSize)
+	}
+}
+
+func TestOggPagerPaginatePerfectlyDivisibleTerminate(t *testing.T) {
+	const segments = 17
+	const packetSize = segments * 255
+	packet := make([]byte, packetSize)
+	pages := oggPaginate([][]byte{packet}, 1234, 0, 0)
+	if len(pages) != 1 {
+		t.Fatalf("len(pages) = %d, want 1", len(pages))
+	}
+	page := pages[0]
+	if len(page.segments) != segments+1 {
+		t.Fatalf("len(segments) = %d, want %d", len(page.segments), segments+1)
+	}
+	for i := 0; i < segments; i++ {
+		if page.segments[i] != 255 {
+			t.Fatalf("segment %d = %d, want 255", i, page.segments[i])
+		}
+	}
+	if page.segments[segments] != 0 {
+		t.Fatalf("terminating segment = %d, want 0", page.segments[segments])
+	}
+}
+
+func TestOggPagerPacketRemainder(t *testing.T) {
+	packetsData := [][]byte{[]byte("123"), []byte("456")}
+	pages := oggPaginate(packetsData, 1234, 0, 0)
+	if len(pages) != 2 {
+		t.Fatalf("len(pages) = %d, want 2", len(pages))
+	}
+	encoded := oggSerializePage(pages[0])
+	encoded[26] = 2
+	// Insert second packet segment length at index 27
+	encoded = append(encoded[:27], append([]byte{byte(len(pages[1].data))}, encoded[27:]...)...)
+	encoded = append(encoded, pages[1].data...)
+
+	packets, remainder, _, err := OggReadCountPackets(bytes.NewReader(encoded), 1)
+	if err != nil {
+		t.Fatalf("OggReadCountPackets: %v", err)
+	}
+	if remainder == nil {
+		t.Fatal("expected non-nil remainder page")
+	}
+	if len(packets) != 1 || !bytes.Equal(packets[0], packetsData[0]) {
+		t.Fatalf("packets = %q, want [%q]", packets, packetsData[0])
+	}
+	if !bytes.Equal(remainder.data, packetsData[1]) {
+		t.Fatalf("remainder.data = %q, want %q", remainder.data, packetsData[1])
 	}
 }

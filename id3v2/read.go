@@ -23,26 +23,27 @@ func (u *unsyncReader) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	m, err := u.r.Read(p)
-	data := p[:m]
-	w := 0
-	for i := 0; i < len(data); i++ {
-		b := data[i]
-		if u.ff && b == 0x00 {
-			u.ff = false
-			continue
+	for {
+		m, err := u.r.Read(p)
+		data := p[:m]
+		w := 0
+		for i := 0; i < len(data); i++ {
+			b := data[i]
+			if u.ff && b == 0x00 {
+				u.ff = false
+				continue
+			}
+			u.ff = b == 0xFF
+			p[w] = b
+			w++
 		}
-		u.ff = b == 0xFF
-		p[w] = b
-		w++
+		if w > 0 || err != nil {
+			return w, err
+		}
+		if m == 0 {
+			return 0, nil
+		}
 	}
-	if w > 0 {
-		return w, nil
-	}
-	if err != nil {
-		return 0, err
-	}
-	return 0, nil
 }
 
 // parsedFrameResult mirrors Rust's `ParsedFrame` enum.

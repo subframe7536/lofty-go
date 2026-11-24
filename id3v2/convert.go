@@ -61,9 +61,13 @@ func Id3v2TagToTag(input *Id3v2Tag) *meta.Tag {
 // for Id3v2Tag`), merging any preserved companion frames.
 func Id3v2TagFromTag(input *meta.Tag) *Id3v2Tag {
 	if util.GetGlobalOptions().PreserveFormatSpecificItems {
-		if companion, ok := input.CompanionTag().(*Id3v2Tag); ok {
-			input.SetCompanionTag(nil)
-			return companion.MergeTag(input)
+		if companion, ok := input.CompanionTag().(*Id3v2Tag); ok && companion != nil {
+			cloned := &Id3v2Tag{
+				flags:           companion.flags,
+				originalVersion: companion.originalVersion,
+				Frames:          companion.Frames.Clone(),
+			}
+			return cloned.MergeTag(input)
 		}
 	}
 	return NewId3v2Tag().MergeTag(input)
@@ -295,8 +299,8 @@ func fromTagItems(items []meta.TagItem) []Frame {
 		if !ok {
 			return meta.None[uint32]()
 		}
-		n, err := strconvParseU32(text)
-		if err != nil {
+		n, ok := parseU32(text)
+		if !ok {
 			return meta.None[uint32]()
 		}
 		return meta.Some(n)
@@ -517,9 +521,4 @@ func advisoryRatingFromStr(s string) (uint8, bool) {
 		return 0, false
 	}
 	return util.AdvisoryRatingFromU8(uint8(n))
-}
-
-func strconvParseU32(s string) (uint32, error) {
-	n, err := strconv.ParseUint(s, 10, 32)
-	return uint32(n), err
 }

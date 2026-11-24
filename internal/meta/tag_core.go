@@ -389,7 +389,7 @@ func (t *Tag) RemovePictureType(pictureType PictureType) {
 // SetPicture replaces the picture at the given `index`. If `index` is out of
 // bounds, `picture` is appended to the list.
 func (t *Tag) SetPicture(index int, picture Picture) {
-	if index >= len(t.pictures) {
+	if index < 0 || index >= len(t.pictures) {
 		t.PushPicture(picture)
 	} else {
 		t.pictures[index] = picture
@@ -457,12 +457,16 @@ func (t *Tag) SaveTo(file FileLike, writeOptions WriteOptions) error {
 // - The file is an unsupported format
 // - Attempting to write the tag to a format that does not support it
 // - The file could not be opened
-func (t *Tag) SaveToPath(path string, writeOptions WriteOptions) error {
+func (t *Tag) SaveToPath(path string, writeOptions WriteOptions) (err error) {
 	vf, f, err := VerifiedFileFromPath(path, writeOptions.ParseOptions)
 	if err != nil {
 		return &FileEncodingError{Source: err}
 	}
-	defer f.Close()
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = &FileEncodingError{Source: cerr}
+		}
+	}()
 	return WriteTag(t, vf, writeOptions)
 }
 

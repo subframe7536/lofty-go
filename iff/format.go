@@ -910,14 +910,20 @@ func (f *WavFile) SavePath(path string, wo meta.WriteOptions) error {
 
 // SaveFile implements meta.AudioFile.
 func (f *WavFile) SaveFile(file meta.FileLike, wo meta.WriteOptions) error {
-	var tags []*meta.Tag
 	if t, ok := f.RiffInfo.Get(); ok {
-		tags = append(tags, t.Tag())
+		if err := wavWriteRiffInfoTag(file, t, wo); err != nil {
+			return err
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return &meta.FileEncodingError{Source: err}
+		}
 	}
 	if t, ok := f.ID3v2.Get(); ok {
-		tags = append(tags, t.Tag())
+		if err := t.SaveToVerified(meta.NewVerifiedFileOf(meta.FileTypeWav, file), wo); err != nil {
+			return err
+		}
 	}
-	return meta.SaveTagFields(file, meta.FileTypeWav, tags, wo)
+	return nil
 }
 
 // RemoveFromPath implements meta.AudioFile.
@@ -966,10 +972,9 @@ func wavWriteRiffInfoTag(file meta.FileLike, tag *RiffInfoTag, writeOptions meta
 	}
 
 	// Find an existing LIST/INFO chunk, walking within the declared RIFF
-	// bounds like Rust's `find_info_list` (uint32 wrap on `size-4` matches
-	// Rust's `original_stream_length - 4`).
+	// bounds like Rust's `find_info_list`.
 	scanBound := int64(declaredSize) + 8
-	remaining := int64(declaredSize - 4)
+	remaining := int64(declaredSize) - 4
 	var listStart, listEnd int64
 	for remaining >= 8 {
 		var ch [8]byte
@@ -999,7 +1004,10 @@ func wavWriteRiffInfoTag(file meta.FileLike, tag *RiffInfoTag, writeOptions meta
 			break
 		}
 		remaining -= 8
-		if bytes.Equal(ch[:4], listPreamble) && size >= 4 {
+		if bytes.Equal(ch[:4], listPreamble) {
+			if size < 4 {
+				return &meta.FileEncodingError{Source: &IffParseError{Source: io.ErrUnexpectedEOF}}
+			}
 			var sub [4]byte
 			if _, err := io.ReadFull(file, sub[:]); err != nil {
 				return &meta.FileEncodingError{Source: &IffParseError{Source: err}}
@@ -1099,11 +1107,19 @@ func wavInsertChunk(file meta.FileLike, chunkStart, chunkEnd int64, encoded []by
 	var delta int64
 	if chunkStart > 0 {
 		delta = int64(len(encoded)) - (chunkEnd - chunkStart)
+	} else if len(encoded) > 0 {
+		delta = int64(len(encoded))
+	}
+	// Rust errors TooMuchDataError when the new stream length exceeds u32::MAX;
+	// check before mutating the file.
+	if riffSize+delta > math.MaxUint32 {
+		return &meta.TooMuchDataError{}
+	}
+	if chunkStart > 0 {
 		if err := meta.Splice(file, uint64(chunkStart), uint64(chunkEnd), encoded); err != nil {
 			return err
 		}
 	} else if len(encoded) > 0 {
-		delta = int64(len(encoded))
 		insertAt := 8 + riffSize
 		if err := meta.Splice(file, uint64(insertAt), uint64(insertAt), encoded); err != nil {
 			return err
@@ -1111,10 +1127,6 @@ func wavInsertChunk(file meta.FileLike, chunkStart, chunkEnd int64, encoded []by
 	}
 	if delta == 0 {
 		return nil
-	}
-	// Rust errors TooMuchDataError when the new stream length exceeds u32::MAX
-	if riffSize+delta > math.MaxUint32 {
-		return &meta.TooMuchDataError{}
 	}
 	if _, err := file.Seek(4, io.SeekStart); err != nil {
 		return err
@@ -1205,6 +1217,10 @@ func iffWriteId3v2Chunk(file meta.FileLike, tag []byte, writeOptions meta.WriteO
 		return nil
 	}
 
+	if tagChunkSize > math.MaxUint32 {
+		return &meta.FileEncodingError{Source: &meta.TooMuchDataError{}}
+	}
+
 	if ctx.found {
 		existingLen := ctx.end - ctx.start
 
@@ -1213,10 +1229,21 @@ func iffWriteId3v2Chunk(file meta.FileLike, tag []byte, writeOptions meta.WriteO
 			updated := ctx.streamLength
 			if len(tag) == 0 {
 				updated -= existingLen
+				if updated-8 > math.MaxUint32 {
+					return &meta.FileEncodingError{Source: &meta.TooMuchDataError{}}
+				}
 				if err := file.Truncate(ctx.start); err != nil {
 					return &meta.FileEncodingError{Source: err}
 				}
 			} else {
+				if existingLen > tagChunkSize {
+					updated -= existingLen - tagChunkSize
+				} else {
+					updated += tagChunkSize - existingLen
+				}
+				if updated-8 > math.MaxUint32 {
+					return &meta.FileEncodingError{Source: &meta.TooMuchDataError{}}
+				}
 				if _, err := file.Seek(ctx.start, io.SeekStart); err != nil {
 					return &meta.FileEncodingError{Source: err}
 				}
@@ -1225,12 +1252,9 @@ func iffWriteId3v2Chunk(file meta.FileLike, tag []byte, writeOptions meta.WriteO
 				}
 				if existingLen > tagChunkSize {
 					remainder := existingLen - tagChunkSize
-					updated -= remainder
 					if err := file.Truncate(ctx.end - remainder); err != nil {
 						return &meta.FileEncodingError{Source: err}
 					}
-				} else {
-					updated += tagChunkSize - existingLen
 				}
 			}
 			return setStreamSize(updated)
@@ -1273,22 +1297,26 @@ func iffWriteId3v2Chunk(file meta.FileLike, tag []byte, writeOptions meta.WriteO
 
 	// Rust rebuilds the file with the new chunk inserted at the end of the
 	// stream and the old chunk drained; Splice yields the same bytes without
-	// loading the audio into memory.
-	streamLength := ctx.streamLength
+	// loading the audio into memory. Validate the resulting stream length first.
+	finalStreamLength := ctx.streamLength + tagChunkSize
+	if ctx.found {
+		finalStreamLength -= ctx.end - ctx.start
+	}
+	if finalStreamLength-8 > math.MaxUint32 {
+		return &meta.FileEncodingError{Source: &meta.TooMuchDataError{}}
+	}
 	if len(tag) > 0 {
-		at := uint64(streamLength)
+		at := uint64(ctx.streamLength)
 		if err := meta.Splice(file, at, at, iffEncodeId3v2Chunk(tag, order, writeOptions)); err != nil {
 			return &meta.FileEncodingError{Source: err}
 		}
 	}
 	if ctx.found {
-		streamLength -= ctx.end - ctx.start
 		if err := meta.Splice(file, uint64(ctx.start), uint64(ctx.end), nil); err != nil {
 			return &meta.FileEncodingError{Source: err}
 		}
 	}
-	streamLength += tagChunkSize
-	return setStreamSize(streamLength)
+	return setStreamSize(finalStreamLength)
 }
 
 type iffId3v2Context struct {
@@ -1627,7 +1655,7 @@ func AiffFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Ai
 		if err != nil {
 			return nil, &meta.FileParseError{Source: err}
 		}
-		if err := aiffReadProperties(comm, isAifc, ssndSize, uint64(walkEnd), &file.Properties); err != nil {
+		if err := aiffReadProperties(comm, isAifc, ssndSize, uint64(walkEnd-start), &file.Properties); err != nil {
 			return nil, &meta.FileParseError{Source: err}
 		}
 	}
@@ -1758,14 +1786,20 @@ func (f *AiffFile) SavePath(path string, wo meta.WriteOptions) error {
 
 // SaveFile implements meta.AudioFile.
 func (f *AiffFile) SaveFile(file meta.FileLike, wo meta.WriteOptions) error {
-	var tags []*meta.Tag
 	if t, ok := f.TextChunks.Get(); ok {
-		tags = append(tags, t.Tag())
+		if err := aiffWriteTextChunks(file, t, wo); err != nil {
+			return err
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return &meta.FileEncodingError{Source: err}
+		}
 	}
 	if t, ok := f.ID3v2.Get(); ok {
-		tags = append(tags, t.Tag())
+		if err := t.SaveToVerified(meta.NewVerifiedFileOf(meta.FileTypeAiff, file), wo); err != nil {
+			return err
+		}
 	}
-	return meta.SaveTagFields(file, meta.FileTypeAiff, tags, wo)
+	return nil
 }
 
 // RemoveFromPath implements meta.AudioFile.
@@ -1786,6 +1820,9 @@ func aiffWriteTag(file meta.FileLike, tag *meta.Tag, writeOptions meta.WriteOpti
 func aiffTextChunkBytes(text *AiffTextTag) ([]byte, error) {
 	var encoded bytes.Buffer
 	writeChunk := func(name [4]byte, value string) {
+		if uint64(len(value)) > math.MaxUint32 {
+			return
+		}
 		size := uint32(len(value))
 		encoded.Write(name[:])
 		var szb [4]byte
@@ -1820,7 +1857,11 @@ func aiffTextChunkBytes(text *AiffTextTag) ([]byte, error) {
 				encoded.WriteByte(0)
 			}
 		}
-		comtLen := uint32(encoded.Len() - comtSizePos - 4)
+		comtLen64 := uint64(encoded.Len() - comtSizePos - 4)
+		if comtLen64 > math.MaxUint32 {
+			return nil, &meta.TooMuchDataError{}
+		}
+		comtLen := uint32(comtLen64)
 		binary.BigEndian.PutUint32(encoded.Bytes()[comtSizePos:], comtLen)
 		if comtLen%2 != 0 {
 			encoded.WriteByte(0)
@@ -1901,7 +1942,7 @@ func aiffWriteTextChunks(file meta.FileLike, tag *AiffTextTag, writeOptions meta
 	if _, err := io.ReadFull(file, hdr[:]); err != nil {
 		return &meta.FileEncodingError{Source: err}
 	}
-	if !bytes.Equal(hdr[:4], formPreamble) {
+	if !bytes.Equal(hdr[:4], formPreamble) || (!bytes.Equal(hdr[8:12], aiffPreamble) && !bytes.Equal(hdr[8:12], aifcPreamble)) {
 		return &meta.FileEncodingError{Source: &meta.FakeTagError{}}
 	}
 
@@ -2009,6 +2050,9 @@ func iffFixSize(file meta.FileLike) error {
 	end, err := file.Seek(0, io.SeekEnd)
 	if err != nil {
 		return err
+	}
+	if end-8 > math.MaxUint32 {
+		return &meta.TooMuchDataError{}
 	}
 	if _, err := file.Seek(4, io.SeekStart); err != nil {
 		return err

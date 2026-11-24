@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"time"
+	"unicode/utf8"
 
 	"github.com/subframe7536/lofty-go/id3v2"
 	meta "github.com/subframe7536/lofty-go/internal/meta"
@@ -355,8 +356,14 @@ func (f *FlacFile) SavePath(path string, writeOptions meta.WriteOptions) error {
 // SaveFile writes tags to an open file.
 func (f *FlacFile) SaveFile(file meta.FileLike, writeOptions meta.WriteOptions) error {
 	if t, ok := f.ID3v2.Get(); ok {
+		if !t.IsEmpty() {
+			return &meta.FileEncodingError{FileType: meta.FileTypeFlac, Source: &meta.UnsupportedTagError{}}
+		}
 		if err := t.SaveToVerified(meta.NewVerifiedFileOf(meta.FileTypeFlac, file), writeOptions); err != nil {
 			return err
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return &meta.FileEncodingError{FileType: meta.FileTypeFlac, Source: err}
 		}
 	}
 	if vc, ok := f.VorbisComments.Get(); ok {
@@ -460,12 +467,12 @@ func flacWriteScan(file meta.FileLike, parseOptions meta.ParseOptions) (*flacSca
 			if len(data) < 4 {
 				return nil, &meta.FileEncodingError{Source: io.ErrUnexpectedEOF}
 			}
-			vlen := int(binary.LittleEndian.Uint32(data))
-			if vlen > len(data)-4 {
+			vlen := binary.LittleEndian.Uint32(data)
+			if uint64(vlen) > uint64(len(data)-4) {
 				return nil, &meta.FileEncodingError{Source: &meta.SizeMismatchError{}}
 			}
-			if v, verr := util.Utf8Decode(data[4 : 4+vlen]); verr == nil {
-				scan.vendor = v
+			if vb := data[4 : 4+int(vlen)]; utf8.Valid(vb) {
+				scan.vendor = string(vb)
 			} else {
 				// TODO: Error on strict? (Rust warning only)
 				scan.vendor = ""

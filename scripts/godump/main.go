@@ -94,16 +94,16 @@ func mimeName(p meta.Picture) string {
 	if !ok {
 		return "-"
 	}
-	switch m.AsStr() {
-	case "image/png":
+	switch m {
+	case meta.MimeTypePng:
 		return "Png"
-	case "image/jpeg":
+	case meta.MimeTypeJpeg:
 		return "Jpeg"
-	case "image/tiff":
+	case meta.MimeTypeTiff:
 		return "Tiff"
-	case "image/bmp":
+	case meta.MimeTypeBmp:
 		return "Bmp"
-	case "image/gif":
+	case meta.MimeTypeGif:
 		return "Gif"
 	}
 	return fmt.Sprintf("Unknown(%s)", m.AsStr())
@@ -146,7 +146,7 @@ func dump(path string) {
 	)
 	for _, tag := range tagged.Tags() {
 		fmt.Printf("TAG %s\n", tag.TagType())
-		items := tag.Items()
+		items := slices.Clone(tag.Items())
 		slices.SortFunc(items, func(a, b meta.TagItem) int {
 			if c := strings.Compare(a.Key().String(), b.Key().String()); c != 0 {
 				return c
@@ -157,7 +157,7 @@ func dump(path string) {
 			fmt.Printf("  ITEM %s = %s\n", item.Key(), itemValueRepr(item.Value()))
 		}
 		for _, pic := range tag.Pictures() {
-			fmt.Printf("  PIC %d %s %d\n", pic.PicType(), mimeName(pic), len(pic.Data()))
+			fmt.Printf("  PIC %d %s %d\n", pic.PicType().AsU8(), mimeName(pic), len(pic.Data()))
 		}
 	}
 }

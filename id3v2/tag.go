@@ -796,13 +796,9 @@ func (t *Id3v2Tag) RemoveFromPath(path string, writeOptions meta.WriteOptions) e
 
 // WriteId3v2 writes an ID3v2 tag at the start of a file.
 func WriteId3v2(file meta.FileLike, tag *meta.Tag, writeOptions meta.WriteOptions) error {
-	var encoded []byte
-	if !tag.IsEmpty() {
-		var err error
-		encoded, err = Id3v2Serialize(tag, writeOptions)
-		if err != nil {
-			return &meta.FileEncodingError{Source: &meta.TagEncodingError{TagType: meta.TagTypeID3v2, HasTagType: true, Source: err}}
-		}
+	encoded, err := Id3v2Serialize(tag, writeOptions)
+	if err != nil {
+		return &meta.FileEncodingError{Source: &meta.TagEncodingError{TagType: meta.TagTypeID3v2, HasTagType: true, Source: err}}
 	}
 
 	// Find the existing tag range
@@ -1220,9 +1216,6 @@ var v3ToV4FrameIds = map[string]string{
 
 func init() {
 	meta.RegisterTagDumper(meta.TagTypeID3v2, func(tag *meta.Tag, writer io.Writer, writeOptions meta.WriteOptions) error {
-		if tag.IsEmpty() {
-			return nil
-		}
 		encoded, err := Id3v2Serialize(tag, writeOptions)
 		if err != nil {
 			return err
@@ -1235,17 +1228,66 @@ func init() {
 // RemoveKey removes all frames mapping to `key`, mirroring Rust's
 // `TagExt::remove_key` on `Id3v2Tag`.
 func (t *Id3v2Tag) RemoveKey(key meta.ItemKey) {
-	removed := map[string]bool{}
-	if id, ok := key.MapKey(meta.TagTypeID3v2); ok {
-		removed[id] = true
+	switch {
+	case key == meta.ItemKeyMusicBrainzRecordingId:
+		t.Frames.Retain(func(f Frame) bool {
+			if ufid, ok := f.(*UniqueFileIdentifierFrame); ok && ufid.Owner == musicBrainzUfidOwner {
+				return false
+			}
+			return true
+		})
+		return
+	case key == meta.ItemKeyParentalAdvisory:
+		t.Frames.Retain(func(f Frame) bool {
+			if ext, ok := f.(*ExtendedTextFrame); ok && strings.EqualFold(ext.Description, "ITUNESADVISORY") {
+				return false
+			}
+			return true
+		})
+		return
+	case id3v2MultiTxxxKeys[key] || id3v2SingleTxxxKeys[key]:
+		if desc, ok := key.MapKey(meta.TagTypeID3v2); ok {
+			t.Frames.Retain(func(f Frame) bool {
+				if ext, ok := f.(*ExtendedTextFrame); ok && strings.EqualFold(ext.Description, desc) {
+					return false
+				}
+				return true
+			})
+		}
+		return
+	case isTiplItemKey(key):
+		if role, ok := tiplRoleForItemKey(key); ok {
+			t.Frames.Retain(func(f Frame) bool {
+				kv, ok := f.(*KeyValueFrame)
+				if !ok || kv.ID().String() != "TIPL" {
+					return true
+				}
+				kept := kv.KeyValuePairs[:0]
+				for _, pair := range kv.KeyValuePairs {
+					if !strings.EqualFold(pair[0], role) {
+						kept = append(kept, pair)
+					}
+				}
+				kv.KeyValuePairs = kept
+				return len(kept) > 0
+			})
+		}
+		return
 	}
-	// Keys sharing a frame ID (e.g. TrackNumber/TrackTotal -> TRCK) and
-	// multi-role frames (TIPL/TMCL) are dropped when any of their keys is
-	// removed, matching Rust item-level retain semantics on frames.
-	var fid FrameId
-	for id := range removed {
-		fid = FrameIdValid(id)
-		t.Frames.Remove(fid)
+	if id, ok := key.MapKey(meta.TagTypeID3v2); ok {
+		if fid, err := ParseFrameId(id); err == nil {
+			t.Frames.Remove(fid)
+		} else {
+			t.Frames.Retain(func(f Frame) bool {
+				if ext, ok := f.(*ExtendedTextFrame); ok && strings.EqualFold(ext.Description, id) {
+					return false
+				}
+				if ext, ok := f.(*ExtendedUrlFrame); ok && strings.EqualFold(ext.Description, id) {
+					return false
+				}
+				return true
+			})
+		}
 	}
 }
 

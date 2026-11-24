@@ -142,14 +142,20 @@ func (f *WavPackFile) SavePath(path string, wo meta.WriteOptions) error {
 
 // SaveFile implements AudioFile.
 func (f *WavPackFile) SaveFile(file meta.FileLike, wo meta.WriteOptions) error {
-	var tags []*meta.Tag
 	if t, ok := f.ID3v1.Get(); ok {
-		tags = append(tags, t.Tag())
+		if err := id3v1.WriteId3v1(file, t, wo); err != nil {
+			return err
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return &meta.FileEncodingError{FileType: meta.FileTypeWavPack, Source: err}
+		}
 	}
 	if t, ok := f.Ape.Get(); ok {
-		tags = append(tags, t.Tag())
+		if err := ape.ApeWriteTo(file, t, wo); err != nil {
+			return err
+		}
 	}
-	return meta.SaveTagFields(file, meta.FileTypeWavPack, tags, wo)
+	return nil
 }
 
 // RemoveFromPath implements AudioFile.

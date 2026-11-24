@@ -393,10 +393,10 @@ func PictureInformationFromJPEG(data []byte) (PictureInformation, error) {
 		}
 		marker, err := reader.ReadByte()
 		if err != nil {
-			break
+			return PictureInformation{}, pictureParseError(err)
 		}
 		if err := binary.Read(reader, binary.BigEndian, &sectionLen); err != nil {
-			break
+			return PictureInformation{}, pictureParseError(err)
 		}
 
 		// This marks the SOS (Start of Scan), which is the end of the header
@@ -408,18 +408,18 @@ func PictureInformationFromJPEG(data []byte) (PictureInformation, error) {
 		if marker == 0xC0 || marker == 0xC2 {
 			precision, err := reader.ReadByte()
 			if err != nil {
-				break
+				return PictureInformation{}, pictureParseError(err)
 			}
 			var h, w uint16
 			if err := binary.Read(reader, binary.BigEndian, &h); err != nil {
-				break
+				return PictureInformation{}, pictureParseError(err)
 			}
 			if err := binary.Read(reader, binary.BigEndian, &w); err != nil {
-				break
+				return PictureInformation{}, pictureParseError(err)
 			}
 			components, err := reader.ReadByte()
 			if err != nil {
-				break
+				return PictureInformation{}, pictureParseError(err)
 			}
 			return PictureInformation{
 				Width:      uint32(w),
@@ -432,7 +432,7 @@ func PictureInformationFromJPEG(data []byte) (PictureInformation, error) {
 			break
 		}
 		if _, err := reader.Seek(int64(sectionLen-2), io.SeekCurrent); err != nil {
-			break
+			return PictureInformation{}, pictureParseError(err)
 		}
 	}
 
@@ -672,11 +672,11 @@ func pictureFromFlacBytesInner(content []byte, parseMode ParsingMode) (Picture, 
 		return Picture{}, PictureInformation{}, pictureParseError(err)
 	}
 	size -= 4
-	if int(mimeLen) > size {
+	if uint64(mimeLen) > uint64(size) {
 		return Picture{}, PictureInformation{}, pictureParseError(&SizeMismatchError{})
 	}
 
-	mimeTypeStr, err := utf8DecodeStr(content[8 : 8+mimeLen])
+	mimeTypeStr, err := utf8DecodeStr(content[8 : 8+int(mimeLen)])
 	if err != nil {
 		return Picture{}, PictureInformation{}, pictureParseError(err)
 	}
@@ -692,7 +692,7 @@ func pictureFromFlacBytesInner(content []byte, parseMode ParsingMode) (Picture, 
 	size -= 4
 
 	var description Option[string]
-	if descLen > 0 && int(descLen) < size {
+	if descLen > 0 && uint64(descLen) < uint64(size) {
 		pos := 12 + int(mimeLen)
 		if desc, err := utf8DecodeStr(content[pos : pos+int(descLen)]); err == nil {
 			description = Some(desc)
@@ -709,12 +709,12 @@ func pictureFromFlacBytesInner(content []byte, parseMode ParsingMode) (Picture, 
 			return Picture{}, PictureInformation{}, pictureParseError(err)
 		}
 	}
-	dataLen := int(dataLenU32)
 	size -= 20
 
-	if dataLen > size {
+	if uint64(dataLenU32) > uint64(size) {
 		return Picture{}, PictureInformation{}, pictureParseError(&SizeMismatchError{})
 	}
+	dataLen := int(dataLenU32)
 
 	data, err := tryByteSlice(dataLen)
 	if err != nil {

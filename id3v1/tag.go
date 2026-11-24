@@ -356,9 +356,6 @@ func FindId3v1(reader io.ReadSeeker, read bool, parseMode meta.ParsingMode) (*Id
 func init() {
 	meta.RegisterTagDumper(meta.TagTypeID3v1, func(tag *meta.Tag, writer io.Writer, writeOptions meta.WriteOptions) error {
 		t := Id3v1TagFromTag(tag)
-		if t.isEmpty() {
-			return nil
-		}
 		b, err := id3v1Encode(t, writeOptions)
 		if err != nil {
 			return err
@@ -386,7 +383,7 @@ func WriteId3v1(file meta.FileLike, tag *Id3v1Tag, writeOptions meta.WriteOption
 		// Strip Lyrics3 too — Lyrics3 is an extension of ID3v1.
 		lyrStart, _, _, lyrFound, err := lyrics3.FindLyrics3(file, false, writeOptions.ParseOptions)
 		if err != nil {
-			return err
+			return &meta.FileEncodingError{Source: err}
 		}
 		if lyrFound {
 			existingRange[0] = lyrStart

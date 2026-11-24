@@ -309,6 +309,8 @@ func DecodeText(reader io.Reader, options TextDecodeOptions) (DecodeTextResult, 
 		if err != nil {
 			return DecodeTextResult{}, err
 		}
+	default:
+		return DecodeTextResult{}, &BadTextEncodingError{}
 	}
 
 	return DecodeTextResult{

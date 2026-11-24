@@ -477,3 +477,19 @@ func TestNumberPairWhitespace(t *testing.T) {
 		t.Fatal("whitespace-only TRCK should produce no frame")
 	}
 }
+
+// Ported from lofty-rs/lofty/tests/fuzz/id3v2.rs (issue #295).
+func TestId3v2FuzzRegressionUnreachable1(t *testing.T) {
+	data := []byte{1, 0, 0, 0}
+	ver := NewId3v2Tag().OriginalVersion()
+	_, _ = parseExtendedTextFrame(bytes.NewReader(data), FrameFlags{}, ver)
+}
+
+func TestId3v2FuzzRegressionOverflow1(t *testing.T) {
+	data := []byte{
+		57, 25, 25, 0, 4, 1, 54, 0, 51, 6, 6, 6, 25, 25, 25, 129, 6, 151, 28, 25, 25, 0, 51, 51,
+		50, 5, 5, 5, 26, 5, 5, 25, 6, 6, 25, 26, 246, 25, 25, 129, 6, 151, 3, 252, 56, 0, 53, 56,
+		55, 52,
+	}
+	_, _ = parseRelativeVolumeAdjustmentFrame(bytes.NewReader(data), FrameFlags{}, meta.ParsingModeBestAttempt)
+}

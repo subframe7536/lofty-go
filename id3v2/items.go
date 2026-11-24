@@ -62,7 +62,7 @@ func (f *TextInformationFrame) cloneFrame() Frame {
 // content is empty (Rust `TextInformationFrame::parse` -> meta.Option).
 func parseTextInformationFrame(reader io.Reader, id FrameId, frameFlags FrameFlags, version Id3v2Version) (*TextInformationFrame, error) {
 	var encByte [1]byte
-	if _, err := reader.Read(encByte[:]); err != nil {
+	if _, err := io.ReadFull(reader, encByte[:]); err != nil {
 		return nil, nil
 	}
 	encoding, err := verifyEncoding(encByte[0], version)
@@ -710,7 +710,7 @@ func (f *PopularimeterFrame) frameEqual(other Frame) bool {
 }
 
 func (f *PopularimeterFrame) frameIsEmpty() (bool, bool) { return false, false }
-func (f *PopularimeterFrame) frameName() string          { return "meta.Popularimeter" }
+func (f *PopularimeterFrame) frameName() string          { return "Popularimeter" }
 
 func (f *PopularimeterFrame) frameBytes(ctx *frameEncodingContext) ([]byte, error) {
 	content, err := util.TextEncodingLatin1.Encode(f.Email, true, ctx.writeOptions.LossyTextEncoding)
@@ -993,7 +993,7 @@ func (f *TimestampFrame) frameEqual(other Frame) bool {
 }
 
 func (f *TimestampFrame) frameIsEmpty() (bool, bool) { return false, false }
-func (f *TimestampFrame) frameName() string          { return "meta.Timestamp" }
+func (f *TimestampFrame) frameName() string          { return "Timestamp" }
 
 func (f *TimestampFrame) frameBytes(ctx *frameEncodingContext) ([]byte, error) {
 	encoding := f.Encoding
@@ -1191,8 +1191,7 @@ func parseEventTimingCodesFrame(reader io.Reader, frameFlags FrameFlags) (*Event
 		var events []Event
 		for {
 			var evByte [5]byte
-			n, _ := reader.Read(evByte[:1])
-			if n == 0 {
+			if _, err := io.ReadFull(reader, evByte[:1]); err != nil {
 				break
 			}
 			if _, err := io.ReadFull(reader, evByte[1:5]); err != nil {
@@ -1404,8 +1403,7 @@ func parseRelativeVolumeAdjustmentFrame(reader io.Reader, frameFlags FrameFlags,
 		channels := make(map[ChannelType]ChannelInformation)
 		for {
 			var ctByte [1]byte
-			n, _ := reader.Read(ctByte[:])
-			if n == 0 {
+			if _, err := io.ReadFull(reader, ctByte[:]); err != nil {
 				break
 			}
 			channelType, err := ChannelTypeFromU8(ctByte[0])

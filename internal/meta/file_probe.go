@@ -135,7 +135,10 @@ func (p *Probe) guessInner(maxJunkBytes int) (Option[FileType], error) {
 			return None[FileType](), err
 		}
 		var ident [4]byte
-		n, _ := io.ReadFull(p.inner, ident[:])
+		n, err := io.ReadFull(p.inner, ident[:])
+		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+			return None[FileType](), err
+		}
 		identN := ident[:n]
 		if _, err := p.inner.Seek(positionAfterId3, io.SeekStart); err != nil {
 			return None[FileType](), err
