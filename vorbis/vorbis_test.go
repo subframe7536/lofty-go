@@ -168,8 +168,6 @@ func TestVorbisCommentsMultiValueRoundTrip(t *testing.T) {
 	push2(ItemKeyMood, "Mood 1", "Mood 2")
 	push2(ItemKeyComposer, "Composer 1", "Composer 2")
 	push2(ItemKeyConductor, "Conductor 1", "Conductor 2")
-	// Otherwise the following item would be inserted implicitly
-	// during the conversion.
 	tag.InsertText(ItemKeyEncoderSoftware, "EncoderSoftware")
 	if tag.Len() != 20+1 {
 		t.Fatalf("len = %d", tag.Len())

@@ -91,8 +91,8 @@ func TestParseItemLengthBeyondRemaining(t *testing.T) {
 }
 
 // TestDumpTagKeepsEncoderAndPads: the registered Vorbis comments dumper
-// follows Rust's `create_vorbis_comments_ref` + `VorbisCommentsRef::dump_to`:
-// ENCODER stays a comment (and is the vendor), and preferred_padding applies.
+// follows Rust's `VorbisComments::as_tag_ref` + `VorbisCommentsRef::dump_to`:
+// ENCODER stays a comment (vendor is empty), and preferred_padding applies.
 func TestDumpTagKeepsEncoderAndPads(t *testing.T) {
 	tag := meta.NewTag(meta.TagTypeVorbisComments)
 	tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyEncoderSoftware, meta.ItemValueText("enc")))
@@ -106,8 +106,8 @@ func TestDumpTagKeepsEncoderAndPads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse dump: %v", err)
 	}
-	if vc.Vendor != "enc" {
-		t.Fatalf("vendor = %q, want enc", vc.Vendor)
+	if vc.Vendor != "" {
+		t.Fatalf("vendor = %q, want empty", vc.Vendor)
 	}
 	if v, ok := vc.Get("ENCODER"); !ok || v != "enc" {
 		t.Fatalf("ENCODER comment = %q,%v", v, ok)

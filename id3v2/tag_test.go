@@ -1785,19 +1785,25 @@ func TestReadRealignsToFrameEnd(t *testing.T) {
 	})
 }
 
-// Deliberate deviation from Rust: a v2.3 TDRC that already has a month is kept
-// (Rust drops it in `construct_tdrc_from_v3`).
+// A v2.3 TDRC/TYER that already has a month is rejected in strict mode and
+// kept in best-attempt/relaxed modes (upstream lofty-rs issue #794).
 func TestReadV23TdrcWithMonthIsKept(t *testing.T) {
 	body := rtFrame("TDRC", 0, append([]byte{0}, "2020-05-01"...), false)
-	rtParseAll(t, rtTag(3, 0, body), func(t *testing.T, tag *Id3v2Tag, err error) {
-		if err != nil {
-			t.Fatal(err)
-		}
-		f, ok := tag.Frames.Get(FrameIdValid("TDRC")).(*TimestampFrame)
-		if !ok || f.Timestamp.String() != "2020-05-01" {
-			t.Fatalf("TDRC = %#v", tag.Frames.Get(FrameIdValid("TDRC")))
-		}
-	})
+	if _, err := rtParse(rtTag(3, 0, body), meta.ParsingModeStrict); err == nil {
+		t.Fatal("expected strict mode error for v2.3 TDRC with month")
+	}
+	for _, m := range rtModes[1:] {
+		t.Run(m.name, func(t *testing.T) {
+			tag, err := rtParse(rtTag(3, 0, body), m.mode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f, ok := tag.Frames.Get(FrameIdValid("TDRC")).(*TimestampFrame)
+			if !ok || f.Timestamp.String() != "2020-05-01" {
+				t.Fatalf("TDRC = %#v", tag.Frames.Get(FrameIdValid("TDRC")))
+			}
+		})
+	}
 }
 
 // The "not enough data" frame error is the shared NotEnoughDataError (Rust

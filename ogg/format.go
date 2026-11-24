@@ -585,6 +585,8 @@ func OggReadCountPackets(reader io.ReadSeeker, count int) ([][]byte, *OggPage, u
 
 // oggPaginate turns packets into pages of at most 32 segments
 // (mirroring ogg_pager::paginate).
+//
+//nolint:unparam // abgp mirrors ogg_pager::paginate
 func oggPaginate(packets [][]byte, serial uint32, abgp uint64, flags byte) []*OggPage {
 	const maxContent = 255 * oggMaxWrittenSegmentCount
 	var pages []*OggPage
@@ -747,9 +749,9 @@ func oggWriteVorbisCommentsImpl(file meta.FileLike, ft meta.FileType, writeOptio
 	// Items are serialized verbatim (incl. EncoderSoftware → ENCODER); the
 	// file's retained vendor is offered to the builder.
 	vc := build(vendor)
-	// The file's vendor always wins over the tag's own or EncoderSoftware
-	// (Rust's `tag.vendor = vendor_str`). WithVendor copies, so the concrete
-	// SaveFile path doesn't mutate the caller's tag.
+	// The file's vendor always wins over the tag's own (Rust's
+	// `tag.vendor = vendor_str`). WithVendor copies, so the concrete SaveFile
+	// path doesn't mutate the caller's tag.
 	vc = vc.WithVendor(vendor)
 	vcData, err := vorbis.EncodeVorbisComments(vc)
 	if err != nil {

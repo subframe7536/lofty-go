@@ -84,8 +84,9 @@ most debugging:
 - **Latin-1 byte 0xFF**: rejected/replaced exactly like Rust (see
   `latin1Encode` use in lyrics3/ape paths).
 - **Empty vendor**: `VorbisCommentsTag` default vendor is `""` (Rust
-  `VorbisComments::new()`), not a lofty string — vendor→EncoderSoftware
-  injection only happens for parsed files.
+  `VorbisComments::new()`), not a lofty string. The vendor string is not
+  round-tripped through `ItemKeyEncoderSoftware` (upstream issue #788 / PR
+  #800).
 - **APEv2 flags**: header `0xE0` (IS_HEADER|CONTAINS_FOOTER|CONTAINS_HEADER),
   footer `0xC0`.
 - **Sizes**: `Id3v2Header.Size` is content size (excludes the 10-byte
@@ -101,7 +102,7 @@ most debugging:
   failures end packet scans (`Packets::read_count`'s `while let Ok`) and are
   the only retry candidates in `find_last_page`; body errors abort. The
   comment packet's vendor is the file's — on write it always overrides the
-  tag's own vendor/`EncoderSoftware`; truncated vendor = hard error,
+  tag's own vendor; truncated vendor = hard error,
   invalid UTF-8 → `""`.
 - **Vorbis values**: trailing NULs trimmed on read (`utf8_decode_str`),
   including TRACKNUMBER/DISCNUMBER before the `n/total` split. Unknown-key

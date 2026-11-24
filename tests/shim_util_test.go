@@ -37,6 +37,4 @@ var (
 	removeTag  = meta.RemoveTag
 )
 
-var (
-	id3v2TagFromTag = id3v2.Id3v2TagFromTag
-)
+var id3v2TagFromTag = id3v2.Id3v2TagFromTag

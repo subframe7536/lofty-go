@@ -55,14 +55,17 @@ func TestFlacMultipleVorbisComments(t *testing.T) {
 }
 
 func TestFlacReadNoProperties(t *testing.T) {
-	file := probeRead(t, testAsset("minimal", "full_test.flac"), ParseOptions{ReadProperties: false})
+	file := probeRead(t, testAsset("minimal", "full_test.flac"), noProps)
 	if !file.Properties().IsEmpty() {
 		t.Fatal("expected empty properties")
 	}
 }
 
 func TestFlacReadNoTags(t *testing.T) {
-	file := probeRead(t, testAsset("minimal", "full_test.flac"), ParseOptions{ReadTags: false, ReadProperties: false})
+	opts := NewParseOptions()
+	opts.ReadTags = false
+	opts.ReadProperties = false
+	file := probeRead(t, testAsset("minimal", "full_test.flac"), opts)
 	if len(file.Tags()) != 0 {
 		t.Fatalf("expected no tags, got %d", len(file.Tags()))
 	}
@@ -73,7 +76,7 @@ func TestFlacRead(t *testing.T) {
 	if !file.FileType().Equal(FileTypeFlac) {
 		t.Fatalf("expected Flac, got %s", file.FileType())
 	}
-	verifyArtist(t, file, TagTypeVorbisComments, "Foo artist", 2)
+	verifyArtist(t, file, TagTypeVorbisComments, "Foo artist", 1)
 }
 
 func TestFlacRetainVendorString(t *testing.T) {
@@ -99,14 +102,14 @@ func TestFlacWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read: %v", err)
 	}
-	setArtist(t, file, TagTypeVorbisComments, "Foo artist", "Bar artist", 2)
+	setArtist(t, file, TagTypeVorbisComments, "Foo artist", "Bar artist", 1)
 
 	// Reread
 	btf, err := NewProbe(f).Options(noProps).ReadBound(NewOSFile(f))
 	if err != nil {
 		t.Fatalf("failed to reread: %v", err)
 	}
-	verifyArtist(t, &btf.TaggedFile, TagTypeVorbisComments, "Bar artist", 2)
+	verifyArtist(t, &btf.TaggedFile, TagTypeVorbisComments, "Bar artist", 1)
 }
 
 // --- ported from lofty-rs lofty/tests/files/ogg.rs ---
@@ -120,8 +123,8 @@ func oggRead(t *testing.T, path string, expected FileType) {
 	if tag == nil {
 		t.Fatal("expected a vorbis comments tag")
 	}
-	// Expecting 2 items: vendor string (EncoderSoftware) and artist
-	verifyArtist(t, file, TagTypeVorbisComments, "Foo artist", 2)
+	// Expecting 1 item: artist
+	verifyArtist(t, file, TagTypeVorbisComments, "Foo artist", 1)
 }
 
 func TestOpusRead(t *testing.T) {
