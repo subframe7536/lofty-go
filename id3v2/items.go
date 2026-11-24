@@ -517,7 +517,7 @@ func (f *ExtendedUrlFrame) frameBytes(ctx *frameEncodingContext) ([]byte, error)
 		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
 	bytes_ = append(bytes_, desc...)
-	cont, err := encoding.Encode(f.Content, false, ctx.writeOptions.LossyTextEncoding)
+	cont, err := util.TextEncodingLatin1.Encode(f.Content, false, ctx.writeOptions.LossyTextEncoding)
 	if err != nil {
 		return nil, frameEncodingError(meta.None[FrameId](), err)
 	}
