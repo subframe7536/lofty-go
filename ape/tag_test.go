@@ -468,3 +468,75 @@ func TestApeRemoveDiskTotalPreservesDiskNumber(t *testing.T) {
 		t.Fatalf("track = %d, want 2", n)
 	}
 }
+
+// Ported from lofty-rs/lofty/src/ape/tag/mod.rs::companion_tag_roundtrip.
+func TestApeCompanionTagRoundtrip(t *testing.T) {
+	ape := NewApeTag()
+	ape.SetArtist("Foo artist")
+	item, err := NewApeItem("WHAT", meta.ItemValueText("Something format-specific"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ape.InsertItem(item)
+	if ape.Len() != 2 {
+		t.Fatalf("len = %d, want 2", ape.Len())
+	}
+
+	tag := ape.Tag()
+	if a, ok := tag.Artist(); !ok || a != "Foo artist" {
+		t.Fatalf("artist = %q, %v", a, ok)
+	}
+	if tag.Len() != 1 {
+		t.Fatalf("tag.Len() = %d, want 1 (should hide format-specific item)", tag.Len())
+	}
+
+	back := ApeTagFromTag(tag)
+	if back.Len() != 2 {
+		t.Fatalf("back.Len() = %d, want 2", back.Len())
+	}
+	got, ok := back.Item("WHAT")
+	if !ok {
+		t.Fatal("missing WHAT item after roundtrip")
+	}
+	if text, ok := got.Value.Text(); !ok || text != "Something format-specific" {
+		t.Fatalf("WHAT = %q, %v", text, ok)
+	}
+}
+
+func TestApeItemTextValuesAndInsertItem(t *testing.T) {
+	item, err := NewApeItem("Artist", meta.ItemValueText("A\x00B\x00C"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	vals := item.TextValues()
+	if len(vals) != 3 || vals[0] != "A" || vals[1] != "B" || vals[2] != "C" {
+		t.Fatalf("TextValues = %v", vals)
+	}
+	binItem, err := NewApeItem("Bin", meta.ItemValueBinary([]byte{1, 2}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binItem.TextValues() != nil {
+		t.Fatalf("expected nil TextValues for binary item")
+	}
+
+	tag := NewApeTag()
+	if tag.TagType() != meta.TagTypeApe || tag.Contains("Artist") {
+		t.Fatal("unexpected initial state")
+	}
+	if prev := tag.InsertItem(item); prev.IsSome() {
+		t.Fatal("expected no previous item")
+	}
+	if !tag.Contains("artist") {
+		t.Fatal("expected case-insensitive Contains")
+	}
+	item2, _ := NewApeItem("Artist", meta.ItemValueText("Replaced"))
+	prev := tag.InsertItem(item2)
+	if !prev.IsSome() {
+		t.Fatal("expected previous item to be returned")
+	}
+	got, _ := tag.Item("Artist")
+	if text, _ := got.Value.Text(); text != "Replaced" {
+		t.Fatalf("expected replacement without NUL merge, got %q", text)
+	}
+}

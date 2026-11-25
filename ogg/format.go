@@ -29,6 +29,17 @@ func (e *OggParseError) Error() string {
 }
 func (e *OggParseError) Unwrap() error { return e.Source }
 
+// OggPageHeader is the header of an [OggPage], mirroring `ogg_pager::PageHeader`.
+type OggPageHeader struct {
+	Start          int64
+	HeaderType     byte
+	Abgp           uint64
+	StreamSerial   uint32
+	SequenceNumber uint32
+	Segments       []byte
+	Checksum       uint32
+}
+
 // OggPage is a single Ogg page.
 type OggPage struct {
 	headerType byte
@@ -43,10 +54,50 @@ type OggPage struct {
 	end        int64 // file offset after page
 }
 
+// Header returns the page's header fields, mirroring `ogg_pager::Page::header`.
+func (p *OggPage) Header() OggPageHeader {
+	return OggPageHeader{
+		Start:          p.start,
+		HeaderType:     p.headerType,
+		Abgp:           p.granulePos,
+		StreamSerial:   p.serial,
+		SequenceNumber: p.sequence,
+		Segments:       p.segments,
+		Checksum:       p.crc,
+	}
+}
+
+// Content returns the page's payload bytes, mirroring `ogg_pager::Page::content`.
+func (p *OggPage) Content() []byte { return p.data }
+
+// Start returns the byte offset where the page begins.
+func (p *OggPage) Start() int64 { return p.start }
+
+// End returns the byte offset immediately after the page.
+func (p *OggPage) End() int64 { return p.end }
+
+// GenCrc computes and stores the Ogg CRC-32 checksum on the page, mirroring
+// `ogg_pager::Page::gen_crc`.
+func (p *OggPage) GenCrc() {
+	raw := oggSerializePage(p)
+	p.crc = binary.LittleEndian.Uint32(raw[22:26])
+}
+
+// AsBytes serializes the page (computing its CRC-32), mirroring
+// `ogg_pager::Page::as_bytes`.
+func (p *OggPage) AsBytes() []byte { return oggSerializePage(p) }
+
 const (
-	oggPageContinuation byte = 1
-	oggPageBOS          byte = 2
-	oggPageEOS          byte = 4
+	// OggPageFlagContinuation indicates a continued packet (0x01).
+	OggPageFlagContinuation byte = 1
+	// OggPageFlagBOS indicates the beginning of a logical bitstream (0x02).
+	OggPageFlagBOS byte = 2
+	// OggPageFlagEOS indicates the end of a logical bitstream (0x04).
+	OggPageFlagEOS byte = 4
+
+	oggPageContinuation = OggPageFlagContinuation
+	oggPageBOS          = OggPageFlagBOS
+	oggPageEOS          = OggPageFlagEOS
 )
 
 var (
@@ -64,6 +115,12 @@ type oggHeaderError struct{ err error }
 
 func (e *oggHeaderError) Error() string { return e.err.Error() }
 func (e *oggHeaderError) Unwrap() error { return e.err }
+
+// ReadOggPage reads a single [OggPage] at the reader's current position,
+// mirroring `ogg_pager::Page::read`.
+func ReadOggPage(reader io.ReadSeeker) (*OggPage, error) {
+	return readOggPage(reader)
+}
 
 // readOggPage reads one page at the current position, mirroring
 // `ogg_pager::Page::read` (`PageHeader::read` followed by the page body).
@@ -665,7 +722,16 @@ func oggPaginate(packets [][]byte, serial uint32, abgp uint64, flags byte) []*Og
 			flush()
 		}
 	}
+	if len(pages) > 0 && flags&oggPageEOS != 0 {
+		pages[len(pages)-1].headerType |= oggPageEOS
+	}
 	return pages
+}
+
+// OggPaginate turns packets into Ogg pages of at most 32 segments, mirroring
+// `ogg_pager::paginate`.
+func OggPaginate(packets [][]byte, serial uint32, abgp uint64, flags byte) []*OggPage {
+	return oggPaginate(packets, serial, abgp, flags)
 }
 
 // oggWriteVorbisComments replaces the comment packet in an Ogg file.

@@ -117,6 +117,22 @@ func (t *RiffInfoTag) RemoveKey(key string) (string, bool) {
 	return "", false
 }
 
+// TagType returns [meta.TagTypeRiffInfo].
+func (t *RiffInfoTag) TagType() meta.TagType { return meta.TagTypeRiffInfo }
+
+// Contains reports whether an item with the key exists (case-insensitive).
+func (t *RiffInfoTag) Contains(key string) bool {
+	for _, item := range t.items {
+		if strings.EqualFold(item.key, key) {
+			return true
+		}
+	}
+	return false
+}
+
+// Clear removes all items from the tag.
+func (t *RiffInfoTag) Clear() { t.items = nil }
+
 // IsEmpty reports whether the tag has no items.
 func (t *RiffInfoTag) IsEmpty() bool { return len(t.items) == 0 }
 
@@ -127,6 +143,15 @@ func (t *RiffInfoTag) Keys() []string {
 		keys = append(keys, item.key)
 	}
 	return keys
+}
+
+// Items returns all key/value pairs in order, mirroring Rust's `RiffInfoList::into_iter`.
+func (t *RiffInfoTag) Items() [][2]string {
+	out := make([][2]string, len(t.items))
+	for i, item := range t.items {
+		out[i] = [2]string{item.key, item.value}
+	}
+	return out
 }
 
 // Len returns the number of items.
@@ -323,6 +348,57 @@ type AiffTextTag struct {
 	Copyright   meta.Option[string]
 	Annotations []string
 	Comments    []AiffComment
+}
+
+// TagType returns [meta.TagTypeAiffText].
+func (t *AiffTextTag) TagType() meta.TagType { return meta.TagTypeAiffText }
+
+// Clear removes all text chunks from the tag.
+func (t *AiffTextTag) Clear() {
+	t.Name = meta.None[string]()
+	t.Author = meta.None[string]()
+	t.Copyright = meta.None[string]()
+	t.Annotations = nil
+	t.Comments = nil
+}
+
+// Artist returns the author chunk (`AUTH`).
+func (t *AiffTextTag) Artist() (string, bool) { return t.Author.Get() }
+
+// SetArtist sets the author chunk (`AUTH`).
+func (t *AiffTextTag) SetArtist(value string) { t.Author = meta.Some(value) }
+
+// RemoveArtist clears the author chunk (`AUTH`).
+func (t *AiffTextTag) RemoveArtist() { t.Author = meta.None[string]() }
+
+// Title returns the name chunk (`NAME`).
+func (t *AiffTextTag) Title() (string, bool) { return t.Name.Get() }
+
+// SetTitle sets the name chunk (`NAME`).
+func (t *AiffTextTag) SetTitle(value string) { t.Name = meta.Some(value) }
+
+// RemoveTitle clears the name chunk (`NAME`).
+func (t *AiffTextTag) RemoveTitle() { t.Name = meta.None[string]() }
+
+// Comment returns the first annotation (`ANNO`), or the first `COMT` comment text
+// if no annotations are present (matching Rust `AiffTextChunks::comment`).
+func (t *AiffTextTag) Comment() (string, bool) {
+	if len(t.Annotations) > 0 {
+		return t.Annotations[0], true
+	}
+	if len(t.Comments) > 0 {
+		return t.Comments[0].Text, true
+	}
+	return "", false
+}
+
+// SetComment replaces annotations with a single value (matching Rust `AiffTextChunks::set_comment`).
+func (t *AiffTextTag) SetComment(value string) { t.Annotations = []string{value} }
+
+// RemoveComment clears all annotations and comments.
+func (t *AiffTextTag) RemoveComment() {
+	t.Annotations = nil
+	t.Comments = nil
 }
 
 // Tag converts to a generic [Tag].
@@ -1497,8 +1573,8 @@ type AiffProperties struct {
 	OverallBitrate  uint32
 	AudioBitrate    uint32
 	SampleRate      uint32
-	BitDepth        uint8
-	Channels        uint8
+	BitDepth        uint16
+	Channels        uint16
 	CompressionType meta.Option[AiffCompressionType]
 }
 
@@ -1509,8 +1585,8 @@ func (p AiffProperties) FileProperties() meta.FileProperties {
 		meta.Some(p.OverallBitrate),
 		meta.Some(p.AudioBitrate),
 		meta.Some(p.SampleRate),
-		meta.Some(p.BitDepth),
-		meta.Some(p.Channels),
+		meta.Some(uint8(p.BitDepth)),
+		meta.Some(uint8(p.Channels)),
 		meta.None[meta.ChannelMask](),
 	)
 }
@@ -1720,8 +1796,8 @@ func aiffReadProperties(comm []byte, isAifc bool, streamLen uint32, fileLength u
 		p.AudioBitrate = util.F64ToU32(float64(streamLen)*8/length + 0.5)
 	}
 	p.SampleRate = sampleRate
-	p.BitDepth = uint8(sampleSize)
-	p.Channels = uint8(channels)
+	p.BitDepth = sampleSize
+	p.Channels = channels
 
 	// Only AIFC files can carry a compression type.
 	if len(comm) >= 5+18 && isAifc {

@@ -154,6 +154,16 @@ func (t *TaggedFile) RemoveTags(tagType TagType) {
 // Clear clears the tags from the file, retaining only the [FileProperties].
 func (t *TaggedFile) Clear() { t.tags = nil }
 
+// PrimaryTagType returns the file's primary [TagType].
+func (t *TaggedFile) PrimaryTagType() TagType {
+	return t.fileType.PrimaryTagType()
+}
+
+// TagSupport returns the level of support the file has for `tagType`.
+func (t *TaggedFile) TagSupport(tagType TagType) TagSupport {
+	return t.fileType.TagSupport(tagType)
+}
+
 // SupportsTagType reports whether the [FileType] supports the [TagType].
 func (t *TaggedFile) SupportsTagType(tagType TagType) bool {
 	return t.fileType.TagSupport(tagType).IsReadable()

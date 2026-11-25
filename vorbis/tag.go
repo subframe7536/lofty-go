@@ -459,6 +459,12 @@ func (t *VorbisCommentsTag) PushPicture(p meta.Picture) {
 	t.pictures = append(t.pictures, meta.PictureInfoPair{Picture: p, Info: info})
 }
 
+// TagType returns [meta.TagTypeVorbisComments].
+func (t *VorbisCommentsTag) TagType() meta.TagType { return meta.TagTypeVorbisComments }
+
+// Contains reports whether an item with the key exists (case-insensitive).
+func (t *VorbisCommentsTag) Contains(key string) bool { _, ok := t.Get(key); return ok }
+
 // InsertPicture adds a picture with explicit information, mirroring Rust's
 // `OggPictureStorage::insert_picture`. According to the spec there can only be
 // one picture of type Icon and one of type OtherIcon, so an existing picture of
@@ -468,25 +474,34 @@ func (t *VorbisCommentsTag) PushPicture(p meta.Picture) {
 // extraction still drops it. Here the extraction runs first, so a failure
 // leaves the tag unchanged — an intentional deviation.
 func (t *VorbisCommentsTag) InsertPicture(p meta.Picture, info meta.Option[meta.PictureInformation]) error {
+	_, err := t.InsertPictureReplacing(p, info)
+	return err
+}
+
+// InsertPictureReplacing adds a picture like [VorbisCommentsTag.InsertPicture]
+// and returns the displaced Icon/OtherIcon picture (if any), mirroring Rust's
+// `OggPictureStorage::insert_picture` return value.
+func (t *VorbisCommentsTag) InsertPictureReplacing(p meta.Picture, info meta.Option[meta.PictureInformation]) (meta.Option[meta.PictureInfoPair], error) {
 	i, ok := info.Get()
 	if !ok {
 		var err error
 		i, err = meta.PictureInformationFromPicture(&p)
 		if err != nil {
 			// Rust's `insert_picture` propagates the extraction error
-			return err
+			return meta.None[meta.PictureInfoPair](), err
 		}
 	}
+	replaced := meta.None[meta.PictureInfoPair]()
 	if ty := p.PicType(); ty == meta.PictureTypeIcon || ty == meta.PictureTypeOtherIcon {
-		for i, existing := range t.pictures {
+		for idx, existing := range t.pictures {
 			if existing.Picture.PicType() == ty {
-				t.RemovePicture(i)
+				replaced = meta.Some(t.RemovePicture(idx))
 				break
 			}
 		}
 	}
 	t.pictures = append(t.pictures, meta.PictureInfoPair{Picture: p, Info: i})
-	return nil
+	return replaced, nil
 }
 
 // Clear removes all items and pictures.

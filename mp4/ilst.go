@@ -116,11 +116,77 @@ func (i AtomIdent) key() string {
 	return mp4AtomName(i.Fourcc)
 }
 
+// DataType returns the [DataType] corresponding to this [AtomData] payload,
+// mirroring Rust's `AtomData::data_type`.
+func (d AtomData) DataType() DataType {
+	switch d.Kind {
+	case AtomDataUTF8:
+		return DataTypeUtf8
+	case AtomDataUTF16:
+		return DataTypeUtf16
+	case AtomDataSignedInt, AtomDataBool:
+		return DataTypeBeSignedInteger
+	case AtomDataUnsignedInt:
+		return DataTypeBeUnsignedInteger
+	case AtomDataPicture:
+		m, ok := d.Pic.MimeType().Get()
+		if !ok {
+			return DataTypeReserved
+		}
+		switch m {
+		case meta.MimeTypeGif:
+			return DataTypeGif
+		case meta.MimeTypeJpeg:
+			return DataTypeJpeg
+		case meta.MimeTypePng:
+			return DataTypePng
+		case meta.MimeTypeBmp:
+			return DataTypeBmp
+		default:
+			return DataTypeReserved
+		}
+	default:
+		return d.Code
+	}
+}
+
+// AtomMismatchError is returned when attempting to use [Atom.Merge] with
+// mismatching identifiers.
+type AtomMismatchError struct{}
+
+func (*AtomMismatchError) Error() string {
+	return "attempted to use `Atom.Merge()` with mismatching identifiers"
+}
+
 // Atom is a single ilst metadata atom (one or more `data` payloads).
 type Atom struct {
 	Ident AtomIdent
 	Data  []AtomData
 }
+
+// Merge appends the data payloads of `other` into `a`, returning
+// [AtomMismatchError] if the identifiers do not match (Rust `Atom::merge`).
+func (a *Atom) Merge(other Atom) error {
+	if a.Ident != other.Ident {
+		return &AtomMismatchError{}
+	}
+	a.Data = append(a.Data, other.Data...)
+	return nil
+}
+
+// Flag atom identifiers matching Rust's `mp4::constants::flags`.
+var (
+	// Mp4FlagPodcast is the podcast flag (`pcst`).
+	Mp4FlagPodcast = FourccIdent("pcst")
+	// Mp4FlagGapless is the gapless playback flag (`pgap`).
+	Mp4FlagGapless = FourccIdent("pgap")
+	// Mp4FlagShowWork is the show work and movement flag (`shwm`).
+	Mp4FlagShowWork = FourccIdent("shwm")
+	// Mp4FlagHdVideo is the HD video flag (`hdvd`).
+	Mp4FlagHdVideo = FourccIdent("hdvd")
+	// Mp4FlagCompilation is the compilation flag (`cpil`).
+	Mp4FlagCompilation = FourccIdent("cpil")
+)
 
 // Ilst is the MP4 `ilst` metadata tag.
 type Ilst struct {
@@ -130,11 +196,17 @@ type Ilst struct {
 // NewIlst returns an empty `Ilst`.
 func NewIlst() *Ilst { return &Ilst{} }
 
+// TagType returns [meta.TagTypeMp4Ilst].
+func (l *Ilst) TagType() meta.TagType { return meta.TagTypeMp4Ilst }
+
 // Len returns the number of atoms.
 func (l *Ilst) Len() int { return len(l.atoms) }
 
 // IsEmpty reports whether the tag has no atoms.
 func (l *Ilst) IsEmpty() bool { return len(l.atoms) == 0 }
+
+// Clear removes all atoms from the tag.
+func (l *Ilst) Clear() { l.atoms = nil }
 
 // Atoms returns the atom list (for iteration).
 func (l *Ilst) Atoms() []Atom { return l.atoms }
@@ -1230,6 +1302,43 @@ func (l *Ilst) SetAdvisoryRating(rating AdvisoryRating) {
 		FourccIdent("rtng"),
 		[]AtomData{{Kind: AtomDataSignedInt, Int: int64(rating)}},
 	})
+}
+
+// Retain keeps only atoms for which `keep` returns true, preserving order
+// (Rust `Ilst::retain`).
+func (l *Ilst) Retain(keep func(*Atom) bool) {
+	l.removeWhere(func(a *Atom) bool { return !keep(a) })
+}
+
+// IsPodcast reports whether the podcast flag (`pcst`) is set.
+func (l *Ilst) IsPodcast() bool { v, _ := l.GetFlag(Mp4FlagPodcast); return v }
+
+// IsGapless reports whether the gapless playback flag (`pgap`) is set.
+func (l *Ilst) IsGapless() bool { v, _ := l.GetFlag(Mp4FlagGapless); return v }
+
+// IsShowWork reports whether the show work and movement flag (`shwm`) is set.
+func (l *Ilst) IsShowWork() bool { v, _ := l.GetFlag(Mp4FlagShowWork); return v }
+
+// IsHdVideo reports whether the HD video flag (`hdvd`) is set.
+func (l *Ilst) IsHdVideo() bool { v, _ := l.GetFlag(Mp4FlagHdVideo); return v }
+
+// IsCompilation reports whether the compilation flag (`cpil`) is set.
+func (l *Ilst) IsCompilation() bool { v, _ := l.GetFlag(Mp4FlagCompilation); return v }
+
+// Pictures returns all pictures stored in the `covr` atom, mirroring Rust's
+// `Ilst::pictures`.
+func (l *Ilst) Pictures() []meta.Picture {
+	a := l.Get(FourccIdent("covr"))
+	if a == nil {
+		return nil
+	}
+	var pics []meta.Picture
+	for _, d := range a.Data {
+		if d.Kind == AtomDataPicture {
+			pics = append(pics, d.Pic)
+		}
+	}
+	return pics
 }
 
 // RemovePictures removes the `covr` atom.

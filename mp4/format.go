@@ -62,18 +62,49 @@ type Mp4Properties struct {
 type AudioObjectType = meta.AudioObjectType
 
 const (
-	// AudioObjectTypeNull is the null/unknown object type.
-	AudioObjectTypeNull = meta.AudioObjectTypeNull
-	// AudioObjectTypeAacMain is AAC Main Profile.
-	AudioObjectTypeAacMain = meta.AudioObjectTypeAacMain
-	// AudioObjectTypeAacLowComplexity is AAC Low Complexity.
-	AudioObjectTypeAacLowComplexity = meta.AudioObjectTypeAacLowComplexity
-	// AudioObjectTypeAacScalableSampleRate is AAC Scalable Sample Rate.
-	AudioObjectTypeAacScalableSampleRate = meta.AudioObjectTypeAacScalableSampleRate
-	// AudioObjectTypeAacLongTermPrediction is AAC Long Term Predictor.
-	AudioObjectTypeAacLongTermPrediction = meta.AudioObjectTypeAacLongTermPrediction
-	// AudioObjectTypeAudioLosslessCoding is MPEG-4 ALS.
-	AudioObjectTypeAudioLosslessCoding = meta.AudioObjectTypeAudioLosslessCoding
+	AudioObjectTypeNull                                         = meta.AudioObjectTypeNull
+	AudioObjectTypeAacMain                                      = meta.AudioObjectTypeAacMain
+	AudioObjectTypeAacLowComplexity                             = meta.AudioObjectTypeAacLowComplexity
+	AudioObjectTypeAacScalableSampleRate                        = meta.AudioObjectTypeAacScalableSampleRate
+	AudioObjectTypeAacLongTermPrediction                        = meta.AudioObjectTypeAacLongTermPrediction
+	AudioObjectTypeSpectralBandReplication                      = meta.AudioObjectTypeSpectralBandReplication
+	AudioObjectTypeAACScalable                                  = meta.AudioObjectTypeAACScalable
+	AudioObjectTypeTwinVQ                                       = meta.AudioObjectTypeTwinVQ
+	AudioObjectTypeCodeExcitedLinearPrediction                  = meta.AudioObjectTypeCodeExcitedLinearPrediction
+	AudioObjectTypeHarmonicVectorExcitationCoding               = meta.AudioObjectTypeHarmonicVectorExcitationCoding
+	AudioObjectTypeTextToSpeechtInterface                       = meta.AudioObjectTypeTextToSpeechtInterface
+	AudioObjectTypeMainSynthetic                                = meta.AudioObjectTypeMainSynthetic
+	AudioObjectTypeWavetableSynthesis                           = meta.AudioObjectTypeWavetableSynthesis
+	AudioObjectTypeGeneralMIDI                                  = meta.AudioObjectTypeGeneralMIDI
+	AudioObjectTypeAlgorithmicSynthesis                         = meta.AudioObjectTypeAlgorithmicSynthesis
+	AudioObjectTypeErrorResilientAacLowComplexity               = meta.AudioObjectTypeErrorResilientAacLowComplexity
+	AudioObjectTypeErrorResilientAacLongTermPrediction          = meta.AudioObjectTypeErrorResilientAacLongTermPrediction
+	AudioObjectTypeErrorResilientAacScalable                    = meta.AudioObjectTypeErrorResilientAacScalable
+	AudioObjectTypeErrorResilientAacTwinVQ                      = meta.AudioObjectTypeErrorResilientAacTwinVQ
+	AudioObjectTypeErrorResilientAacBitSlicedArithmeticCoding   = meta.AudioObjectTypeErrorResilientAacBitSlicedArithmeticCoding
+	AudioObjectTypeErrorResilientAacLowDelay                    = meta.AudioObjectTypeErrorResilientAacLowDelay
+	AudioObjectTypeErrorResilientCodeExcitedLinearPrediction    = meta.AudioObjectTypeErrorResilientCodeExcitedLinearPrediction
+	AudioObjectTypeErrorResilientHarmonicVectorExcitationCoding = meta.AudioObjectTypeErrorResilientHarmonicVectorExcitationCoding
+	AudioObjectTypeErrorResilientHarmonicIndividualLinesNoise   = meta.AudioObjectTypeErrorResilientHarmonicIndividualLinesNoise
+	AudioObjectTypeErrorResilientParametric                     = meta.AudioObjectTypeErrorResilientParametric
+	AudioObjectTypeSinuSoidalCoding                             = meta.AudioObjectTypeSinuSoidalCoding
+	AudioObjectTypeParametricStereo                             = meta.AudioObjectTypeParametricStereo
+	AudioObjectTypeMpegSurround                                 = meta.AudioObjectTypeMpegSurround
+	AudioObjectTypeMpegLayer1                                   = meta.AudioObjectTypeMpegLayer1
+	AudioObjectTypeMpegLayer2                                   = meta.AudioObjectTypeMpegLayer2
+	AudioObjectTypeMpegLayer3                                   = meta.AudioObjectTypeMpegLayer3
+	AudioObjectTypeDirectStreamTransfer                         = meta.AudioObjectTypeDirectStreamTransfer
+	AudioObjectTypeAudioLosslessCoding                          = meta.AudioObjectTypeAudioLosslessCoding
+	AudioObjectTypeScalableLosslessCoding                       = meta.AudioObjectTypeScalableLosslessCoding
+	AudioObjectTypeScalableLosslessCodingNoneCore               = meta.AudioObjectTypeScalableLosslessCodingNoneCore
+	AudioObjectTypeErrorResilientAacEnhancedLowDelay            = meta.AudioObjectTypeErrorResilientAacEnhancedLowDelay
+	AudioObjectTypeSymbolicMusicRepresentationSimple            = meta.AudioObjectTypeSymbolicMusicRepresentationSimple
+	AudioObjectTypeSymbolicMusicRepresentationMain              = meta.AudioObjectTypeSymbolicMusicRepresentationMain
+	AudioObjectTypeUnifiedSpeechAudioCoding                     = meta.AudioObjectTypeUnifiedSpeechAudioCoding
+	AudioObjectTypeSpatialAudioObjectCoding                     = meta.AudioObjectTypeSpatialAudioObjectCoding
+	AudioObjectTypeLowDelayMpegSurround                         = meta.AudioObjectTypeLowDelayMpegSurround
+	AudioObjectTypeSpatialAudioObjectCodingDialogueEnhancement  = meta.AudioObjectTypeSpatialAudioObjectCodingDialogueEnhancement
+	AudioObjectTypeAudioSync                                    = meta.AudioObjectTypeAudioSync
 )
 
 // FileProperties converts to generic [meta.FileProperties].
@@ -94,6 +125,9 @@ type Mp4File struct {
 	Properties Mp4Properties
 	Ilst       meta.Option[*Ilst]
 }
+
+// Ftyp returns the file's major brand from the `ftyp` atom (Rust `Mp4File::ftyp`).
+func (f *Mp4File) Ftyp() string { return f.Properties.Ftyp }
 
 // mp4BoxHeader is a parsed box header.
 type mp4BoxHeader struct {

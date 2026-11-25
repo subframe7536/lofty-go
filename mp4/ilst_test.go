@@ -692,3 +692,67 @@ func TestIlstRetainKnownIdentsWithUnknownTypes(t *testing.T) {
 		t.Fatalf("uint data lost in round-trip: %+v", got.Data)
 	}
 }
+
+// Ported from lofty-rs/lofty/src/mp4/ilst/write.rs::write_errors_propagate.
+func TestIlstWriteErrorsPropagate(t *testing.T) {
+	tag := NewIlst()
+	tag.Insert(Atom{
+		Ident: FourccIdent("fooo"),
+		Data: []AtomData{{
+			Kind: AtomDataUnknown,
+			Code: DataTypeOther(0xFFFFFF + 1),
+			Data: []byte{1, 2, 3},
+		}},
+	})
+	var buf bytes.Buffer
+	if err := tag.DumpTo(&buf, meta.NewWriteOptions()); err == nil {
+		t.Fatal("expected DumpTo error for >24-bit DataType code")
+	}
+}
+
+func TestIlstHelpersAndAtomMethods(t *testing.T) {
+	if got := (AtomData{Kind: AtomDataUTF8, Text: "hi"}).DataType(); got != DataTypeUtf8 {
+		t.Fatalf("DataType(UTF8) = %v", got)
+	}
+	if got := (AtomData{Kind: AtomDataBool, Bool: true}).DataType(); got != DataTypeBeSignedInteger {
+		t.Fatalf("DataType(Bool) = %v", got)
+	}
+	pic := meta.PictureUnchecked([]byte{1, 2, 3}).MimeType(meta.MimeTypeJpeg).Build()
+	if got := (AtomData{Kind: AtomDataPicture, Pic: pic}).DataType(); got != DataTypeJpeg {
+		t.Fatalf("DataType(Jpeg) = %v", got)
+	}
+
+	a1 := Atom{Ident: FourccIdent("©ART"), Data: []AtomData{{Kind: AtomDataUTF8, Text: "foo"}}}
+	a2 := Atom{Ident: FourccIdent("©ART"), Data: []AtomData{{Kind: AtomDataUTF8, Text: "bar"}}}
+	if err := a1.Merge(a2); err != nil || len(a1.Data) != 2 {
+		t.Fatalf("Merge same ident: err=%v len=%d", err, len(a1.Data))
+	}
+	if err := a1.Merge(Atom{Ident: FourccIdent("©nam")}); err == nil {
+		t.Fatal("expected AtomMismatchError on mismatching ident")
+	}
+
+	ilst := NewIlst()
+	if ilst.TagType() != meta.TagTypeMp4Ilst {
+		t.Fatalf("TagType = %v", ilst.TagType())
+	}
+	ilst.SetFlag(Mp4FlagPodcast, true)
+	ilst.SetFlag(Mp4FlagGapless, true)
+	ilst.SetFlag(Mp4FlagShowWork, true)
+	ilst.SetFlag(Mp4FlagHdVideo, true)
+	ilst.SetFlag(Mp4FlagCompilation, true)
+	if !ilst.IsPodcast() || !ilst.IsGapless() || !ilst.IsShowWork() || !ilst.IsHdVideo() || !ilst.IsCompilation() {
+		t.Fatal("expected all MP4 flags to be true")
+	}
+	ilst.InsertPicture(pic)
+	if pics := ilst.Pictures(); len(pics) != 1 {
+		t.Fatalf("Pictures() len = %d, want 1", len(pics))
+	}
+	ilst.Retain(func(a *Atom) bool { return a.Ident == Mp4FlagCompilation })
+	if ilst.Len() != 1 || !ilst.IsCompilation() || ilst.IsPodcast() {
+		t.Fatalf("Retain failed: len=%d", ilst.Len())
+	}
+	ilst.Clear()
+	if !ilst.IsEmpty() {
+		t.Fatal("expected empty Ilst after Clear")
+	}
+}

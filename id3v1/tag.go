@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	meta "github.com/subframe7536/lofty-go/internal/meta"
@@ -134,6 +135,123 @@ func (t *Id3v1Tag) Tag() *meta.Tag {
 	}
 	return tag
 }
+
+// NewId3v1Tag creates an empty [Id3v1Tag].
+func NewId3v1Tag() *Id3v1Tag { return &Id3v1Tag{} }
+
+// TagType returns [meta.TagTypeID3v1].
+func (t *Id3v1Tag) TagType() meta.TagType { return meta.TagTypeID3v1 }
+
+// IsEmpty reports whether all fields of the tag are unset.
+func (t *Id3v1Tag) IsEmpty() bool { return t.isEmpty() }
+
+// Len returns the number of populated fields in the tag.
+func (t *Id3v1Tag) Len() int {
+	n := 0
+	if t.Title.IsSome() {
+		n++
+	}
+	if t.Artist.IsSome() {
+		n++
+	}
+	if t.Album.IsSome() {
+		n++
+	}
+	if t.Year.IsSome() {
+		n++
+	}
+	if t.Comment.IsSome() {
+		n++
+	}
+	if t.TrackNumber.IsSome() {
+		n++
+	}
+	if t.Genre.IsSome() {
+		n++
+	}
+	return n
+}
+
+// Clear resets all fields of the tag.
+func (t *Id3v1Tag) Clear() { *t = Id3v1Tag{} }
+
+// Contains reports whether the field corresponding to `key` is populated.
+func (t *Id3v1Tag) Contains(key meta.ItemKey) bool {
+	switch key {
+	case meta.ItemKeyTrackTitle:
+		return t.Title.IsSome()
+	case meta.ItemKeyTrackArtist:
+		return t.Artist.IsSome()
+	case meta.ItemKeyAlbumTitle:
+		return t.Album.IsSome()
+	case meta.ItemKeyYear, meta.ItemKeyRecordingDate:
+		return t.Year.IsSome()
+	case meta.ItemKeyComment:
+		return t.Comment.IsSome()
+	case meta.ItemKeyTrackNumber:
+		return t.TrackNumber.IsSome()
+	case meta.ItemKeyGenre:
+		return t.Genre.IsSome()
+	default:
+		return false
+	}
+}
+
+// SetTitle sets the title.
+func (t *Id3v1Tag) SetTitle(value string) { t.Title = meta.Some(value) }
+
+// RemoveTitle clears the title.
+func (t *Id3v1Tag) RemoveTitle() { t.Title = meta.None[string]() }
+
+// SetArtist sets the artist.
+func (t *Id3v1Tag) SetArtist(value string) { t.Artist = meta.Some(value) }
+
+// RemoveArtist clears the artist.
+func (t *Id3v1Tag) RemoveArtist() { t.Artist = meta.None[string]() }
+
+// SetAlbum sets the album.
+func (t *Id3v1Tag) SetAlbum(value string) { t.Album = meta.Some(value) }
+
+// RemoveAlbum clears the album.
+func (t *Id3v1Tag) RemoveAlbum() { t.Album = meta.None[string]() }
+
+// SetComment sets the comment.
+func (t *Id3v1Tag) SetComment(value string) { t.Comment = meta.Some(value) }
+
+// RemoveComment clears the comment.
+func (t *Id3v1Tag) RemoveComment() { t.Comment = meta.None[string]() }
+
+// Track returns the track number.
+func (t *Id3v1Tag) Track() (uint32, bool) {
+	if n, ok := t.TrackNumber.Get(); ok {
+		return uint32(n), true
+	}
+	return 0, false
+}
+
+// SetTrack sets the track number (ignoring values outside 0..255, matching Rust).
+func (t *Id3v1Tag) SetTrack(value uint32) {
+	if value <= 255 {
+		t.TrackNumber = meta.Some(uint8(value))
+	}
+}
+
+// RemoveTrack clears the track number.
+func (t *Id3v1Tag) RemoveTrack() { t.TrackNumber = meta.None[uint8]() }
+
+// SetGenre sets the genre by case-insensitive lookup in [Id3v1Genres].
+// Unknown genre strings are ignored (matching Rust `Id3v1Tag::set_genre`).
+func (t *Id3v1Tag) SetGenre(value string) {
+	for i, g := range Id3v1Genres {
+		if strings.EqualFold(g, value) {
+			t.Genre = meta.Some(uint8(i))
+			return
+		}
+	}
+}
+
+// RemoveGenre clears the genre.
+func (t *Id3v1Tag) RemoveGenre() { t.Genre = meta.None[uint8]() }
 
 // Date returns the year as a [Timestamp].
 func (t *Id3v1Tag) Date() meta.Option[meta.Timestamp] {

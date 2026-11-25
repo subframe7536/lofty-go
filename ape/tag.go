@@ -175,6 +175,16 @@ func NewApeItem(key string, value meta.ItemValue) (*ApeItem, error) {
 	return &ApeItem{Key: key, Value: value}, nil
 }
 
+// TextValues splits NUL-separated text or locator values, mirroring Rust's
+// `ApeItem::text_values`. Returns nil for binary items.
+func (i *ApeItem) TextValues() []string {
+	s, ok := i.Value.IntoString()
+	if !ok {
+		return nil
+	}
+	return strings.Split(s, "\x00")
+}
+
 // ApeTag is an APEv1/APEv2 tag.
 type ApeTag struct {
 	ReadOnly bool
@@ -183,6 +193,12 @@ type ApeTag struct {
 
 // NewApeTag creates an empty [ApeTag].
 func NewApeTag() *ApeTag { return &ApeTag{} }
+
+// TagType returns [meta.TagTypeApe].
+func (t *ApeTag) TagType() meta.TagType { return meta.TagTypeApe }
+
+// Contains reports whether an item with the key exists (case-insensitive).
+func (t *ApeTag) Contains(key string) bool { _, ok := t.Item(key); return ok }
 
 // Items returns the tag's items.
 func (t *ApeTag) Items() []*ApeItem { return t.items }
@@ -216,6 +232,17 @@ func (t *ApeTag) Push(item *ApeItem) {
 		return
 	}
 	t.items = append(t.items, item)
+}
+
+// InsertItem replaces any existing item with the same key without NUL-merging
+// and returns the replaced item if one existed (Rust `ApeTag::insert`).
+func (t *ApeTag) InsertItem(item *ApeItem) meta.Option[*ApeItem] {
+	prev, hadPrev := t.Item(item.Key)
+	t.insert(item)
+	if hadPrev {
+		return meta.Some(prev)
+	}
+	return meta.None[*ApeItem]()
 }
 
 // insert removes any item with the same key, then appends (Rust

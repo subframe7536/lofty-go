@@ -142,6 +142,14 @@ func tagRestrictionsFromByte(b byte) TagRestrictions {
 	return r
 }
 
+// TagRestrictionsFromByte decodes a restrictions byte (ID3v2.4 §3.2 item d),
+// mirroring Rust's `TagRestrictions::from_byte`.
+func TagRestrictionsFromByte(b byte) TagRestrictions { return tagRestrictionsFromByte(b) }
+
+// AsByte encodes a [TagRestrictions] byte (ID3v2.4 §3.2 item d),
+// mirroring Rust's `TagRestrictions::as_bytes`.
+func (r TagRestrictions) AsByte() uint8 { return r.asByte() }
+
 // asByte encodes a [TagRestrictions] byte (id3v2.4 §3.2 item d).
 func (r TagRestrictions) asByte() uint8 {
 	var b uint8
@@ -384,6 +392,18 @@ func (t *Id3v2Tag) OriginalVersion() Id3v2Version { return t.originalVersion }
 
 // SetOriginalVersion sets the stored original version.
 func (t *Id3v2Tag) SetOriginalVersion(v Id3v2Version) { t.originalVersion = v }
+
+// TagType returns [meta.TagTypeID3v2].
+func (t *Id3v2Tag) TagType() meta.TagType { return meta.TagTypeID3v2 }
+
+// Len returns the number of frames in the tag.
+func (t *Id3v2Tag) Len() int { return t.Frames.Len() }
+
+// Clear removes all frames from the tag.
+func (t *Id3v2Tag) Clear() { t.Frames.Clear() }
+
+// Contains reports whether the tag contains a frame with the given ID.
+func (t *Id3v2Tag) Contains(id FrameId) bool { return t.Frames.Get(id) != nil }
 
 // IsEmpty reports whether the tag has no frames.
 func (t *Id3v2Tag) IsEmpty() bool { return t.Frames.IsEmpty() }

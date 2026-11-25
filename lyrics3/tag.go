@@ -21,6 +21,9 @@ var (
 	lyrics3v2Header = []byte("LYRICSBEGIN")
 )
 
+// Lyrics3v1MaxLyricsLen is the maximum length of Lyrics3v1 lyrics text (5100 bytes).
+const Lyrics3v1MaxLyricsLen = lyrics3v1MaxLyricsLen
+
 const (
 	lyrics3v1MaxLyricsLen = 5100
 	lyrics3v2TagMaxSize   = 999999
@@ -60,6 +63,20 @@ func (e *Lyrics3v2ParseError) Unwrap() error { return e.Source }
 // Lyrics3Tag is a Lyrics3 (v1) tag.
 type Lyrics3Tag struct {
 	Lyrics string
+}
+
+// NewLyrics3Tag creates an empty [Lyrics3Tag].
+func NewLyrics3Tag() *Lyrics3Tag { return &Lyrics3Tag{} }
+
+// TagType returns [meta.TagTypeLyrics3].
+func (t *Lyrics3Tag) TagType() meta.TagType { return meta.TagTypeLyrics3 }
+
+// Clear removes the lyrics text.
+func (t *Lyrics3Tag) Clear() { t.Lyrics = "" }
+
+// Contains reports whether the tag contains the given item key.
+func (t *Lyrics3Tag) Contains(key meta.ItemKey) bool {
+	return key == meta.ItemKeyLyrics && t.Lyrics != ""
 }
 
 // ParseLyrics3Tag parses a complete Lyrics3v1 tag (`LYRICSBEGIN`..`LYRICSEND`).
@@ -211,6 +228,15 @@ type Lyrics3v2Tag struct {
 	ExtendedTrackTitle meta.Option[string]
 	Images             []Lyrics3v2Image
 }
+
+// NewLyrics3v2Tag creates an empty [Lyrics3v2Tag].
+func NewLyrics3v2Tag() *Lyrics3v2Tag { return &Lyrics3v2Tag{} }
+
+// TagType returns [meta.TagTypeLyrics3v2].
+func (t *Lyrics3v2Tag) TagType() meta.TagType { return meta.TagTypeLyrics3v2 }
+
+// Clear resets all fields of the tag.
+func (t *Lyrics3v2Tag) Clear() { *t = Lyrics3v2Tag{} }
 
 // ParseLyrics3v2Tag parses a complete Lyrics3v2 tag
 // (`LYRICSBEGIN`..`<size>`..`LYRICS200`).

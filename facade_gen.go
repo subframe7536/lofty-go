@@ -41,6 +41,9 @@ type (
 	TaggedFile                 = meta.TaggedFile
 	BoundTaggedFile            = meta.BoundTaggedFile
 	FileType                   = meta.FileType
+	Accessor                   = meta.Accessor
+	TagExt                     = meta.TagExt
+	TaggedFileExt              = meta.TaggedFileExt
 	PictureParseError          = meta.PictureParseError
 	UnknownImageFormatError    = meta.UnknownImageFormatError
 	MimeType                   = meta.MimeType
@@ -209,6 +212,7 @@ type (
 // from ogg
 type (
 	OggParseError = ogg.OggParseError
+	OggPageHeader = ogg.OggPageHeader
 	OggPage       = ogg.OggPage
 	OggProperties = ogg.OggProperties
 	OggVorbisFile = ogg.OggVorbisFile
@@ -225,17 +229,18 @@ type (
 
 // from mp4
 type (
-	Mp4ParseError  = mp4.Mp4ParseError
-	Mp4Codec       = mp4.Mp4Codec
-	Mp4Properties  = mp4.Mp4Properties
-	Mp4File        = mp4.Mp4File
-	AtomDataKind   = mp4.AtomDataKind
-	AtomData       = mp4.AtomData
-	DataType       = mp4.DataType
-	AtomIdent      = mp4.AtomIdent
-	Atom           = mp4.Atom
-	Ilst           = mp4.Ilst
-	AdvisoryRating = mp4.AdvisoryRating
+	Mp4ParseError     = mp4.Mp4ParseError
+	Mp4Codec          = mp4.Mp4Codec
+	Mp4Properties     = mp4.Mp4Properties
+	Mp4File           = mp4.Mp4File
+	AtomDataKind      = mp4.AtomDataKind
+	AtomData          = mp4.AtomData
+	DataType          = mp4.DataType
+	AtomIdent         = mp4.AtomIdent
+	AtomMismatchError = mp4.AtomMismatchError
+	Atom              = mp4.Atom
+	Ilst              = mp4.Ilst
+	AdvisoryRating    = mp4.AdvisoryRating
 )
 
 // from iff
@@ -563,6 +568,11 @@ const (
 	BigEndian            = util.BigEndian
 )
 
+// from lyrics3
+const (
+	Lyrics3v1MaxLyricsLen = lyrics3.Lyrics3v1MaxLyricsLen
+)
+
 // from id3v2
 const (
 	Id3v2HeaderErrorOther             = id3v2.Id3v2HeaderErrorOther
@@ -643,6 +653,13 @@ const (
 	ImageSizeP256                     = id3v2.ImageSizeP256
 	ImageSizeP64                      = id3v2.ImageSizeP64
 	ImageSizeP6464                    = id3v2.ImageSizeP6464
+)
+
+// from ogg
+const (
+	OggPageFlagContinuation = ogg.OggPageFlagContinuation
+	OggPageFlagBOS          = ogg.OggPageFlagBOS
+	OggPageFlagEOS          = ogg.OggPageFlagEOS
 )
 
 // from mp4
@@ -792,6 +809,15 @@ var (
 var (
 	Id3v1TagMarker = id3v1.Id3v1TagMarker
 	Id3v1Genres    = id3v1.Id3v1Genres
+)
+
+// from mp4
+var (
+	Mp4FlagPodcast     = mp4.Mp4FlagPodcast
+	Mp4FlagGapless     = mp4.Mp4FlagGapless
+	Mp4FlagShowWork    = mp4.Mp4FlagShowWork
+	Mp4FlagHdVideo     = mp4.Mp4FlagHdVideo
+	Mp4FlagCompilation = mp4.Mp4FlagCompilation
 )
 
 // from iff
@@ -1248,12 +1274,20 @@ func TryParseTimestamp(input string) Option[Timestamp] {
 }
 
 // from lyrics3
+func NewLyrics3Tag() *Lyrics3Tag {
+	return lyrics3.NewLyrics3Tag()
+}
+
 func ParseLyrics3Tag(content []byte) (*Lyrics3Tag, error) {
 	return lyrics3.ParseLyrics3Tag(content)
 }
 
 func Lyrics3TagFromTag(tag *meta.Tag) *Lyrics3Tag {
 	return lyrics3.Lyrics3TagFromTag(tag)
+}
+
+func NewLyrics3v2Tag() *Lyrics3v2Tag {
+	return lyrics3.NewLyrics3v2Tag()
 }
 
 func ParseLyrics3v2Tag(content []byte, parseOptions meta.ParseOptions) (*Lyrics3v2Tag, error) {
@@ -1279,6 +1313,10 @@ func Lyrics3v1WriteTo(file meta.FileLike, tag *Lyrics3Tag, writeOptions meta.Wri
 // from id3v1
 func Id3v1TagParse(reader [128]byte, parseMode meta.ParsingMode) (*Id3v1Tag, error) {
 	return id3v1.Id3v1TagParse(reader, parseMode)
+}
+
+func NewId3v1Tag() *Id3v1Tag {
+	return id3v1.NewId3v1Tag()
 }
 
 func Id3v1TagFromTag(input *meta.Tag) *Id3v1Tag {
@@ -1534,6 +1572,10 @@ func ParseId3v2Tag(reader io.Reader, header Id3v2Header, parseOptions meta.Parse
 	return id3v2.ParseId3v2Tag(reader, header, parseOptions)
 }
 
+func TagRestrictionsFromByte(b byte) TagRestrictions {
+	return id3v2.TagRestrictionsFromByte(b)
+}
+
 func ParseId3v2HeaderRaw(reader io.Reader) (Id3v2Header, error) {
 	return id3v2.ParseId3v2HeaderRaw(reader)
 }
@@ -1657,12 +1699,20 @@ func ReadEndTags(reader io.ReadSeeker, start int64, streamLen uint64, parseOptio
 }
 
 // from ogg
+func ReadOggPage(reader io.ReadSeeker) (*OggPage, error) {
+	return ogg.ReadOggPage(reader)
+}
+
 func OggCrc32(data []byte) uint32 {
 	return ogg.OggCrc32(data)
 }
 
 func OggReadCountPackets(reader io.ReadSeeker, count int) ([][]byte, *OggPage, uint32, error) {
 	return ogg.OggReadCountPackets(reader, count)
+}
+
+func OggPaginate(packets [][]byte, serial uint32, abgp uint64, flags byte) []*OggPage {
+	return ogg.OggPaginate(packets, serial, abgp, flags)
 }
 
 func OggVorbisFileReadFrom(reader io.ReadSeeker, po meta.ParseOptions) (*OggVorbisFile, error) {

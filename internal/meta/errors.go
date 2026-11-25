@@ -44,6 +44,12 @@ func (e *FileEncodingError) Error() string {
 	return "failed to write to file"
 }
 
+// IsUnsupportedTag reports whether this error represents an [UnsupportedTagError].
+func (e *FileEncodingError) IsUnsupportedTag() bool {
+	var u *UnsupportedTagError
+	return errors.As(e.Source, &u)
+}
+
 func (e *FileEncodingError) Unwrap() error { return e.Source }
 
 func (e *FileEncodingError) withFormat(ty FileType) *FileEncodingError {
