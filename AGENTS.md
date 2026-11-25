@@ -5,25 +5,76 @@ library). The vendored Rust source lives in `lofty-rs/` and is the ground
 truth for semantics. Test fixtures are **reused** from the Rust tree —
 never copy them.
 
-## Build / test
+## Build, test & tooling
+
+Module: `github.com/subframe7536/lofty-go` (Go 1.27+, pure Go / no cgo; facade codegen via `go run ./scripts/facadegen`).
+
+### Build & test
 
 ```bash
-go build ./...          # single package at repo root
-go vet ./...
-go test ./...           # ~15s; all tests in package lofty
-go test -run TestX -v ./  # focused test
-
-# Quality tooling (all live in $GOPATH/bin)
-golangci-lint run ./... # .golangci.yml: standard linters + staticcheck,
-                        # misspell, unparam, unconvert, perfsprint,
-                        # copyloopvar, usestdlibvars; gofumpt+goimports fmt
-golangci-lint fmt ./... # auto-fix formatting (gofumpt is stricter gofmt)
-gopls check ./*.go      # language-server diagnostics
-staticcheck ./...
-govulncheck ./...
+go build ./...                          # compile all packages
+go test ./...                           # ~15s across all packages (root has no tests)
+go test -race ./...                     # race detector (important for GlobalOptions & concurrent reads)
+go test -v -run=^TestX$ ./<pkg>         # focused test; anchor regex + -v verifies match
+go test -v -run=^TestX$/^Sub$ ./<pkg>   # focused subtest
+go test -count=1 -failfast ./<pkg>      # bypass test cache; stop on first failure
+go test -coverprofile=/tmp/cover.out ./... && go tool cover -func=/tmp/cover.out
 ```
 
-No codegen, no cgo. Module: `github.com/subframe7536/lofty-go` (Go 1.27+).
+### Quality, formatting & modfiles
+
+Tools live in `$(go env GOPATH)/bin` (`GOBIN`). When a third-party tool is missing locally, run it ad-hoc via `go run <pkg>@latest`:
+
+```bash
+# Built-in checks & modfile hygiene
+go vet ./...                            # `go tool vet help` lists analyzers
+go mod tidy -diff                       # verify go.mod/go.sum sync without modifying
+go mod verify                           # verify module cache checksums
+gofmt -l -s .                           # check formatting when golangci-lint is absent (`-w` to apply)
+
+# Linters & formatters (.golangci.yml: standard + copyloopvar, misspell, perfsprint,
+# unconvert, unparam, usestdlibvars; gofumpt + goimports formatting)
+golangci-lint run ./...
+golangci-lint fmt ./...                 # auto-fix formatting + imports (gofumpt is stricter than gofmt)
+staticcheck ./...                       # or `go run honnef.co/go/tools/cmd/staticcheck@latest ./...`
+govulncheck ./...                       # or `go run golang.org/x/vuln/cmd/govulncheck@latest ./...`
+gopls check <file.go>                   # LSP diagnostics on edited files (./*.go for root facade)
+```
+
+Deep-audit tools (ad-hoc via `go run`):
+- `go run go.uber.org/nilaway/cmd/nilaway@latest -exclude-test-files ./...` — nil-dereference checks in parsers.
+- `go run github.com/securego/gosec/v2/cmd/gosec@latest ./...` — security scan (annotate intentional exceptions with `// #nosec Gxxx -- <reason>`).
+- `go run golang.org/x/tools/cmd/deadcode@latest -test ./...` — unused-code scan (note: library repo has no app `main()`, so review exported-API hits carefully).
+
+### Docs, modernization & refactoring
+
+```bash
+go doc [-src] <pkg>[.<Symbol>]          # fast offline API/source lookup before reading large files
+go fix -diff ./...                      # Go 1.26+ modernizer (preview first; disable noisy analyzers via -<name>=false)
+gofmt -r '<pat> -> <repl>' .            # AST-safe structural rewrite (omit -w first to preview)
+go mod why -m <module>                  # explain why a dependency is in go.mod
+```
+
+### Fuzzing, stress & benchmarks
+
+```bash
+# Fuzzing (`tests/fuzz_test.go`: FuzzReadFrom, FuzzId3v2Parse)
+# Regular `go test` only runs seeds; fuzz targets must run one at a time on `./tests` (not `./...`).
+go test -fuzz=^FuzzReadFrom$ -fuzztime=30s ./tests
+go test -fuzz=^FuzzId3v2Parse$ -fuzztime=30s ./tests
+
+# Stress flaky tests (`-count` runs serially; `stress` runs test binary in parallel)
+go test -run=^TestX$ -count=100 ./<pkg>
+go test -c -o=/tmp/pkg.test ./<pkg> && go run golang.org/x/tools/cmd/stress@latest /tmp/pkg.test -test.run=^TestX$
+
+# Benchmarks & profiling (`tests/bench_test.go`)
+# Always pass `-o=/tmp/tests.test` when profiling so no `*.test` binary is left in the repo.
+go test -run=^$ -bench=. -benchmem ./tests
+go test -run=^$ -bench=. -benchmem -count=10 ./tests > /tmp/after.txt
+go run golang.org/x/perf/cmd/benchstat@latest /tmp/before.txt /tmp/after.txt
+go test -run=^$ -bench=^BenchmarkParseId3v2Tag$ -o=/tmp/tests.test -cpuprofile=/tmp/cpu.out -memprofile=/tmp/mem.out ./tests
+go tool pprof -top /tmp/cpu.out
+```
 
 ## Layout
 
@@ -159,6 +210,7 @@ metadata crosses 4 GiB; attempting to write boxes >4 GiB returns
 
 - Match Rust names where possible: `Option[T]`, `Some/None`, `IsSome/
   IsNone`, `ok bool` returns, `XxxFromStr` parsers, `TagType*` constants.
-- Error types mirror `LoftyError`/`FileParseError`/`TagError` in errors.go.
+- Error types mirror `LoftyError`/`FileParseError`/`TagError` in
+  `internal/util/errors.go` and `internal/meta/errors.go`.
 - No doc files beyond README/AGENTS/TODO unless asked.
-- Don't commit test binaries or `dbg_*` files.
+- Don't commit `*.test` binaries, profile/coverage outputs, or `dbg_*` files.
