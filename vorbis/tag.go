@@ -1,6 +1,7 @@
 package vorbis
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
@@ -550,52 +551,94 @@ func splitRating(e vcEntry) (meta.Popularimeter, bool) {
 	return meta.PopularimeterMapped(email, meta.TagTypeVorbisComments, rate, 0)
 }
 
-// Tag converts to a generic [Tag].
-func (t *VorbisCommentsTag) Tag() *meta.Tag {
-	tag := meta.NewTag(meta.TagTypeVorbisComments)
-	var remainder *VorbisCommentsTag
-	for _, e := range t.entries {
-		if e.item.Key() == meta.ItemKeyUnknown {
-			if popm, ok := splitRating(e); ok {
-				tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyPopularimeter, meta.ItemValueText(popm.String())))
-				continue
-			}
-			// Unmappable items stay in the companion (Rust's split_tag)
-			if util.GetGlobalOptions().PreserveFormatSpecificItems {
-				if remainder == nil {
-					remainder = NewVorbisCommentsTag()
-				}
-				remainder.entries = append(remainder.entries, e)
-			}
-			continue
+func cloneVorbisItemValue(value meta.ItemValue) meta.ItemValue {
+	if binary, ok := value.Binary(); ok {
+		return meta.ItemValueBinary(bytes.Clone(binary))
+	}
+	return value
+}
+
+func cloneVorbisTagItem(item meta.TagItem) meta.TagItem {
+	clone := item
+	clone.SetValue(cloneVorbisItemValue(item.Value()))
+	return clone
+}
+
+func cloneVorbisPicture(picture meta.Picture) meta.Picture {
+	builder := meta.PictureUnchecked(bytes.Clone(picture.Data())).PicType(picture.PicType())
+	if mimeType, ok := picture.MimeType().Get(); ok {
+		builder.MimeType(mimeType)
+	}
+	if description, ok := picture.Description(); ok {
+		builder.Description(description)
+	}
+	return builder.Build()
+}
+
+func (t *VorbisCommentsTag) clone() *VorbisCommentsTag {
+	if t == nil {
+		return nil
+	}
+	clone := &VorbisCommentsTag{Vendor: t.Vendor}
+	if t.entries != nil {
+		clone.entries = make([]vcEntry, len(t.entries))
+		for i, entry := range t.entries {
+			clone.entries[i] = vcEntry{item: cloneVorbisTagItem(entry.item), key: entry.key}
 		}
-		tag.PushUnchecked(e.item)
 	}
-	if remainder != nil {
-		remainder.Vendor = t.Vendor
+	if t.pictures != nil {
+		clone.pictures = make([]meta.PictureInfoPair, len(t.pictures))
+		for i, pair := range t.pictures {
+			clone.pictures[i] = meta.PictureInfoPair{Picture: cloneVorbisPicture(pair.Picture), Info: pair.Info}
+		}
+	}
+	return clone
+}
+
+// CloneCompanion implements [meta.CompanionCloner].
+func (t *VorbisCommentsTag) CloneCompanion() any { return t.clone() }
+
+// Tag converts to a generic [Tag]. It is non-destructive; use
+// [VorbisCommentsTag.SplitTag] for the destructive conversion.
+func (t *VorbisCommentsTag) Tag() *meta.Tag {
+	remainder, tag := t.clone().SplitTag()
+	if util.GetGlobalOptions().PreserveFormatSpecificItems && !remainder.IsEmpty() {
 		tag.SetCompanionTag(remainder)
-	}
-	for _, pic := range t.pictures {
-		tag.PushPicture(pic.Picture)
 	}
 	return tag
 }
 
-// VorbisCommentsTagFromTag converts a generic [Tag] to a [VorbisCommentsTag],
-// mirroring Rust's `MergeTag for SplitTagRemainder`.
-func VorbisCommentsTagFromTag(input *meta.Tag, vendor string) *VorbisCommentsTag {
-	input = input.Clone()
-	vc := &VorbisCommentsTag{Vendor: vendor}
-	// Format-specific items preserved in the companion merge back first
-	if util.GetGlobalOptions().PreserveFormatSpecificItems {
-		if comp, ok := input.CompanionTag().(*VorbisCommentsTag); ok && comp != nil {
-			vc.entries = append(vc.entries, comp.entries...)
-			if vc.Vendor == "" {
-				vc.Vendor = comp.Vendor
+// SplitTag destructively moves representable comments and pictures into a
+// generic [Tag], leaving unmapped comments and the vendor string in the
+// receiver, mirroring Rust's `SplitTag::split_tag`. The receiver is returned
+// as the remainder.
+func (t *VorbisCommentsTag) SplitTag() (*VorbisCommentsTag, *meta.Tag) {
+	tag := meta.NewTag(meta.TagTypeVorbisComments)
+	original := t.entries
+	kept := make([]vcEntry, 0, len(original))
+	for _, entry := range original {
+		if entry.item.Key() == meta.ItemKeyUnknown {
+			if popm, ok := splitRating(entry); ok {
+				tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyPopularimeter, meta.ItemValueText(popm.String())))
+				continue
 			}
+			kept = append(kept, entry)
+			continue
 		}
+		tag.PushUnchecked(entry.item)
 	}
-	for _, item := range input.Items() {
+	t.entries = kept
+	for _, picture := range t.pictures {
+		tag.PushPicture(picture.Picture)
+	}
+	t.pictures = nil
+	return t, tag
+}
+
+// MergeTag merges a generic [Tag] into this remainder, mirroring Rust's
+// `MergeTag::merge_tag`. The receiver is mutated and returned.
+func (t *VorbisCommentsTag) MergeTag(tag *meta.Tag) *VorbisCommentsTag {
+	for _, item := range tag.Items() {
 		// Binary items are not allowed in Vorbis comments
 		val, ok := item.Value().IntoString()
 		if !ok {
@@ -625,19 +668,36 @@ func VorbisCommentsTagFromTag(input *meta.Tag, vendor string) *VorbisCommentsTag
 				key += ":" + email
 			}
 			ritem := newVorbisEntry(key, util.Itoa(int(popm.MappedValue(meta.TagTypeVorbisComments))))
-			vc.entries = append(vc.entries, ritem)
+			t.entries = append(t.entries, ritem)
 			continue
 		}
-		vc.pushMapped(item)
+		t.pushMapped(item)
 	}
-	for _, pic := range input.Pictures() {
+	for _, pic := range tag.Pictures() {
 		info, err := meta.PictureInformationFromPicture(&pic)
 		if err != nil {
 			continue
 		}
-		vc.pictures = append(vc.pictures, meta.PictureInfoPair{Picture: pic, Info: info})
+		t.pictures = append(t.pictures, meta.PictureInfoPair{Picture: pic, Info: info})
 	}
-	return vc
+	return t
+}
+
+// VorbisCommentsTagFromTag converts a generic [Tag] to a [VorbisCommentsTag],
+// mirroring Rust's `From<Tag> for VorbisComments`.
+func VorbisCommentsTagFromTag(input *meta.Tag, vendor string) *VorbisCommentsTag {
+	input = input.Clone()
+	base := &VorbisCommentsTag{Vendor: vendor}
+	// Format-specific items preserved in the companion merge back first
+	if util.GetGlobalOptions().PreserveFormatSpecificItems {
+		if comp, ok := input.CompanionTag().(*VorbisCommentsTag); ok && comp != nil {
+			base = comp.clone()
+			if vendor != "" {
+				base.Vendor = vendor
+			}
+		}
+	}
+	return base.MergeTag(input)
 }
 
 // --- codec ---
@@ -673,7 +733,7 @@ func strictBase64Decode(s string) ([]byte, error) {
 }
 
 func allocCheck(n uint64) error {
-	if n > uint64(util.GetGlobalOptions().AllocationLimit) {
+	if n > uint64(util.GetGlobalOptions().AllocationLimit) { // #nosec G115 -- AllocationLimit is a positive byte-count configuration value; a negative setting is a meaningless misconfiguration
 		return &util.AllocationError{Kind: util.AllocationLimitExceeded}
 	}
 	return nil
@@ -696,7 +756,7 @@ func ParseVorbisComments(content []byte, parseOptions meta.ParseOptions) (*Vorbi
 	if err != nil {
 		return nil, &VorbisCommentsParseError{Source: err}
 	}
-	if uint64(vendorLen) > uint64(len(content)-pos) {
+	if uint64(vendorLen) > uint64(len(content)-pos) { // #nosec G115 -- pos never exceeds len(content) because every advance is bounds-checked, so the subtraction is non-negative
 		return nil, &VorbisCommentsParseError{Source: &util.SizeMismatchError{}}
 	}
 	if err := allocCheck(uint64(vendorLen)); err != nil {
@@ -721,7 +781,7 @@ func ParseVorbisComments(content []byte, parseOptions meta.ParseOptions) (*Vorbi
 	if err != nil {
 		return nil, &VorbisCommentsParseError{Source: err}
 	}
-	if uint64(itemCount) > uint64(len(content)-pos)>>2 {
+	if uint64(itemCount) > uint64(len(content)-pos)>>2 { // #nosec G115 -- pos never exceeds len(content) because every advance is bounds-checked, so the subtraction is non-negative
 		return nil, &VorbisCommentsParseError{Source: &util.SizeMismatchError{}}
 	}
 	for i := uint32(0); i < itemCount; i++ {
@@ -729,7 +789,7 @@ func ParseVorbisComments(content []byte, parseOptions meta.ParseOptions) (*Vorbi
 		if err != nil {
 			return nil, &VorbisCommentsParseError{Source: err}
 		}
-		if uint64(itemLen) > uint64(len(content)-pos) {
+		if uint64(itemLen) > uint64(len(content)-pos) { // #nosec G115 -- pos never exceeds len(content) because every advance is bounds-checked, so the subtraction is non-negative
 			return nil, &VorbisCommentsParseError{Source: &util.SizeMismatchError{}}
 		}
 		if err := allocCheck(uint64(itemLen)); err != nil {
@@ -903,13 +963,13 @@ func encodeVorbisComments(tag *VorbisCommentsTag, withPictures bool) ([]byte, er
 	}
 	out := buf[:0]
 	var tmp [4]byte
-	binary.LittleEndian.PutUint32(tmp[:], uint32(len(tag.Vendor)))
+	binary.LittleEndian.PutUint32(tmp[:], uint32(len(tag.Vendor))) // #nosec G115 -- mirrors Rust `vendor_bytes.len() as u32` cast; truncation is intentional parity
 	out = append(out, tmp[:]...)
 	out = append(out, tag.Vendor...)
-	binary.LittleEndian.PutUint32(tmp[:], uint32(len(entries)))
+	binary.LittleEndian.PutUint32(tmp[:], uint32(len(entries))) // #nosec G115 -- mirrors Rust's u32 item counter; truncation is intentional parity
 	out = append(out, tmp[:]...)
 	for _, e := range entries {
-		binary.LittleEndian.PutUint32(tmp[:], uint32(len(e.k)+1+len(e.v)))
+		binary.LittleEndian.PutUint32(tmp[:], uint32(len(e.k)+1+len(e.v))) // #nosec G115 -- each entry length is validated <= MaxUint32 in the pre-pass loop above (Rust u32::try_from parity)
 		out = append(out, tmp[:]...)
 		out = append(out, e.k...)
 		out = append(out, '=')

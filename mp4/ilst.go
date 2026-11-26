@@ -287,17 +287,31 @@ func (l *Ilst) removeWhere(match func(*Atom) bool) {
 	l.atoms = kept
 }
 
-// Tag converts the `Ilst` to a generic [Tag] (Rust `SplitTag`/`From<Ilst> for Tag`).
+// Tag converts the `Ilst` to a generic [Tag] (Rust `From<Ilst> for Tag`).
+// It is non-destructive; use [Ilst.SplitTag] for the destructive conversion.
 func (l *Ilst) Tag() *meta.Tag {
+	clone := &Ilst{atoms: cloneAtoms(l.atoms)}
+	remainder, tag := clone.SplitTag()
+	if util.GetGlobalOptions().PreserveFormatSpecificItems && len(remainder.atoms) > 0 {
+		tag.SetCompanionTag(remainder)
+	}
+	return tag
+}
+
+// SplitTag destructively converts representable atoms into a generic [Tag],
+// leaving unconvertible atoms (or unconvertible data payloads) in the receiver,
+// mirroring Rust's `SplitTag::split_tag`. The receiver is returned as the
+// remainder.
+func (l *Ilst) SplitTag() (*Ilst, *meta.Tag) {
 	tag := meta.NewTag(meta.TagTypeMp4Ilst)
-	var remainder []Atom
+	kept := make([]Atom, 0, len(l.atoms))
 
 	for _, atom := range l.atoms {
 		keyStr := atom.Ident.key()
 		ik, mapped := meta.ItemKeyFromKey(meta.TagTypeMp4Ilst, keyStr)
 		isCovr := !atom.Ident.Freeform && atom.Ident.Fourcc == [4]byte{'c', 'o', 'v', 'r'}
 		if !mapped && !isCovr {
-			remainder = append(remainder, atom)
+			kept = append(kept, atom)
 			continue
 		}
 
@@ -356,40 +370,56 @@ func (l *Ilst) Tag() *meta.Tag {
 			}
 		}
 		if len(remaining) > 0 {
-			remainder = append(remainder, Atom{Ident: atom.Ident, Data: remaining})
+			kept = append(kept, Atom{Ident: atom.Ident, Data: remaining})
 		}
 	}
+	l.atoms = kept
 
 	// Advisory rating (rtng) — signed int or unknown bytes → ParentalAdvisory.
-	// The atom sits in `remainder` at this point (SignedInt/Unknown aren't
-	// consumed by the retain loop).
-	rem := &Ilst{atoms: remainder}
-	if rating, ok := rem.AdvisoryRating(); ok {
+	if rating, ok := l.AdvisoryRating(); ok {
 		tag.InsertText(meta.ItemKeyParentalAdvisory, util.Itoa(int(rating.AsU8())))
-		rem.Remove(FourccIdent("rtng"))
+		l.Remove(FourccIdent("rtng"))
 	}
-	remainder = rem.atoms
-
-	if util.GetGlobalOptions().PreserveFormatSpecificItems && len(remainder) > 0 {
-		tag.SetCompanionTag(&Ilst{atoms: remainder})
-	}
-	return tag
+	return l, tag
 }
 
-// IlstFromTag converts a generic [Tag] to an `Ilst` (Rust `MergeTag`/`From<Tag> for Ilst`).
-func IlstFromTag(tag *meta.Tag) *Ilst {
-	merged := &Ilst{}
-	if util.GetGlobalOptions().PreserveFormatSpecificItems {
-		if comp, ok := tag.CompanionTag().(*Ilst); ok && comp != nil {
-			// Rust's `From<Tag> for Ilst` takes (moves) the companion, so the
-			// caller's tag no longer references it. Copy the atoms instead of
-			// aliasing the companion's slices, otherwise repeated merges would
-			// accumulate duplicate atoms in the source tag.
-			merged.atoms = cloneAtoms(comp.atoms)
+// pushConvertedAtom appends data to an atom with the same identifier in the
+// converted atom list, or creates the atom (Rust conversion.rs `push_atom`).
+func pushConvertedAtom(atoms []Atom, ident AtomIdent, data AtomData) []Atom {
+	for i := range atoms {
+		if atoms[i].Ident == ident {
+			atoms[i].Data = append(atoms[i].Data, data)
+			return atoms
 		}
 	}
+	return append(atoms, Atom{Ident: ident, Data: []AtomData{data}})
+}
 
+// replaceConvertedAtom replaces the payload of an atom with the same
+// identifier in the converted atom list, or creates it (Rust `replace_atom`).
+func replaceConvertedAtom(atoms []Atom, ident AtomIdent, data AtomData) []Atom {
+	for i := range atoms {
+		if atoms[i].Ident == ident {
+			atoms[i].Data = []AtomData{data}
+			return atoms
+		}
+	}
+	return append(atoms, Atom{Ident: ident, Data: []AtomData{data}})
+}
+
+// convertedTagAtoms converts generic items and pictures to atoms, mirroring
+// Rust conversion.rs `from_tag`. Merging happens only within this converted
+// list; companion atoms are concatenated separately by the caller.
+func convertedTagAtoms(tag *meta.Tag) []Atom {
 	var tracks, discs [2]meta.Option[uint16]
+	atoms := make([]Atom, 0, tag.ItemCount())
+
+	convertToUint := func(space *meta.Option[uint16], text string) {
+		// Rust's convert_to_uint only overwrites the slot when parsing succeeds.
+		if parsed := u16FromStringOpt(text); parsed.IsSome() {
+			*space = parsed
+		}
+	}
 
 	for _, item := range tag.Items() {
 		// Rust discards items without a mapping (including `ItemKey::Unknown`).
@@ -404,45 +434,41 @@ func IlstFromTag(tag *meta.Tag) *Ilst {
 		ident := ilstIdentFromString(key)
 		switch item.Key() {
 		case meta.ItemKeyTrackNumber:
-			tracks[0] = u16FromStringOpt(text)
-			continue
+			convertToUint(&tracks[0], text)
 		case meta.ItemKeyTrackTotal:
-			tracks[1] = u16FromStringOpt(text)
-			continue
+			convertToUint(&tracks[1], text)
 		case meta.ItemKeyDiscNumber:
-			discs[0] = u16FromStringOpt(text)
-			continue
+			convertToUint(&discs[0], text)
 		case meta.ItemKeyDiscTotal:
-			discs[1] = u16FromStringOpt(text)
-			continue
+			convertToUint(&discs[1], text)
 		case meta.ItemKeyFlagCompilation, meta.ItemKeyFlagPodcast:
 			if b, ok := flagItemFromText(text); ok {
-				merged.atoms = append(merged.atoms, Atom{ident, []AtomData{{Kind: AtomDataBool, Bool: b}}})
+				atoms = replaceConvertedAtom(atoms, ident, AtomData{Kind: AtomDataBool, Bool: b})
 			}
-			continue
 		case meta.ItemKeyParentalAdvisory:
 			if v, ok := u8FromString(text); ok {
 				if rating, ok := advisoryRatingFromU8(v); ok {
-					merged.atoms = append(merged.atoms, Atom{ident, []AtomData{{Kind: AtomDataSignedInt, Int: int64(rating)}}})
+					atoms = replaceConvertedAtom(atoms, ident, AtomData{Kind: AtomDataSignedInt, Int: int64(rating)})
 				}
 			}
-			continue
 		case meta.ItemKeyPopularimeter:
 			if popm, err := meta.PopularimeterFromStr(text); err == nil {
-				merged.atoms = append(merged.atoms, Atom{ident, []AtomData{{Kind: AtomDataUTF8, Text: util.Itoa(int(popm.MappedValue(meta.TagTypeMp4Ilst)))}}})
+				atoms = pushConvertedAtom(atoms, ident, AtomData{Kind: AtomDataUTF8, Text: util.Itoa(int(popm.MappedValue(meta.TagTypeMp4Ilst)))})
 			}
-			continue
 		default:
-			// Rust's `merge_tag` bails on any non-text value
-			// (`let ItemValue::Text(text) = ... else { continue }`), so binary
-			// unknown items only survive through the companion `Ilst`.
-			merged.atoms = append(merged.atoms, Atom{ident, []AtomData{{Kind: AtomDataUTF8, Text: text}}})
+			atoms = pushConvertedAtom(atoms, ident, AtomData{Kind: AtomDataUTF8, Text: text})
 		}
 	}
 
-	// Pictures → single covr atom with multiple data
-	for _, pic := range tag.Pictures() {
-		merged.InsertPicture(pic)
+	// Pictures form one covr atom inside the converted list. In particular,
+	// they must not merge into a covr atom cloned from the companion tag.
+	if pictures := tag.Pictures(); len(pictures) > 0 {
+		data := make([]AtomData, 0, len(pictures))
+		for _, pic := range pictures {
+			pic.SetPicType(meta.PictureTypeOther)
+			data = append(data, AtomData{Kind: AtomDataPicture, Pic: pic})
+		}
+		atoms = append(atoms, Atom{Ident: FourccIdent("covr"), Data: data})
 	}
 
 	createIntPair := func(fourcc string, pair [2]meta.Option[uint16]) {
@@ -456,7 +482,7 @@ func IlstFromTag(tag *meta.Tag) *Ilst {
 		if v, ok := pair[1].Get(); ok {
 			binary.BigEndian.PutUint16(data[4:], v)
 		}
-		merged.atoms = append(merged.atoms, Atom{
+		atoms = append(atoms, Atom{
 			FourccIdent(fourcc),
 			[]AtomData{{Kind: AtomDataUnknown, Code: 0, Data: data}},
 		})
@@ -464,21 +490,71 @@ func IlstFromTag(tag *meta.Tag) *Ilst {
 	createIntPair("trkn", tracks)
 	createIntPair("disk", discs)
 
-	return merged
+	return atoms
 }
 
-// cloneAtoms copies atoms and their data slices so a merge can't mutate the
-// source tag's atoms.
+// IlstFromTag converts a generic [Tag] to an `Ilst` (Rust `From<Tag> for Ilst`).
+func IlstFromTag(tag *meta.Tag) *Ilst {
+	base := NewIlst()
+	if util.GetGlobalOptions().PreserveFormatSpecificItems {
+		if comp, ok := tag.CompanionTag().(*Ilst); ok && comp != nil {
+			base = comp.clone()
+		}
+	}
+	return base.MergeTag(tag)
+}
+
+// MergeTag merges a generic [Tag] into this remainder, mirroring Rust's
+// `MergeTag::merge_tag`. The receiver is mutated and returned.
+func (l *Ilst) MergeTag(tag *meta.Tag) *Ilst {
+	l.atoms = append(l.atoms, convertedTagAtoms(tag)...)
+	return l
+}
+
+// clonePicture copies a picture and its data through the public builder API.
+func clonePicture(p meta.Picture) meta.Picture {
+	builder := meta.PictureUnchecked(bytes.Clone(p.Data())).PicType(p.PicType())
+	if mimeType, ok := p.MimeType().Get(); ok {
+		builder.MimeType(mimeType)
+	}
+	if description, ok := p.Description(); ok {
+		builder.Description(description)
+	}
+	return builder.Build()
+}
+
+// cloneAtoms deep-copies atoms, their data slices, raw unknown payloads, and
+// picture payloads so a merge can't mutate the source tag's atoms.
 func cloneAtoms(atoms []Atom) []Atom {
 	if atoms == nil {
 		return nil
 	}
 	out := make([]Atom, len(atoms))
 	for i, a := range atoms {
-		out[i] = Atom{Ident: a.Ident, Data: append([]AtomData(nil), a.Data...)}
+		data := make([]AtomData, len(a.Data))
+		for j, d := range a.Data {
+			switch d.Kind {
+			case AtomDataUnknown:
+				d.Data = bytes.Clone(d.Data)
+			case AtomDataPicture:
+				d.Pic = clonePicture(d.Pic)
+			}
+			data[j] = d
+		}
+		out[i] = Atom{Ident: a.Ident, Data: data}
 	}
 	return out
 }
+
+func (l *Ilst) clone() *Ilst {
+	if l == nil {
+		return nil
+	}
+	return &Ilst{atoms: cloneAtoms(l.atoms)}
+}
+
+// CloneCompanion implements [meta.CompanionCloner].
+func (l *Ilst) CloneCompanion() any { return l.clone() }
 
 // DumpTo writes the encoded `ilst` atom (with header) to a writer.
 func (l *Ilst) DumpTo(writer io.Writer, writeOptions meta.WriteOptions) error {
@@ -504,7 +580,7 @@ func encodeIlst(ilst *Ilst) ([]byte, error) {
 		buf.Write(sz[:])
 		buf.WriteString("data")
 		// version (1), then the 24-bit type code
-		buf.Write([]byte{0, byte(dataType >> 16), byte(dataType >> 8), byte(dataType)})
+		buf.Write([]byte{0, byte(dataType >> 16), byte(dataType >> 8), byte(dataType)}) // #nosec G115 -- data type code is a small constant or validated <= 0xFFFFFF at the Unknown path; only the low 24 bits are written by design
 		buf.Write([]byte{0, 0, 0, 0})
 		buf.Write(payload)
 		return nil
@@ -544,7 +620,7 @@ func encodeIlst(ilst *Ilst) ([]byte, error) {
 			code, payload := intPayload(d.Int, true)
 			return code, payload, nil
 		case AtomDataUnsignedInt:
-			code, payload := uintPayload(uint32(d.Uint))
+			code, payload := uintPayload(uint32(d.Uint)) // #nosec G115 -- mirrors Rust's u32 unsigned-int storage (parse_uint/write_unsigned_int); truncation matches what Rust can represent
 			return code, payload, nil
 		default:
 			if uint32(d.Code) > 0xFFFFFF {
@@ -619,7 +695,7 @@ func encodeIlst(ilst *Ilst) ([]byte, error) {
 // ilstAtomSize returns header+payload as a u32 atom size, or
 // [meta.TooMuchDataError] if it doesn't fit.
 func ilstAtomSize(header, payload int) (uint32, error) {
-	total := uint64(header) + uint64(payload)
+	total := uint64(header) + uint64(payload) // #nosec G115 -- header/payload are non-negative buffer lengths, and the sum is bounds-checked against math.MaxUint32 immediately below
 	if total > math.MaxUint32 {
 		return 0, &meta.TooMuchDataError{}
 	}
@@ -631,7 +707,7 @@ func ilstAtomSize(header, payload int) (uint32, error) {
 // of 1/2/4 bytes (`bytes_to_occupy_uint` — 3-byte values round up to 4).
 func intPayload(v int64, signed bool) (uint32, []byte) {
 	var b [8]byte
-	binary.BigEndian.PutUint64(b[:], uint64(v))
+	binary.BigEndian.PutUint64(b[:], uint64(v)) // #nosec G115 -- bit-pattern-preserving cast for big-endian serialization of the int64 value
 	if signed {
 		// Rust stores i32; wider Go values take 8 bytes (unrepresentable in Rust)
 		if v > math.MaxInt32 || v < math.MinInt32 {
@@ -639,7 +715,7 @@ func intPayload(v int64, signed bool) (uint32, []byte) {
 		}
 		return 21, append([]byte(nil), b[4:]...)
 	}
-	return 22, uintPayloadBytes(uint32(v))
+	return 22, uintPayloadBytes(uint32(v)) // #nosec G115 -- mirrors Rust's u32 unsigned-int writer (write_unsigned_int); values originate from u32 atom payloads
 }
 
 // uintPayload packs a u32 like Rust's `write_unsigned_int`.
@@ -748,11 +824,11 @@ func ParseIlst(reader io.ReadSeeker, end int64, parseOptions meta.ParseOptions) 
 		// swallows every header-level error — a malformed atom (invalid
 		// ident, oversize, bad freeform) just ends the scan while keeping
 		// previously parsed atoms.
-		atom, err := mp4ReadBoxBound(cursor, uint64(end-cpos), parseOptions.ParsingMode)
+		atom, err := mp4ReadBoxBound(cursor, uint64(end-cpos), parseOptions.ParsingMode) // #nosec G115 -- loop above terminates when cpos >= end, so the difference is non-negative
 		if err != nil || atom == nil {
 			break
 		}
-		atomEnd := atom.pos + int64(atom.size)
+		atomEnd := atom.pos + int64(atom.size) // #nosec G115 -- box payload size validated <= the ilst body bound by mp4ReadBoxBound, itself a buffered in-memory span
 		// `free`/`skip` atoms inside ilst are ignored
 		if atom.name == [4]byte{'f', 'r', 'e', 'e'} || atom.name == [4]byte{'s', 'k', 'i', 'p'} {
 			if _, err := cursor.Seek(atomEnd, io.SeekStart); err != nil {
@@ -798,14 +874,14 @@ func ParseIlst(reader io.ReadSeeker, end int64, parseOptions meta.ParseOptions) 
 			// Rust `parse_data_inner`: `reader.next()?` — errors here
 			// propagate in all modes; `Ok(None)` ends the loop. The bound
 			// is the whole remaining `ilst` body, matching AtomReader.
-			ch, err := mp4ReadBoxBound(cursor, uint64(end-cpos), parseOptions.ParsingMode)
+			ch, err := mp4ReadBoxBound(cursor, uint64(end-cpos), parseOptions.ParsingMode) // #nosec G115 -- loop above terminates when cpos >= end, so the difference is non-negative
 			if err != nil {
 				return nil, err
 			}
 			if ch == nil {
 				break
 			}
-			childEnd := ch.pos + int64(ch.size)
+			childEnd := ch.pos + int64(ch.size) // #nosec G115 -- box payload size validated <= the ilst body bound by mp4ReadBoxBound, itself a buffered in-memory span
 			// ch.size is the payload size; a data atom needs >= 8 (type+locale)
 			if ch.size < 8 {
 				if parseOptions.ParsingMode == meta.ParsingModeStrict {
@@ -838,7 +914,7 @@ func ParseIlst(reader io.ReadSeeker, end int64, parseOptions meta.ParseOptions) 
 			}
 			// Rust reads a u24 type code (DataType::from(read_u24))
 			code := uint32(dh[1])<<16 | uint32(dh[2])<<8 | uint32(dh[3])
-			contentLen := int(ch.size) - 8
+			contentLen := int(ch.size) - 8 // #nosec G115 -- guarded by the ch.size < 8 check above; size validated by mp4ReadBoxBound, and TryByteSlice enforces the allocation limit
 			if contentLen <= 0 {
 				if _, err := cursor.Seek(childEnd, io.SeekStart); err != nil {
 					break
@@ -991,7 +1067,7 @@ func ilstInterpretAtomContent(code uint32, payload []byte, fourcc [4]byte, parse
 			return AtomData{}, err
 		}
 		// Rust's `parse_uint` returns a u32: don't sign-extend through int32.
-		return AtomData{Kind: AtomDataUnsignedInt, Uint: uint64(uint32(v))}, nil
+		return AtomData{Kind: AtomDataUnsignedInt, Uint: uint64(uint32(v))}, nil // #nosec G115 -- deliberate zero-extension through uint32; Rust's parse_uint yields u32 so the value must not sign-extend (see comment)
 	default:
 		return AtomData{Kind: AtomDataUnknown, Code: DataType(code), Data: payload}, nil
 	}
@@ -1007,7 +1083,7 @@ func parseBEInt(b []byte, signed bool) (int32, error) {
 		v = int32(b[0])
 	case 2:
 		if signed {
-			v = int32(int16(binary.BigEndian.Uint16(b)))
+			v = int32(int16(binary.BigEndian.Uint16(b))) // #nosec G115 -- deliberate sign extension of a 16-bit big-endian value, mirroring Rust's parse_int
 		} else {
 			v = int32(binary.BigEndian.Uint16(b))
 		}
@@ -1016,9 +1092,9 @@ func parseBEInt(b []byte, signed bool) (int32, error) {
 		if signed && b[0]&0x80 != 0 {
 			pad = 0xFF
 		}
-		v = int32(binary.BigEndian.Uint32([]byte{pad, b[0], b[1], b[2]}))
+		v = int32(binary.BigEndian.Uint32([]byte{pad, b[0], b[1], b[2]})) // #nosec G115 -- intentional bit reinterpretation of the sign-padded 24-bit big-endian integer, mirroring Rust's parse_int
 	case 4:
-		v = int32(binary.BigEndian.Uint32(b))
+		v = int32(binary.BigEndian.Uint32(b)) // #nosec G115 -- intentional bit reinterpretation of a fixed-width big-endian integer, mirroring Rust's i32::from_be_bytes in parse_int
 	default:
 		return 0, &Mp4ParseError{Message: `unexpected atom size for type "BE integer"`}
 	}
@@ -1037,7 +1113,7 @@ func mp4ParseFreeform(reader io.ReadSeeker, atom *mp4BoxHeader, atomEnd int64, m
 	var values [2]string
 	for i, want := range [2]string{"mean", "name"} {
 		pos, _ := reader.Seek(0, io.SeekCurrent)
-		ch, err := mp4ReadBoxBound(reader, uint64(atomEnd-pos), mode)
+		ch, err := mp4ReadBoxBound(reader, uint64(atomEnd-pos), mode) // #nosec G115 -- reader positions advance monotonically through validated child boxes bounded against atomEnd, so the difference is non-negative
 		if err != nil {
 			return AtomIdent{}, err
 		}
@@ -1047,13 +1123,13 @@ func mp4ParseFreeform(reader io.ReadSeeker, atom *mp4BoxHeader, atomEnd int64, m
 		if ch.size < 4 {
 			return AtomIdent{}, &Mp4ParseError{Source: util.NewNotEnoughDataError(12)}
 		}
-		if ch.pos+int64(ch.size) > atomEnd {
+		if ch.pos+int64(ch.size) > atomEnd { // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 positions
 			return AtomIdent{}, &meta.SizeMismatchError{}
 		}
 		if _, err := reader.Seek(4, io.SeekCurrent); err != nil {
 			return AtomIdent{}, &Mp4ParseError{Source: err}
 		}
-		content, err := util.TryByteSlice(int(ch.size) - 4)
+		content, err := util.TryByteSlice(int(ch.size) - 4) // #nosec G115 -- guarded by the ch.size < 4 error above; size validated by mp4ReadBoxBound, and TryByteSlice enforces the allocation limit
 		if err != nil {
 			return AtomIdent{}, &Mp4ParseError{Source: err}
 		}
@@ -1100,7 +1176,7 @@ func (l *Ilst) extractNumber(fourcc [4]byte, offset int) (uint16, bool) {
 func (l *Ilst) setNumber(fourcc [4]byte, offset int, value uint32) {
 	var num, tot uint16
 	if offset == 4 {
-		num = uint16(value)
+		num = uint16(value) // #nosec G115 -- mirrors Rust `(value as u16)` cast in set_track/set_disk; truncation is intentional parity
 		if t, ok := l.extractNumber(fourcc, 6); ok {
 			tot = t
 		}
@@ -1108,7 +1184,7 @@ func (l *Ilst) setNumber(fourcc [4]byte, offset int, value uint32) {
 		if n, ok := l.extractNumber(fourcc, 4); ok {
 			num = n
 		}
-		tot = uint16(value)
+		tot = uint16(value) // #nosec G115 -- mirrors Rust `(value as u16)` cast in set_track_total/set_disk_total; truncation is intentional parity
 	}
 	data := []byte{0, 0, byte(num >> 8), byte(num), byte(tot >> 8), byte(tot)}
 	l.ReplaceAtom(Atom{
@@ -1199,7 +1275,7 @@ func (l *Ilst) removeTotal(fourcc [4]byte) {
 	if ok {
 		l.ReplaceAtom(Atom{
 			AtomIdent{Fourcc: fourcc},
-			[]AtomData{{Kind: AtomDataUnknown, Code: 0, Data: []byte{0, 0, byte(num >> 8), byte(num), 0, 0}}},
+			[]AtomData{{Kind: AtomDataUnknown, Code: 0, Data: []byte{0, 0, byte(num >> 8), byte(num), 0, 0}}}, // #nosec G115 -- num is a uint16 being serialized big-endian; the byte conversions are exact byte extraction
 		})
 	}
 }

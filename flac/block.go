@@ -45,7 +45,7 @@ func readFlacBlock(r io.ReadSeeker, predicate func(ty byte) bool) (*flacBlock, e
 	b := &flacBlock{
 		ty:    hdr[0] & 0x7F,
 		last:  hdr[0]&0x80 != 0,
-		start: uint64(start),
+		start: uint64(start), // #nosec G115 -- start is a Seek stream position, always non-negative
 	}
 	size := int(hdr[1])<<16 | int(hdr[2])<<8 | int(hdr[3])
 
@@ -61,7 +61,7 @@ func readFlacBlock(r io.ReadSeeker, predicate func(ty byte) bool) (*flacBlock, e
 		return nil, err
 	}
 
-	b.end = b.start + uint64(size) + blockHeaderSize
+	b.end = b.start + uint64(size) + blockHeaderSize // #nosec G115 -- size is parsed from a 24-bit big-endian field, so it is at most 0xFFFFFF and non-negative
 	return b, nil
 }
 
@@ -73,7 +73,7 @@ func (b *flacBlock) marshal(last bool) []byte {
 		first |= 0x80
 	}
 	n := len(b.content)
-	out = append(out, first, byte(n>>16), byte(n>>8), byte(n))
+	out = append(out, first, byte(n>>16), byte(n>>8), byte(n)) // #nosec G115 -- block content is validated against flacMaxBlockSize (24-bit) before marshaling, so no bits are lost
 	return append(out, b.content...)
 }
 

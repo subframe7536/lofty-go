@@ -262,7 +262,7 @@ func FlacFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Fl
 		return nil, flacFileError(&meta.SizeMismatchError{})
 	}
 
-	props, err := readFlacProperties(streamInfo.content, uint64(end-current), uint64(end))
+	props, err := readFlacProperties(streamInfo.content, uint64(end-current), uint64(end)) // #nosec G115 -- end is a non-negative seek position and current > end is rejected just above
 	if err != nil {
 		return nil, flacFileError(err)
 	}
@@ -294,8 +294,8 @@ func readFlacProperties(streamInfo []byte, streamLength, fileLength uint64) (Fla
 		p.Duration = util.DurationFromMillis(length)
 
 		if length > 0 && fileLength > 0 && streamLength > 0 {
-			p.OverallBitrate = uint32(util.SaturatingMul(fileLength, 8) / length)
-			p.AudioBitrate = uint32(util.SaturatingMul(streamLength, 8) / length)
+			p.OverallBitrate = uint32(util.SaturatingMul(fileLength, 8) / length) // #nosec G115 -- mirrors Rust `as u32` cast; truncation is intentional parity
+			p.AudioBitrate = uint32(util.SaturatingMul(streamLength, 8) / length) // #nosec G115 -- mirrors Rust `as u32` cast; truncation is intentional parity
 		}
 	}
 	return p, nil
@@ -444,8 +444,8 @@ func flacWriteScan(file meta.FileLike, parseOptions meta.ParseOptions) (*flacSca
 	}
 
 	scan := &flacScanMetadata{
-		metaStart: int64(streamInfo.start),
-		metaEnd:   int64(streamInfo.end),
+		metaStart: int64(streamInfo.start), // #nosec G115 -- block start/end derive from int64 seek positions plus a 24-bit size, always within int64 range
+		metaEnd:   int64(streamInfo.end),   // #nosec G115 -- block start/end derive from int64 seek positions plus a 24-bit size, always within int64 range
 		// The last block is determined later
 		kept: [][]byte{streamInfo.marshal(false)},
 	}
@@ -467,7 +467,7 @@ func flacWriteScan(file meta.FileLike, parseOptions meta.ParseOptions) (*flacSca
 			return nil, scanErr(err)
 		}
 		last = block.last
-		scan.metaEnd = int64(block.end)
+		scan.metaEnd = int64(block.end) // #nosec G115 -- block end derives from an int64 seek position plus 24-bit block sizes, always within int64 range
 
 		switch block.ty {
 		case blockIDPicture:
@@ -482,7 +482,7 @@ func flacWriteScan(file meta.FileLike, parseOptions meta.ParseOptions) (*flacSca
 				return nil, &meta.FileEncodingError{Source: io.ErrUnexpectedEOF}
 			}
 			vlen := binary.LittleEndian.Uint32(data)
-			if uint64(vlen) > uint64(len(data)-4) {
+			if uint64(vlen) > uint64(len(data)-4) { // #nosec G115 -- len(data) >= 4 is guaranteed by the truncation check above, so the subtraction is non-negative
 				return nil, &meta.FileEncodingError{Source: &meta.SizeMismatchError{}}
 			}
 			if vb := data[4 : 4+int(vlen)]; utf8.Valid(vb) {
@@ -586,7 +586,7 @@ func flacWriteBlocksAt(file meta.FileLike, scan *flacScanMetadata, vc *vorbis.Vo
 		for _, b := range kept {
 			blocksLen += uint64(len(b))
 		}
-		oldMetaLen := uint64(scan.metaEnd - scan.metaStart)
+		oldMetaLen := uint64(scan.metaEnd - scan.metaStart) // #nosec G115 -- metaEnd >= metaStart since the metadata scan only moves forward through the file
 		var available uint64
 		if oldMetaLen > blocksLen+4 {
 			available = oldMetaLen - blocksLen - 4
@@ -615,7 +615,7 @@ func flacWriteBlocksAt(file meta.FileLike, scan *flacScanMetadata, vc *vorbis.Vo
 		metaBuf.Write(block)
 	}
 
-	return meta.Splice(file, uint64(scan.metaStart), uint64(scan.metaEnd), metaBuf.Bytes())
+	return meta.Splice(file, uint64(scan.metaStart), uint64(scan.metaEnd), metaBuf.Bytes()) // #nosec G115 -- metadata positions are non-negative file offsets derived from seeks
 }
 
 func init() {

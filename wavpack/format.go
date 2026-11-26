@@ -45,7 +45,7 @@ func (p WavPackProperties) FileProperties() meta.FileProperties {
 		meta.Some(p.AudioBitrate),
 		meta.Some(p.SampleRate),
 		meta.Some(p.BitDepth),
-		meta.Some(uint8(p.Channels)),
+		meta.Some(uint8(p.Channels)), // #nosec G115 -- mirrors Rust `input.channels as u8` cast; truncation is intentional parity
 		channelMask,
 	)
 }
@@ -73,7 +73,7 @@ func WavPackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (
 	if err != nil {
 		return nil, &meta.FileParseError{Source: err}
 	}
-	streamLen := uint64(streamEnd - start)
+	streamLen := uint64(streamEnd - start) // #nosec G115 -- stream end position is always >= the current in-stream position
 
 	// Check for end tags (ID3v1, APE)
 	newLen, id3v1Tag, apeTag, err := ape.ReadEndTags(reader, start, streamLen, parseOptions)
@@ -84,7 +84,7 @@ func WavPackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (
 
 	p := &file.Properties
 	if parseOptions.ReadProperties {
-		if err := wvReadProperties(reader, streamLen, uint64(streamEnd-start), parseOptions.ParsingMode, p); err != nil {
+		if err := wvReadProperties(reader, streamLen, uint64(streamEnd-start), parseOptions.ParsingMode, p); err != nil { // #nosec G115 -- stream end position is always >= the current in-stream position
 			return nil, &meta.FileParseError{Source: err}
 		}
 	}

@@ -81,7 +81,7 @@ func Id3v1TagParse(reader [128]byte, parseMode meta.ParsingMode) (*Id3v1Tag, err
 	}
 	tag.Comment = id3v1DecodeText(commentRange)
 
-	if r[124] < uint8(len(Id3v1Genres)) {
+	if r[124] < uint8(len(Id3v1Genres)) { // #nosec G115 -- Id3v1Genres is a fixed table of well under 256 entries, so its length fits in uint8
 		tag.Genre = meta.Some(r[124])
 	}
 	return &tag, nil
@@ -106,34 +106,60 @@ func id3v1TryParseYear(input []byte, parseMode meta.ParsingMode) (meta.Option[ui
 		}
 		return meta.None[uint16](), nil
 	}
-	return meta.Some(uint16(year)), nil
+	return meta.Some(uint16(year)), nil // #nosec G115 -- exactly 4 ASCII digits are enforced above, so year is at most 9999
 }
 
-// Tag converts the [Id3v1Tag] to a generic [Tag].
+// Tag converts the [Id3v1Tag] to a generic [Tag]. It is non-destructive;
+// use [Id3v1Tag.SplitTag] for the destructive conversion.
 func (t *Id3v1Tag) Tag() *meta.Tag {
+	clone := *t
+	_, tag := (&clone).SplitTag()
+	return tag
+}
+
+// SplitTag destructively moves all representable fields into a generic [Tag],
+// mirroring Rust's `SplitTag::split_tag`. ID3v1 has no format-specific
+// remainder, so the receiver is left empty and returned as the empty remainder.
+func (t *Id3v1Tag) SplitTag() (*Id3v1Tag, *meta.Tag) {
 	tag := meta.NewTag(meta.TagTypeID3v1)
 	if s, ok := t.Title.Get(); ok {
 		tag.InsertText(meta.ItemKeyTrackTitle, s)
+		t.Title = meta.None[string]()
 	}
 	if s, ok := t.Artist.Get(); ok {
 		tag.InsertText(meta.ItemKeyTrackArtist, s)
+		t.Artist = meta.None[string]()
 	}
 	if s, ok := t.Album.Get(); ok {
 		tag.InsertText(meta.ItemKeyAlbumTitle, s)
+		t.Album = meta.None[string]()
 	}
 	if y, ok := t.Year.Get(); ok {
 		tag.InsertText(meta.ItemKeyYear, util.Itoa(int(y)))
+		t.Year = meta.None[uint16]()
 	}
 	if s, ok := t.Comment.Get(); ok {
 		tag.InsertText(meta.ItemKeyComment, s)
+		t.Comment = meta.None[string]()
 	}
 	if n, ok := t.TrackNumber.Get(); ok {
 		tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyTrackNumber, meta.ItemValueText(util.Itoa(int(n)))))
+		t.TrackNumber = meta.None[uint8]()
 	}
-	if g, ok := t.Genre.Get(); ok && int(g) < len(Id3v1Genres) {
-		tag.InsertText(meta.ItemKeyGenre, Id3v1Genres[g])
+	if g, ok := t.Genre.Get(); ok {
+		// Like Rust, the genre slot is consumed even when the index is out of range.
+		if int(g) < len(Id3v1Genres) {
+			tag.InsertText(meta.ItemKeyGenre, Id3v1Genres[g])
+		}
+		t.Genre = meta.None[uint8]()
 	}
-	return tag
+	return t, tag
+}
+
+// MergeTag merges a generic [Tag] into an ID3v1 tag. The ID3v1 split
+// remainder is empty, mirroring Rust's unit remainder.
+func (t *Id3v1Tag) MergeTag(tag *meta.Tag) *Id3v1Tag {
+	return Id3v1TagFromTag(tag)
 }
 
 // NewId3v1Tag creates an empty [Id3v1Tag].
@@ -294,7 +320,7 @@ func Id3v1TagFromTag(input *meta.Tag) *Id3v1Tag {
 	}
 	if s, ok := input.GetString(meta.ItemKeyYear); ok {
 		if n, ok := parseUint(s, 16); ok {
-			tag.Year = meta.Some(uint16(n))
+			tag.Year = meta.Some(uint16(n)) // #nosec G115 -- parseUint(s, 16) bit-width-limits the value to 16 bits
 		}
 	}
 	if tag.Year.IsNone() {
@@ -304,7 +330,7 @@ func Id3v1TagFromTag(input *meta.Tag) *Id3v1Tag {
 	}
 	if s, ok := input.GetString(meta.ItemKeyTrackNumber); ok {
 		if n, ok := parseUint(s, 8); ok {
-			tag.TrackNumber = meta.Some(uint8(n))
+			tag.TrackNumber = meta.Some(uint8(n)) // #nosec G115 -- parseUint(s, 8) bit-width-limits the value to 8 bits
 		}
 	}
 	if g, ok := input.GetString(meta.ItemKeyGenre); ok {
@@ -322,7 +348,7 @@ func genreIndex(g string) meta.Option[uint8] {
 		}
 	}
 	if n, ok := parseUint(g, 8); ok {
-		return meta.Some(uint8(n))
+		return meta.Some(uint8(n)) // #nosec G115 -- parseUint(g, 8) already bounds n to 8 bits
 	}
 	return meta.None[uint8]()
 }
@@ -491,7 +517,7 @@ func WriteId3v1(file meta.FileLike, tag *Id3v1Tag, writeOptions meta.WriteOption
 		if lyrFound {
 			existingRange[0] = lyrStart
 		}
-		return meta.Splice(file, uint64(existingRange[0]), uint64(existingRange[1]), nil)
+		return meta.Splice(file, uint64(existingRange[0]), uint64(existingRange[1]), nil) // #nosec G115 -- tag positions are non-negative file offsets returned by the tag locators
 	}
 
 	encoded, err := id3v1Encode(tag, writeOptions)

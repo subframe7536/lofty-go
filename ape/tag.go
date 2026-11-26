@@ -546,15 +546,57 @@ func (t *ApeTag) SetDate(value meta.Timestamp) { t.SetText("Year", value.String(
 // RemoveDate removes the recording date.
 func (t *ApeTag) RemoveDate() { t.Remove("Year") }
 
-// Tag converts the [ApeTag] to a generic [Tag].
+func cloneApeItem(item *ApeItem) *ApeItem {
+	if item == nil {
+		return nil
+	}
+	clone := *item
+	if binary, ok := item.Value.Binary(); ok {
+		clone.Value = meta.ItemValueBinary(bytes.Clone(binary))
+	}
+	return &clone
+}
+
+func (t *ApeTag) clone() *ApeTag {
+	if t == nil {
+		return nil
+	}
+	clone := &ApeTag{ReadOnly: t.ReadOnly}
+	if t.items != nil {
+		clone.items = make([]*ApeItem, len(t.items))
+		for i, item := range t.items {
+			clone.items[i] = cloneApeItem(item)
+		}
+	}
+	return clone
+}
+
+// CloneCompanion implements [meta.CompanionCloner].
+func (t *ApeTag) CloneCompanion() any { return t.clone() }
+
+// Tag converts the [ApeTag] to a generic [Tag]. It is non-destructive; use
+// [ApeTag.SplitTag] for the destructive conversion.
 func (t *ApeTag) Tag() *meta.Tag {
+	remainder, tag := t.clone().SplitTag()
+	if util.GetGlobalOptions().PreserveFormatSpecificItems && !remainder.IsEmpty() {
+		tag.SetCompanionTag(remainder)
+	}
+	return tag
+}
+
+// SplitTag destructively moves representable items and Cover Art pictures
+// into a generic [Tag], leaving unmapped items in the receiver. The Cover Art
+// picture conversion is one of this port's documented intentional deviations
+// from Rust. The receiver is returned as the remainder.
+func (t *ApeTag) SplitTag() (*ApeTag, *meta.Tag) {
 	tag := meta.NewTag(meta.TagTypeApe)
-	remainder := &ApeTag{ReadOnly: t.ReadOnly}
-	for _, item := range t.items {
+	original := t.items
+	kept := make([]*ApeItem, 0, len(original))
+	for _, item := range original {
 		isPic := false
 		var picType meta.PictureType
 		if idx := util.IndexOfStr(meta.ApePictureTypes[:], item.Key); idx >= 0 {
-			picType = meta.PictureType(idx)
+			picType = meta.PictureType(idx) // #nosec G115 -- idx is an index into the small fixed-length ApePictureTypes table
 			isPic = true
 		}
 		if isPic {
@@ -568,44 +610,38 @@ func (t *ApeTag) Tag() *meta.Tag {
 		}
 		ik, mapped := meta.ItemKeyFromKey(meta.TagTypeApe, item.Key)
 		if !mapped {
-			// Format-specific item: hidden in the companion tag (Rust
-			// `split_tag` retains these in the remainder).
-			remainder.items = append(remainder.items, item)
+			kept = append(kept, item)
 			continue
 		}
-		{
-			if text, ok := item.Value.IntoString(); ok {
-				var curKey, totKey meta.ItemKey
-				switch ik {
-				case meta.ItemKeyTrackNumber, meta.ItemKeyTrackTotal:
-					curKey, totKey = meta.ItemKeyTrackNumber, meta.ItemKeyTrackTotal
-				case meta.ItemKeyDiscNumber, meta.ItemKeyDiscTotal:
-					curKey, totKey = meta.ItemKeyDiscNumber, meta.ItemKeyDiscTotal
+		if text, ok := item.Value.IntoString(); ok {
+			var curKey, totKey meta.ItemKey
+			switch ik {
+			case meta.ItemKeyTrackNumber, meta.ItemKeyTrackTotal:
+				curKey, totKey = meta.ItemKeyTrackNumber, meta.ItemKeyTrackTotal
+			case meta.ItemKeyDiscNumber, meta.ItemKeyDiscTotal:
+				curKey, totKey = meta.ItemKeyDiscNumber, meta.ItemKeyDiscTotal
+			}
+			// "Track"/"Disc" items may hold "N/T" pairs; split them
+			if totKey != 0 {
+				parts := strings.SplitN(text, "/", 2)
+				tag.PushUnchecked(meta.NewTagItem(curKey, meta.ItemValueText(parts[0])))
+				if len(parts) > 1 {
+					tag.PushUnchecked(meta.NewTagItem(totKey, meta.ItemValueText(parts[1])))
 				}
-				// "Track"/"Disc" items may hold "N/T" pairs; split them
-				if totKey != 0 {
-					parts := strings.SplitN(text, "/", 2)
-					tag.PushUnchecked(meta.NewTagItem(curKey, meta.ItemValueText(parts[0])))
-					if len(parts) > 1 {
-						tag.PushUnchecked(meta.NewTagItem(totKey, meta.ItemValueText(parts[1])))
-					}
-					continue
+				continue
+			}
+			// Multi-value text/locator items split on NUL
+			if strings.Contains(text, "\x00") {
+				for _, value := range strings.Split(text, "\x00") {
+					tag.PushUnchecked(meta.NewTagItem(ik, itemValueFromKind(item.Value.Kind(), value)))
 				}
-				// Multi-value text/locator items split on NUL (Rust `split_tag`)
-				if strings.Contains(text, "\x00") {
-					for _, value := range strings.Split(text, "\x00") {
-						tag.PushUnchecked(meta.NewTagItem(ik, itemValueFromKind(item.Value.Kind(), value)))
-					}
-					continue
-				}
+				continue
 			}
 		}
 		tag.PushUnchecked(meta.NewTagItem(ik, item.Value))
 	}
-	if util.GetGlobalOptions().PreserveFormatSpecificItems && !remainder.IsEmpty() {
-		tag.SetCompanionTag(remainder)
-	}
-	return tag
+	t.items = kept
+	return t, tag
 }
 
 // SaveTo writes the tag to a [meta.FileLike].
@@ -655,25 +691,17 @@ var apeNumberPairKeys = map[meta.ItemKey]bool{
 	meta.ItemKeyDiscNumber: true, meta.ItemKeyDiscTotal: true,
 }
 
-// TagFromApe converts a generic [Tag] to an [ApeTag].
-func ApeTagFromTag(input *meta.Tag) *ApeTag {
-	apeTag := NewApeTag()
-	// Rust `From<Tag> for ApeTag`: start from the companion tag when present.
-	if util.GetGlobalOptions().PreserveFormatSpecificItems {
-		if comp, ok := input.CompanionTag().(*ApeTag); ok && comp != nil {
-			apeTag.ReadOnly = comp.ReadOnly
-			for _, it := range comp.items {
-				c := *it
-				apeTag.items = append(apeTag.items, &c)
-			}
-		}
-	}
-	for _, item := range input.Items() {
+// MergeTag merges a generic [Tag] into this remainder. It follows the Go
+// port's documented APE conversion deviations: same-key text values merge
+// with NUL, Track/Disc pairs are emitted after the other items, and pictures
+// are emitted last. The receiver is mutated and returned.
+func (t *ApeTag) MergeTag(tag *meta.Tag) *ApeTag {
+	for _, item := range tag.Items() {
 		// Number pairs are merged below
 		if apeNumberPairKeys[item.Key()] {
 			continue
 		}
-		_ = apeTag.Insert(item)
+		_ = t.Insert(item)
 	}
 	for _, pair := range [][2]meta.ItemKey{
 		{meta.ItemKeyTrackNumber, meta.ItemKeyTrackTotal},
@@ -683,7 +711,7 @@ func ApeTagFromTag(input *meta.Tag) *ApeTag {
 			// Rust `set_number` runs per item; each parseable value
 			// overwrites via the setter, so the last parseable wins.
 			var n meta.Option[uint32]
-			for _, item := range input.GetItems(key) {
+			for _, item := range tag.GetItems(key) {
 				text, ok := item.Value().IntoString()
 				if !ok {
 					continue
@@ -699,16 +727,28 @@ func ApeTagFromTag(input *meta.Tag) *ApeTag {
 			continue
 		}
 		key, _ := pair[0].MapKey(meta.TagTypeApe)
-		apeTag.insertNumberPair(key, n, tot)
+		t.insertNumberPair(key, n, tot)
 	}
-	for _, pic := range input.Pictures() {
+	for _, pic := range tag.Pictures() {
 		if key, ok := pic.PicType().AsApeKey(); ok {
 			picCopy := pic
 			// Rust `merge_tag` uses `insert` (replace by key), not `push`
-			apeTag.insert(&ApeItem{Key: key, Value: meta.ItemValueBinary(picCopy.AsApeBytes())})
+			t.insert(&ApeItem{Key: key, Value: meta.ItemValueBinary(picCopy.AsApeBytes())})
 		}
 	}
-	return apeTag
+	return t
+}
+
+// TagFromApe converts a generic [Tag] to an [ApeTag].
+func ApeTagFromTag(input *meta.Tag) *ApeTag {
+	base := NewApeTag()
+	// Rust `From<Tag> for ApeTag`: start from the companion tag when present.
+	if util.GetGlobalOptions().PreserveFormatSpecificItems {
+		if comp, ok := input.CompanionTag().(*ApeTag); ok && comp != nil {
+			base = comp.clone()
+		}
+	}
+	return base.MergeTag(input)
 }
 
 // --- read ---
@@ -724,7 +764,7 @@ func ReadApeTagWithHeader(reader io.ReadSeeker, header *ApeHeader, parseOptions 
 		if n > uint64(remainingSize) {
 			return &ApeTagParseError{Source: &meta.SizeMismatchError{}}
 		}
-		remainingSize -= uint32(n)
+		remainingSize -= uint32(n) // #nosec G115 -- guarded: n <= uint64(remainingSize) <= MaxUint32 so the conversion cannot truncate
 		return nil
 	}
 
@@ -810,7 +850,7 @@ func ReadApeTagWithHeader(reader io.ReadSeeker, header *ApeHeader, parseOptions 
 				break
 			}
 			key = append(key, kbuf[:n]...)
-			if err := consume(uint64(n)); err != nil {
+			if err := consume(uint64(n)); err != nil { // #nosec G115 -- n is a Read byte count, always non-negative
 				return nil, err
 			}
 			if err == io.ErrUnexpectedEOF || n == 0 {
@@ -985,16 +1025,16 @@ func ApeWriteTo(file meta.FileLike, tag *ApeTag, writeOptions meta.WriteOptions)
 	// (or insert at write_position when none), THEN drain the header tag.
 	// Draining the header first would invalidate the footer positions.
 	if existing.footerFound {
-		if err := meta.Splice(file, uint64(existing.footer[0]), uint64(existing.footer[1]), encoded); err != nil {
+		if err := meta.Splice(file, uint64(existing.footer[0]), uint64(existing.footer[1]), encoded); err != nil { // #nosec G115 -- footer positions are non-negative file offsets; footer[0] validated against header.Size with SizeMismatchError
 			return &meta.FileEncodingError{Source: err}
 		}
 	} else if len(encoded) > 0 {
-		if err := meta.Splice(file, uint64(existing.writePosition), uint64(existing.writePosition), encoded); err != nil {
+		if err := meta.Splice(file, uint64(existing.writePosition), uint64(existing.writePosition), encoded); err != nil { // #nosec G115 -- writePosition is a non-negative file offset obtained from Seek
 			return &meta.FileEncodingError{Source: err}
 		}
 	}
 	if existing.headerFound {
-		if err := meta.Splice(file, uint64(existing.header[0]), uint64(existing.header[1]), nil); err != nil {
+		if err := meta.Splice(file, uint64(existing.header[0]), uint64(existing.header[1]), nil); err != nil { // #nosec G115 -- header positions are non-negative file offsets obtained from Seek
 			return &meta.FileEncodingError{Source: err}
 		}
 	}
@@ -1066,7 +1106,7 @@ func ApeFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Ape
 	if end < start {
 		return nil, &meta.FileParseError{Source: &meta.SizeMismatchError{}}
 	}
-	streamLen := uint64(end - start)
+	streamLen := uint64(end - start) // #nosec G115 -- end < start is rejected above, so the difference is non-negative
 
 	var id3v2Tag *id3v2.Id3v2Tag
 	var id3v1Tag *id3v1.Id3v1Tag
@@ -1179,7 +1219,7 @@ func ApeFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Ape
 	if err != nil {
 		return nil, &meta.FileParseError{Source: err}
 	}
-	fileLength := uint64(fileLenPos)
+	fileLength := uint64(fileLenPos) // #nosec G115 -- fileLenPos is a Seek stream position, always non-negative
 
 	// Go back to the MAC header to read properties
 	if _, err := data.Seek(macStart, io.SeekStart); err != nil {
@@ -1311,8 +1351,8 @@ func apeReadProperties(data io.ReadSeeker, streamLen, fileLength uint64, parseMo
 		blocksPerFrame = binary.LittleEndian.Uint32(header[4:])
 		finalFrameBlocks = binary.LittleEndian.Uint32(header[8:])
 		totalFrames = binary.LittleEndian.Uint32(header[12:])
-		p.BitDepth = uint8(binary.LittleEndian.Uint16(header[16:]))
-		p.Channels = uint8(binary.LittleEndian.Uint16(header[18:]))
+		p.BitDepth = uint8(binary.LittleEndian.Uint16(header[16:])) // #nosec G115 -- mirrors Rust `as u8` cast; truncation is intentional parity
+		p.Channels = uint8(binary.LittleEndian.Uint16(header[18:])) // #nosec G115 -- mirrors Rust `as u8` cast; truncation is intentional parity
 		p.SampleRate = binary.LittleEndian.Uint32(header[20:])
 	} else {
 		var header [26]byte
@@ -1337,7 +1377,7 @@ func apeReadProperties(data io.ReadSeeker, streamLen, fileLength uint64, parseMo
 		default:
 			blocksPerFrame = 9216
 		}
-		p.Channels = uint8(binary.LittleEndian.Uint16(header[4:]))
+		p.Channels = uint8(binary.LittleEndian.Uint16(header[4:])) // #nosec G115 -- mirrors Rust `as u8` cast; truncation is intentional parity
 		p.SampleRate = binary.LittleEndian.Uint32(header[6:])
 		totalFrames = binary.LittleEndian.Uint32(header[18:])
 		finalFrameBlocks = binary.LittleEndian.Uint32(header[22:])
@@ -1475,14 +1515,14 @@ func encodeApeTag(t *ApeTag) ([]byte, error) {
 		}
 		valueLen := uint64(len(value) + len(text))
 		itemSize := 8 + uint64(len(item.Key)) + 1 + valueLen
-		if uint64(content.Len())+itemSize+32 > math.MaxUint32 {
+		if uint64(content.Len())+itemSize+32 > math.MaxUint32 { // #nosec G115 -- bytes.Buffer.Len() is non-negative by construction
 			return nil, &ApeTagEncodingError{Source: &meta.TooMuchDataError{}}
 		}
 		if item.ReadOnly {
 			flags |= 1
 		}
 		var prefix [8]byte
-		binary.LittleEndian.PutUint32(prefix[:], uint32(valueLen))
+		binary.LittleEndian.PutUint32(prefix[:], uint32(valueLen)) // #nosec G115 -- valueLen is part of itemSize, capped below MaxUint32 by the guard just above
 		binary.LittleEndian.PutUint32(prefix[4:], flags)
 		content.Write(prefix[:])
 		content.WriteString(item.Key)
@@ -1492,8 +1532,8 @@ func encodeApeTag(t *ApeTag) ([]byte, error) {
 	}
 
 	// The size field covers the content plus the 32-byte footer.
-	totalSize := uint32(content.Len() + 32)
-	count := uint32(len(t.items))
+	totalSize := uint32(content.Len() + 32) // #nosec G115 -- the write loop rejects any item that would push content.Len()+32 past MaxUint32
+	count := uint32(len(t.items))           // #nosec G115 -- each written item occupies at least 9 bytes of the size-capped content, so the count stays far below MaxUint32
 	edge := func(flags uint32) [32]byte {
 		if t.ReadOnly {
 			flags |= 1

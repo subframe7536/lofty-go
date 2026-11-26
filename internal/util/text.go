@@ -135,7 +135,7 @@ func (e TextEncoding) Encode(text string, terminated, lossy bool) ([]byte, error
 		i := 0 // Rust reports `valid_up_to` as a character index
 		for _, c := range text {
 			if c <= 255 {
-				out = append(out, byte(c))
+				out = append(out, byte(c)) // #nosec G115 -- guarded by the `c <= 255` branch condition, so the rune always fits a byte
 			} else if lossy {
 				out = append(out, '?')
 			} else {
@@ -187,9 +187,9 @@ func Utf16Encode(text string, order ByteOrder, bom, terminated bool) []byte {
 
 func AppendUint16(b []byte, v uint16, order ByteOrder) []byte {
 	if order == BigEndian {
-		return append(b, byte(v>>8), byte(v))
+		return append(b, byte(v>>8), byte(v)) // #nosec G115 -- intentional byte decomposition of a uint16; v>>8 fits a byte and byte(v) keeps the low byte on purpose
 	}
-	return append(b, byte(v), byte(v>>8))
+	return append(b, byte(v), byte(v>>8)) // #nosec G115 -- intentional byte decomposition of a uint16; the low-byte truncation is the correct semantics
 }
 
 // DecodeTextResult is the result of decoding text.
@@ -392,7 +392,7 @@ func Latin1Encode(s string, lossy bool) ([]byte, error) {
 	i := 0
 	for _, c := range s {
 		if c <= 255 {
-			out = append(out, byte(c))
+			out = append(out, byte(c)) // #nosec G115 -- guarded by the `c <= 255` branch condition, so the rune always fits a byte
 		} else if lossy {
 			out = append(out, '?')
 		} else {

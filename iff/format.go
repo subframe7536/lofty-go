@@ -246,54 +246,57 @@ func (t *RiffInfoTag) SetDate(value meta.Timestamp) { t.InsertKV("ICRD", value.S
 // RemoveDate removes the recording date.
 func (t *RiffInfoTag) RemoveDate() { t.RemoveKey("ICRD") }
 
-// Tag converts to a generic [Tag].
-func (t *RiffInfoTag) Tag() *meta.Tag {
-	tag := meta.NewTag(meta.TagTypeRiffInfo)
-	var remainder *RiffInfoTag
-	for _, i := range t.items {
-		ik := meta.ItemKeyOrUnknown(meta.TagTypeRiffInfo, i.key)
-		if ik == meta.ItemKeyUnknown {
-			// Unmappable keys stay in the companion (Rust's split_tag)
-			if util.GetGlobalOptions().PreserveFormatSpecificItems {
-				if remainder == nil {
-					remainder = &RiffInfoTag{}
-				}
-				remainder.items = append(remainder.items, i)
-			}
-			continue
-		}
-		// Rust trims NUL bytes from INFO values (v.trim_matches('\0'))
-		tag.PushUnchecked(meta.NewTagItem(ik, meta.ItemValueText(strings.Trim(i.value, "\x00"))))
+func (t *RiffInfoTag) clone() *RiffInfoTag {
+	if t == nil {
+		return nil
 	}
-	if remainder != nil {
+	return &RiffInfoTag{items: append([]riffInfoItem(nil), t.items...)}
+}
+
+// CloneCompanion implements [meta.CompanionCloner].
+func (t *RiffInfoTag) CloneCompanion() any { return t.clone() }
+
+// Tag converts to a generic [Tag]. It is non-destructive; use
+// [RiffInfoTag.SplitTag] for the destructive conversion.
+func (t *RiffInfoTag) Tag() *meta.Tag {
+	remainder, tag := t.clone().SplitTag()
+	if util.GetGlobalOptions().PreserveFormatSpecificItems && !remainder.IsEmpty() {
 		tag.SetCompanionTag(remainder)
 	}
 	return tag
 }
 
-// RiffInfoTagFromTag converts a generic [Tag] to a [RiffInfoTag].
-func RiffInfoTagFromTag(input *meta.Tag) *RiffInfoTag {
-	t := &RiffInfoTag{}
-	// Format-specific items preserved in the companion merge back first
-	// (Rust's MergeTag for the RiffInfoList remainder).
-	if util.GetGlobalOptions().PreserveFormatSpecificItems {
-		if comp, ok := input.CompanionTag().(*RiffInfoTag); ok && comp != nil {
-			t.items = append(t.items, comp.items...)
+// SplitTag destructively moves representable INFO items into a generic [Tag],
+// leaving unmapped FourCCs in the receiver, mirroring Rust's
+// `SplitTag::split_tag`. The receiver is returned as the remainder.
+func (t *RiffInfoTag) SplitTag() (*RiffInfoTag, *meta.Tag) {
+	tag := meta.NewTag(meta.TagTypeRiffInfo)
+	original := t.items
+	kept := make([]riffInfoItem, 0, len(original))
+	for _, i := range original {
+		ik := meta.ItemKeyOrUnknown(meta.TagTypeRiffInfo, i.key)
+		if ik == meta.ItemKeyUnknown {
+			kept = append(kept, i)
+			continue
 		}
+		// Rust trims NUL bytes from INFO values (v.trim_matches('\0'))
+		tag.PushUnchecked(meta.NewTagItem(ik, meta.ItemValueText(strings.Trim(i.value, "\x00"))))
 	}
-	for _, item := range input.Items() {
+	t.items = kept
+	return t, tag
+}
+
+// MergeTag merges a generic [Tag] into this remainder, mirroring Rust's
+// `MergeTag::merge_tag`. The receiver is mutated and returned.
+func (t *RiffInfoTag) MergeTag(tag *meta.Tag) *RiffInfoTag {
+	for _, item := range tag.Items() {
 		// Rust's merge_tag only uses item_key.map_key — Unknown-keyed
 		// items are dropped.
 		if item.Key() == meta.ItemKeyUnknown {
 			continue
 		}
-		var key string
-		if k, ok := item.Key().MapKey(meta.TagTypeRiffInfo); ok {
-			key = k
-		} else {
-			continue
-		}
-		if len(key) != 4 {
+		key, ok := item.Key().MapKey(meta.TagTypeRiffInfo)
+		if !ok || len(key) != 4 {
 			continue
 		}
 		if s, ok := item.Value().IntoString(); ok {
@@ -301,6 +304,19 @@ func RiffInfoTagFromTag(input *meta.Tag) *RiffInfoTag {
 		}
 	}
 	return t
+}
+
+// RiffInfoTagFromTag converts a generic [Tag] to a [RiffInfoTag].
+func RiffInfoTagFromTag(input *meta.Tag) *RiffInfoTag {
+	base := &RiffInfoTag{}
+	// Format-specific items preserved in the companion merge back first
+	// (Rust's MergeTag for the RiffInfoList remainder).
+	if util.GetGlobalOptions().PreserveFormatSpecificItems {
+		if comp, ok := input.CompanionTag().(*RiffInfoTag); ok && comp != nil {
+			base = comp.clone()
+		}
+	}
+	return base.MergeTag(input)
 }
 
 // tagitemsIntoRiff mirrors Rust's tagitems_into_riff: text/locator items are
@@ -401,52 +417,80 @@ func (t *AiffTextTag) RemoveComment() {
 	t.Comments = nil
 }
 
-// Tag converts to a generic [Tag].
+func (t *AiffTextTag) clone() *AiffTextTag {
+	if t == nil {
+		return nil
+	}
+	clone := *t
+	clone.Annotations = append([]string(nil), t.Annotations...)
+	clone.Comments = append([]AiffComment(nil), t.Comments...)
+	return &clone
+}
+
+// CloneCompanion implements [meta.CompanionCloner].
+func (t *AiffTextTag) CloneCompanion() any { return t.clone() }
+
+// Tag converts to a generic [Tag]. It is non-destructive; use
+// [AiffTextTag.SplitTag] for the destructive conversion.
 func (t *AiffTextTag) Tag() *meta.Tag {
-	tag := meta.NewTag(meta.TagTypeAiffText)
-	if v, ok := t.Name.Get(); ok {
-		tag.InsertText(meta.ItemKeyTrackTitle, v)
-	}
-	if v, ok := t.Author.Get(); ok {
-		tag.InsertText(meta.ItemKeyTrackArtist, v)
-	}
-	if v, ok := t.Copyright.Get(); ok {
-		tag.InsertText(meta.ItemKeyCopyrightMessage, v)
-	}
-	for _, v := range t.Annotations {
-		tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyComment, meta.ItemValueText(v)))
-	}
-	// Comments are not representable as items; they ride the companion tag
-	// (Rust's split_tag remainder).
-	if len(t.Comments) > 0 && util.GetGlobalOptions().PreserveFormatSpecificItems {
-		tag.SetCompanionTag(&AiffTextTag{Comments: t.Comments})
+	remainder, tag := t.clone().SplitTag()
+	if len(remainder.Comments) > 0 && util.GetGlobalOptions().PreserveFormatSpecificItems {
+		tag.SetCompanionTag(remainder)
 	}
 	return tag
 }
 
+// SplitTag destructively moves representable text chunks into a generic
+// [Tag], leaving COMT comments in the receiver, mirroring Rust's
+// `SplitTag::split_tag`. The receiver is returned as the remainder.
+func (t *AiffTextTag) SplitTag() (*AiffTextTag, *meta.Tag) {
+	tag := meta.NewTag(meta.TagTypeAiffText)
+	pushItem := func(field *meta.Option[string], itemKey meta.ItemKey) {
+		if text, ok := field.Get(); ok {
+			tag.PushUnchecked(meta.NewTagItem(itemKey, meta.ItemValueText(text)))
+			*field = meta.None[string]()
+		}
+	}
+	pushItem(&t.Name, meta.ItemKeyTrackTitle)
+	pushItem(&t.Author, meta.ItemKeyTrackArtist)
+	pushItem(&t.Copyright, meta.ItemKeyCopyrightMessage)
+	for _, annotation := range t.Annotations {
+		tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyComment, meta.ItemValueText(annotation)))
+	}
+	t.Annotations = nil
+	return t, tag
+}
+
+// MergeTag merges a generic [Tag] into this remainder, mirroring Rust's
+// `MergeTag::merge_tag`. Pre-existing remainder fields win over generic
+// values. The receiver is mutated and returned.
+func (t *AiffTextTag) MergeTag(tag *meta.Tag) *AiffTextTag {
+	if s, ok := tag.GetString(meta.ItemKeyTrackTitle); t.Name.IsNone() && ok {
+		t.Name = meta.Some(s)
+	}
+	if s, ok := tag.GetString(meta.ItemKeyTrackArtist); t.Author.IsNone() && ok {
+		t.Author = meta.Some(s)
+	}
+	if s, ok := tag.GetString(meta.ItemKeyCopyrightMessage); t.Copyright.IsNone() && ok {
+		t.Copyright = meta.Some(s)
+	}
+	if len(t.Annotations) == 0 {
+		t.Annotations = tag.GetStrings(meta.ItemKeyComment)
+	}
+	return t
+}
+
 // AiffTextTagFromTag converts a generic [Tag] to an [AiffTextTag].
 func AiffTextTagFromTag(input *meta.Tag) *AiffTextTag {
-	t := &AiffTextTag{}
+	base := &AiffTextTag{}
 	// Format-specific fields preserved in the companion merge back first
 	// (Rust's MergeTag for the AiffTextChunks remainder).
 	if util.GetGlobalOptions().PreserveFormatSpecificItems {
 		if comp, ok := input.CompanionTag().(*AiffTextTag); ok && comp != nil {
-			*t = *comp
+			base = comp.clone()
 		}
 	}
-	if s, ok := input.GetString(meta.ItemKeyTrackTitle); t.Name.IsNone() && ok {
-		t.Name = meta.Some(s)
-	}
-	if s, ok := input.GetString(meta.ItemKeyTrackArtist); t.Author.IsNone() && ok {
-		t.Author = meta.Some(s)
-	}
-	if s, ok := input.GetString(meta.ItemKeyCopyrightMessage); t.Copyright.IsNone() && ok {
-		t.Copyright = meta.Some(s)
-	}
-	if len(t.Annotations) == 0 {
-		t.Annotations = input.GetStrings(meta.ItemKeyComment)
-	}
-	return t
+	return base.MergeTag(input)
 }
 
 // aiffParseComt parses a COMT chunk body of `size` bytes, appending comments
@@ -561,7 +605,7 @@ func WavFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Wav
 	if err != nil {
 		return nil, &meta.FileParseError{Source: err}
 	}
-	fileLength := uint64(streamEnd - start)
+	fileLength := uint64(streamEnd - start) // #nosec G115 -- streamEnd and start are non-negative int64 stream positions with streamEnd >= start
 	if _, err := reader.Seek(start, io.SeekStart); err != nil {
 		return nil, &meta.FileParseError{Source: err}
 	}
@@ -582,7 +626,7 @@ func WavFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Wav
 	// Mirrors Rust's `Chunks` walker: bounded by the file size after the
 	// 12-byte RIFF header, with FourCC and size validation honored per
 	// meta.ParsingMode.
-	remaining := int64(fileLength) - 12
+	remaining := int64(fileLength) - 12 // #nosec G115 -- fileLength derives from a difference of non-negative int64 stream positions, so the int64 round-trip is lossless
 	for remaining >= 8 {
 		fcc, size, ok, herr := iffReadChunkHeader(reader, binary.LittleEndian, remaining, parseOptions.ParsingMode)
 		if herr != nil {
@@ -626,7 +670,7 @@ func WavFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Wav
 			if bytes.Equal(sub[:], infoPreamble) && parseOptions.ReadTags {
 				// `end` check from Rust: the INFO list must not extend past
 				// the file.
-				if pos-start+int64(size) > int64(fileLength) {
+				if pos-start+int64(size) > int64(fileLength) { // #nosec G115 -- int64(size) widens a u32 losslessly; fileLength derives from a difference of non-negative int64 stream positions
 					return nil, &meta.FileParseError{Source: &meta.SizeMismatchError{}}
 				}
 				t, err := parseRiffInfoList(reader, int64(size)-4, parseOptions)
@@ -671,7 +715,7 @@ func WavFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Wav
 		if err != nil {
 			return nil, &meta.FileParseError{Source: err}
 		}
-		if err := wavReadProperties(fmtData, totalSamples, streamLen, uint64(walkEnd-start), &file.Properties); err != nil {
+		if err := wavReadProperties(fmtData, totalSamples, streamLen, uint64(walkEnd-start), &file.Properties); err != nil { // #nosec G115 -- walkEnd and start are non-negative stream positions with walkEnd >= start, so the difference fits int64
 			return nil, &meta.FileParseError{Source: err}
 		}
 	}
@@ -793,7 +837,7 @@ func wavReadProperties(fmt []byte, totalSamples, streamLen uint32, fileLength ui
 
 	var validBits uint16
 	var channelMask meta.Option[meta.ChannelMask]
-	if formatTag == uint16(waveFormatExt) {
+	if formatTag == uint16(waveFormatExt) { // #nosec G115 -- compile-time constant 0xFFFE always fits uint16 (Go rejects non-fitting constant conversions)
 		if len(fmt) < 40 {
 			return &IffParseError{Message: "extensible format identified, invalid \"fmt \" chunk size found (< 40)"}
 		}
@@ -804,7 +848,7 @@ func wavReadProperties(fmt []byte, totalSamples, streamLen uint32, fileLength ui
 	}
 
 	// Rust truncates channels to u8 before the zero check
-	channelsU8 := uint8(channels)
+	channelsU8 := uint8(channels) // #nosec G115 -- mirrors Rust `channels as u8` cast in read_fmt_chunk; truncation before the zero check is intentional parity
 	if channelsU8 == 0 {
 		return &IffParseError{Message: "file contains 0 channels"}
 	}
@@ -816,14 +860,14 @@ func wavReadProperties(fmt []byte, totalSamples, streamLen uint32, fileLength ui
 	if validBits > 0 {
 		bitDepth = uint8(validBits)
 	} else if bitsPerSample > 0 {
-		bitDepth = uint8(bitsPerSample)
+		bitDepth = uint8(bitsPerSample) // #nosec G115 -- mirrors Rust `bits_per_sample as u8` cast; truncation is intentional parity
 	} else {
 		// Rust: bytes_per_sample.saturating_mul(8) as u8
 		bps := uint32(blockAlign/uint16(channelsU8)) * 8
 		if bps > 0xFFFF {
 			bps = 0xFFFF
 		}
-		bitDepth = uint8(bps)
+		bitDepth = uint8(bps) // #nosec G115 -- mirrors Rust `bytes_per_sample.saturating_mul(8) as u8` cast; truncation is intentional parity
 	}
 
 	pcm := formatTag == 1 || formatTag == 3
@@ -835,27 +879,27 @@ func wavReadProperties(fmt []byte, totalSamples, streamLen uint32, fileLength ui
 	}
 
 	p.Format = WavFormat(formatTag)
-	p.Channels = uint8(channels)
+	p.Channels = uint8(channels) // #nosec G115 -- mirrors Rust truncating channels to u8 in read_fmt_chunk (`channels as u8`); truncation is intentional parity
 	p.SampleRate = sampleRate
 	p.BitDepth = bitDepth
 	p.ChannelMask = channelMask
 	if bytesPerSecond > 0 {
-		p.AudioBitrate = uint32(util.DivRound(uint64(bytesPerSecond)*8, 1000))
+		p.AudioBitrate = uint32(util.DivRound(uint64(bytesPerSecond)*8, 1000)) // #nosec G115 -- mirrors Rust `(u64::from(bytes_per_second) * 8).div_round(1000) as u32` cast; truncation is intentional parity
 	}
 	if sampleRate > 0 && totalSamples > 0 {
 		length := util.DivRound(uint64(totalSamples)*1000, uint64(sampleRate))
-		p.Duration = time.Duration(length) * time.Millisecond
+		p.Duration = time.Duration(length) * time.Millisecond // #nosec G115 -- length is bounded by u32 inputs (max ~(2^32-1)*1000 ms), which fits int64 even after scaling to nanoseconds
 		if length > 0 {
-			p.OverallBitrate = uint32(util.DivRound(fileLength*8, length))
+			p.OverallBitrate = uint32(util.DivRound(fileLength*8, length)) // #nosec G115 -- mirrors Rust `(file_length * 8).div_round(length) as u32` cast; truncation is intentional parity
 			if p.AudioBitrate == 0 {
-				p.AudioBitrate = uint32(util.DivRound(uint64(streamLen)*8, length))
+				p.AudioBitrate = uint32(util.DivRound(uint64(streamLen)*8, length)) // #nosec G115 -- mirrors Rust `(u64::from(stream_len) * 8).div_round(length) as u32` cast; truncation is intentional parity
 			}
 		}
 	} else if streamLen > 0 && bytesPerSecond > 0 {
 		length := util.DivRound(uint64(streamLen)*1000, uint64(bytesPerSecond))
-		p.Duration = time.Duration(length) * time.Millisecond
+		p.Duration = time.Duration(length) * time.Millisecond // #nosec G115 -- length is bounded by u32 inputs (max ~(2^32-1)*1000 ms), which fits int64 even after scaling to nanoseconds
 		if length > 0 {
-			p.OverallBitrate = uint32(util.DivRound(fileLength*8, length))
+			p.OverallBitrate = uint32(util.DivRound(fileLength*8, length)) // #nosec G115 -- mirrors Rust `(file_length * 8).div_round(length) as u32` cast; truncation is intentional parity
 		}
 	}
 	return nil
@@ -1140,7 +1184,7 @@ func riffInfoListBytes(info *RiffInfoTag) ([]byte, error) {
 		size := len(val) + 1
 		var ch [8]byte
 		copy(ch[:4], item.key)
-		binary.LittleEndian.PutUint32(ch[4:], uint32(size))
+		binary.LittleEndian.PutUint32(ch[4:], uint32(size)) // #nosec G115 -- mirrors Rust `(len as u32)` cast in create_riff_info; truncation is intentional parity
 		payload.Write(ch[:])
 		payload.WriteString(val)
 		payload.WriteByte(0)
@@ -1155,7 +1199,7 @@ func riffInfoListBytes(info *RiffInfoTag) ([]byte, error) {
 	var encoded bytes.Buffer
 	encoded.WriteString("LIST")
 	var szb [4]byte
-	binary.LittleEndian.PutUint32(szb[:], uint32(listSize))
+	binary.LittleEndian.PutUint32(szb[:], uint32(listSize)) // #nosec G115 -- guarded by the explicit `listSize > math.MaxUint32` TooMuchDataError check above
 	encoded.Write(szb[:])
 	encoded.Write(payload.Bytes())
 	return encoded.Bytes(), nil
@@ -1199,7 +1243,7 @@ func wavInsertChunk(file meta.FileLike, chunkStart, chunkEnd int64, encoded []by
 		return &meta.TooMuchDataError{}
 	}
 	if chunkStart > 0 {
-		if err := meta.Splice(file, uint64(chunkStart), uint64(chunkEnd), encoded); err != nil {
+		if err := meta.Splice(file, uint64(chunkStart), uint64(chunkEnd), encoded); err != nil { // #nosec G115 -- chunkStart/chunkEnd are non-negative file positions; this branch is guarded by `chunkStart > 0`
 			return err
 		}
 	} else if len(encoded) > 0 {
@@ -1214,7 +1258,7 @@ func wavInsertChunk(file meta.FileLike, chunkStart, chunkEnd int64, encoded []by
 	if _, err := file.Seek(4, io.SeekStart); err != nil {
 		return err
 	}
-	binary.LittleEndian.PutUint32(sz[:], uint32(riffSize+delta))
+	binary.LittleEndian.PutUint32(sz[:], uint32(riffSize+delta)) // #nosec G115 -- guarded against MaxUint32 above; non-negative because the replaced chunk range lies within the RIFF stream
 	_, err = file.Write(sz[:])
 	return err
 }
@@ -1255,7 +1299,7 @@ func iffEncodeId3v2Chunk(tag []byte, order iffByteOrder, writeOptions meta.Write
 	} else {
 		out = append(out, id3ChunkName2...)
 	}
-	out = order.AppendUint32(out, uint32(len(tag)))
+	out = order.AppendUint32(out, uint32(len(tag))) // #nosec G115 -- mirrors Rust `tag.len() as u32` cast in chunk_file.rs; truncation is intentional parity
 	out = append(out, tag...)
 	if len(tag)%2 != 0 {
 		out = append(out, 0)
@@ -1293,7 +1337,7 @@ func iffWriteId3v2Chunk(file meta.FileLike, tag []byte, writeOptions meta.WriteO
 			return &meta.FileEncodingError{Source: err}
 		}
 		var sz [4]byte
-		order.PutUint32(sz[:], uint32(streamLength-8))
+		order.PutUint32(sz[:], uint32(streamLength-8)) // #nosec G115 -- guarded against MaxUint32 above; stream lengths include the 8-byte chunk header by construction, so the value is non-negative
 		if _, err := file.Write(sz[:]); err != nil {
 			return &meta.FileEncodingError{Source: err}
 		}
@@ -1366,7 +1410,7 @@ func iffWriteId3v2Chunk(file meta.FileLike, tag []byte, writeOptions meta.WriteO
 				}
 				out := iffEncodeId3v2Chunk(tag, order, writeOptions)
 				out = append(out, junkChunkName...)
-				out = order.AppendUint32(out, uint32(remainder-8))
+				out = order.AppendUint32(out, uint32(remainder-8)) // #nosec G115 -- mirrors Rust `(remainder - u64::from(IFF_CHUNK_HEADER_SIZE)) as u32` cast; the branch condition keeps remainder-8 non-negative
 				if _, err := file.Write(out); err != nil {
 					return &meta.FileEncodingError{Source: err}
 				}
@@ -1389,13 +1433,13 @@ func iffWriteId3v2Chunk(file meta.FileLike, tag []byte, writeOptions meta.WriteO
 		return &meta.FileEncodingError{Source: &meta.TooMuchDataError{}}
 	}
 	if len(tag) > 0 {
-		at := uint64(ctx.streamLength)
+		at := uint64(ctx.streamLength) // #nosec G115 -- ctx.streamLength is int64(u32 first-chunk size)+8, always positive and far below uint64 overflow
 		if err := meta.Splice(file, at, at, iffEncodeId3v2Chunk(tag, order, writeOptions)); err != nil {
 			return &meta.FileEncodingError{Source: err}
 		}
 	}
 	if ctx.found {
-		if err := meta.Splice(file, uint64(ctx.start), uint64(ctx.end), nil); err != nil {
+		if err := meta.Splice(file, uint64(ctx.start), uint64(ctx.end), nil); err != nil { // #nosec G115 -- ctx.start/end are non-negative chunk positions within the file, derived from Seek positions and u32 chunk sizes
 			return &meta.FileEncodingError{Source: err}
 		}
 	}
@@ -1585,8 +1629,8 @@ func (p AiffProperties) FileProperties() meta.FileProperties {
 		meta.Some(p.OverallBitrate),
 		meta.Some(p.AudioBitrate),
 		meta.Some(p.SampleRate),
-		meta.Some(uint8(p.BitDepth)),
-		meta.Some(uint8(p.Channels)),
+		meta.Some(uint8(p.BitDepth)), // #nosec G115 -- mirrors Rust `value.sample_size as u8` cast; truncation is intentional parity
+		meta.Some(uint8(p.Channels)), // #nosec G115 -- mirrors Rust `value.channels as u8` cast; truncation is intentional parity
 		meta.None[meta.ChannelMask](),
 	)
 }
@@ -1609,7 +1653,7 @@ func AiffFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Ai
 	if err != nil {
 		return nil, &meta.FileParseError{Source: err}
 	}
-	fileLength := uint64(streamEnd - start)
+	fileLength := uint64(streamEnd - start) // #nosec G115 -- streamEnd and start are non-negative int64 stream positions with streamEnd >= start
 	if _, err := reader.Seek(start, io.SeekStart); err != nil {
 		return nil, &meta.FileParseError{Source: err}
 	}
@@ -1633,7 +1677,7 @@ func AiffFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Ai
 	var ssndSize uint32
 
 	// Same `Chunks` walker semantics as the WAV reader (big-endian sizes).
-	remaining := int64(fileLength) - 12
+	remaining := int64(fileLength) - 12 // #nosec G115 -- fileLength derives from a difference of non-negative int64 stream positions, so the int64 round-trip is lossless
 	for remaining >= 8 {
 		fcc, size, ok, herr := iffReadChunkHeader(reader, binary.BigEndian, remaining, parseOptions.ParsingMode)
 		if herr != nil {
@@ -1738,7 +1782,7 @@ func AiffFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Ai
 		if err != nil {
 			return nil, &meta.FileParseError{Source: err}
 		}
-		if err := aiffReadProperties(comm, isAifc, ssndSize, uint64(walkEnd-start), &file.Properties); err != nil {
+		if err := aiffReadProperties(comm, isAifc, ssndSize, uint64(walkEnd-start), &file.Properties); err != nil { // #nosec G115 -- walkEnd and start are non-negative stream positions with walkEnd >= start, so the difference fits int64
 			return nil, &meta.FileParseError{Source: err}
 		}
 	}
@@ -1909,7 +1953,7 @@ func aiffTextChunkBytes(text *AiffTextTag) ([]byte, error) {
 		if uint64(len(value)) > math.MaxUint32 {
 			return
 		}
-		size := uint32(len(value))
+		size := uint32(len(value)) // #nosec G115 -- guarded by the MaxUint32 check directly above, mirroring Rust's u32::try_from skip
 		encoded.Write(name[:])
 		var szb [4]byte
 		binary.BigEndian.PutUint32(szb[:], size)
@@ -1928,7 +1972,7 @@ func aiffTextChunkBytes(text *AiffTextTag) ([]byte, error) {
 		comtSizePos := encoded.Len()
 		encoded.Write([]byte{0, 0, 0, 0})
 		var nb [8]byte
-		binary.BigEndian.PutUint16(nb[:], uint16(len(text.Comments)))
+		binary.BigEndian.PutUint16(nb[:], uint16(len(text.Comments))) // #nosec G115 -- guarded by the `len(text.Comments) > 0xFFFF` TooMuchDataError check above
 		encoded.Write(nb[:2])
 		for _, c := range text.Comments {
 			if len(c.Text) > 0xFFFF {
@@ -1936,14 +1980,14 @@ func aiffTextChunkBytes(text *AiffTextTag) ([]byte, error) {
 			}
 			binary.BigEndian.PutUint32(nb[0:], c.Timestamp)
 			binary.BigEndian.PutUint16(nb[4:], c.MarkerID)
-			binary.BigEndian.PutUint16(nb[6:], uint16(len(c.Text)))
+			binary.BigEndian.PutUint16(nb[6:], uint16(len(c.Text))) // #nosec G115 -- guarded by the `len(c.Text) > 0xFFFF` TooMuchDataError check above
 			encoded.Write(nb[:8])
 			encoded.WriteString(c.Text)
 			if len(c.Text)%2 != 0 {
 				encoded.WriteByte(0)
 			}
 		}
-		comtLen64 := uint64(encoded.Len() - comtSizePos - 4)
+		comtLen64 := uint64(encoded.Len() - comtSizePos - 4) // #nosec G115 -- subtraction is non-negative by construction: 4 placeholder bytes plus the 2-byte comment count were written after comtSizePos
 		if comtLen64 > math.MaxUint32 {
 			return nil, &meta.TooMuchDataError{}
 		}
@@ -2106,11 +2150,11 @@ func aiffWriteTextChunks(file meta.FileLike, tag *AiffTextTag, writeOptions meta
 		// Remove all but the first range (back to front), then splice the
 		// new chunks at the first range's position (Rust).
 		for i := len(ranges) - 1; i >= 1; i-- {
-			if err := meta.Splice(file, uint64(ranges[i].start), uint64(ranges[i].end), nil); err != nil {
+			if err := meta.Splice(file, uint64(ranges[i].start), uint64(ranges[i].end), nil); err != nil { // #nosec G115 -- range start/end are non-negative chunk positions within the file, derived from Seek positions and u32 chunk sizes
 				return &meta.FileEncodingError{Source: err}
 			}
 		}
-		if err := meta.Splice(file, uint64(ranges[0].start), uint64(ranges[0].end), encoded); err != nil {
+		if err := meta.Splice(file, uint64(ranges[0].start), uint64(ranges[0].end), encoded); err != nil { // #nosec G115 -- range start/end are non-negative chunk positions within the file, derived from Seek positions and u32 chunk sizes
 			return &meta.FileEncodingError{Source: err}
 		}
 	}
@@ -2148,7 +2192,7 @@ func iffFixSize(file meta.FileLike) error {
 		return err
 	}
 	var sz [4]byte
-	binary.BigEndian.PutUint32(sz[:], uint32(end-8))
+	binary.BigEndian.PutUint32(sz[:], uint32(end-8)) // #nosec G115 -- end is the file length (>= 12 for the verified FORM header) and end-8 is guarded against MaxUint32 above
 	_, err = file.Write(sz[:])
 	return err
 }

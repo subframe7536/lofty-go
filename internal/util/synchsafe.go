@@ -18,9 +18,9 @@ func Unsynchsafe32(b []byte) uint32 {
 // first (see id3v2 synchsafe32Checked).
 func Synchsafe32(v uint32) [4]byte {
 	return [4]byte{
-		byte(v>>21) & 0x7F,
-		byte(v>>14) & 0x7F,
-		byte(v>>7) & 0x7F,
-		byte(v) & 0x7F,
+		byte(v>>21) & 0x7F, // #nosec G115 -- the post-conversion 0x7F mask keeps exactly the low 7 bits, so byte truncation cannot affect the synchsafe output
+		byte(v>>14) & 0x7F, // #nosec G115 -- the post-conversion 0x7F mask keeps exactly the low 7 bits, so byte truncation cannot affect the synchsafe output
+		byte(v>>7) & 0x7F,  // #nosec G115 -- the post-conversion 0x7F mask keeps exactly the low 7 bits, so byte truncation cannot affect the synchsafe output
+		byte(v) & 0x7F,     // #nosec G115 -- the post-conversion 0x7F mask keeps exactly the low 7 bits, so byte truncation cannot affect the synchsafe output
 	}
 }

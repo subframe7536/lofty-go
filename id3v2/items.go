@@ -1353,7 +1353,7 @@ func (f *RelativeVolumeAdjustmentFrame) frameBytes(ctx *frameEncodingContext) ([
 		expectedPeakByteLength := (int(bitsRepresentingPeak) + 7) >> 3
 		content = append(content, uint8(channelType))
 		var vb [2]byte
-		binary.BigEndian.PutUint16(vb[:], uint16(info.VolumeAdjustment))
+		binary.BigEndian.PutUint16(vb[:], uint16(info.VolumeAdjustment)) // #nosec G115 -- bit-preserving serialization of an i16, equivalent to Rust `volume_adjustment.to_be_bytes()`
 		content = append(content, vb[:]...)
 		if info.PeakVolume.IsNone() {
 			content = append(content, 0)
@@ -1363,7 +1363,7 @@ func (f *RelativeVolumeAdjustmentFrame) frameBytes(ctx *frameEncodingContext) ([
 		if len(peak) > expectedPeakByteLength {
 			bitsRepresentingPeak = 0
 			for i := 0; i < len(peak) && i < 32; i++ {
-				bitsRepresentingPeak += uint8(bitsLeadingOnes(peak[i]))
+				bitsRepresentingPeak += uint8(bitsLeadingOnes(peak[i])) // #nosec G115 -- bitsLeadingOnes returns at most 8 for a single byte
 			}
 		}
 		content = append(content, bitsRepresentingPeak)
@@ -1418,7 +1418,7 @@ func parseRelativeVolumeAdjustmentFrame(reader io.Reader, frameFlags FrameFlags,
 			if _, err := io.ReadFull(reader, vaBytes[:]); err != nil {
 				return nil, frameParseError(meta.None[FrameId](), err)
 			}
-			volumeAdjustment := int16(binary.BigEndian.Uint16(vaBytes[:]))
+			volumeAdjustment := int16(binary.BigEndian.Uint16(vaBytes[:])) // #nosec G115 -- bit-preserving conversion equivalent to Rust `read_i16`; mirrors upstream
 			var peakBits [1]byte
 			if _, err := io.ReadFull(reader, peakBits[:]); err != nil {
 				return nil, frameParseError(meta.None[FrameId](), err)
@@ -1573,8 +1573,20 @@ func (f *AttachedPictureFrame) frameBytes(ctx *frameEncodingContext) ([]byte, er
 	return data, nil
 }
 
+func cloneFramePicture(picture meta.Picture) meta.Picture {
+	builder := meta.PictureUnchecked(bytes.Clone(picture.Data())).PicType(picture.PicType())
+	if mimeType, ok := picture.MimeType().Get(); ok {
+		builder.MimeType(mimeType)
+	}
+	if description, ok := picture.Description(); ok {
+		builder.Description(description)
+	}
+	return builder.Build()
+}
+
 func (f *AttachedPictureFrame) cloneFrame() Frame {
 	c := *f
+	c.Picture = cloneFramePicture(f.Picture)
 	return &c
 }
 

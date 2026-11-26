@@ -23,7 +23,7 @@ func NewProbe(reader io.ReadSeeker) *Probe {
 //
 // The probe owns the open file; call [Probe.Close] when done.
 func NewProbeFromPath(path string) (*Probe, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- library opens caller-supplied paths by design
 	if err != nil {
 		return nil, &FileParseError{Source: err}
 	}
@@ -288,7 +288,7 @@ func ReadFromPath(path string, parseOptions ...ParseOptions) (*TaggedFile, error
 	if len(parseOptions) > 0 {
 		options = parseOptions[0]
 	}
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- library opens caller-supplied paths by design
 	if err != nil {
 		return nil, &FileParseError{Source: err}
 	}

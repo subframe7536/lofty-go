@@ -180,7 +180,7 @@ func mp4ReadBoxBound(reader io.ReadSeeker, avail uint64, mode meta.ParsingMode) 
 		if err != nil {
 			return nil, err
 		}
-		payload := uint64(end - h.pos)
+		payload := uint64(end - h.pos) // #nosec G115 -- the 8-byte header read above succeeded at pos, so EOF end >= h.pos and the difference is non-negative
 		if payload < 8 {
 			// Rust's `len < header_len` check
 			_, _ = reader.Seek(0, io.SeekEnd)
@@ -233,7 +233,7 @@ func mp4ReadBoxBound(reader io.ReadSeeker, avail uint64, mode meta.ParsingMode) 
 
 // mp4SkipBox skips past a box.
 func mp4SkipBox(reader io.ReadSeeker, h *mp4BoxHeader) error {
-	_, err := reader.Seek(h.pos+int64(h.size), io.SeekStart)
+	_, err := reader.Seek(h.pos+int64(h.size), io.SeekStart) // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
 	return err
 }
 
@@ -253,7 +253,7 @@ func mp4MdatLength(reader io.ReadSeeker, start, streamEnd int64, mode meta.Parsi
 		if pos >= streamEnd {
 			return 0, false, nil
 		}
-		h, err := mp4ReadBoxBound(reader, uint64(streamEnd-pos), mode)
+		h, err := mp4ReadBoxBound(reader, uint64(streamEnd-pos), mode) // #nosec G115 -- loop above terminates when pos >= end, so the difference is non-negative
 		if err != nil || h == nil {
 			return 0, false, nil
 		}
@@ -327,7 +327,7 @@ func Mp4FileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp4
 	if err != nil {
 		return nil, &meta.FileParseError{Source: err}
 	}
-	fileLen := uint64(streamEnd - start)
+	fileLen := uint64(streamEnd - start) // #nosec G115 -- streamEnd is the SeekEnd position of the same stream, always >= start
 	if _, err := reader.Seek(start, io.SeekStart); err != nil {
 		return nil, &meta.FileParseError{Source: err}
 	}
@@ -352,7 +352,7 @@ func Mp4FileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp4
 		return nil, &meta.FileParseError{Source: &Mp4ParseError{Message: "malformed ftyp major brand"}}
 	}
 	file.Properties.Ftyp = bstr
-	if _, err := reader.Seek(first.pos+int64(first.size), io.SeekStart); err != nil {
+	if _, err := reader.Seek(first.pos+int64(first.size), io.SeekStart); err != nil { // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
 		return nil, &meta.FileParseError{Source: err}
 	}
 
@@ -364,7 +364,7 @@ func Mp4FileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp4
 		if pos >= streamEnd {
 			break
 		}
-		h, err := mp4ReadBoxBound(reader, uint64(streamEnd-pos), parseOptions.ParsingMode)
+		h, err := mp4ReadBoxBound(reader, uint64(streamEnd-pos), parseOptions.ParsingMode) // #nosec G115 -- loop above terminates when pos >= end, so the difference is non-negative
 		if err != nil || h == nil {
 			break
 		}
@@ -399,8 +399,8 @@ func Mp4FileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp4
 	// body when it fits the allocation limit so the many small box reads and
 	// seeks inside it become memory operations instead of syscalls.
 	mr := reader
-	if int64(moov.size) > 0 {
-		if buf, aerr := util.TryByteSlice(int(moov.size)); aerr == nil {
+	if int64(moov.size) > 0 { // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
+		if buf, aerr := util.TryByteSlice(int(moov.size)); aerr == nil { // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions, and TryByteSlice rejects negative/oversized sizes via the allocation limit
 			if _, serr := reader.Seek(moov.pos, io.SeekStart); serr == nil {
 				if n, rerr := io.ReadFull(reader, buf); rerr == nil || rerr == io.EOF || rerr == io.ErrUnexpectedEOF {
 					mr = &offsetReadSeeker{r: bytes.NewReader(buf[:n]), base: moov.pos}
@@ -411,7 +411,7 @@ func Mp4FileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp4
 	if _, err := mr.Seek(moov.pos, io.SeekStart); err != nil {
 		return nil, &meta.FileParseError{Source: err}
 	}
-	moovEnd := moov.pos + int64(moov.size)
+	moovEnd := moov.pos + int64(moov.size) // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
 	var ilstTag *Ilst
 	var traks []*mp4BoxHeader
 
@@ -420,11 +420,11 @@ func Mp4FileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp4
 		if pos >= moovEnd {
 			break
 		}
-		h, err := mp4ReadBoxBound(mr, uint64(moovEnd-pos), parseOptions.ParsingMode)
+		h, err := mp4ReadBoxBound(mr, uint64(moovEnd-pos), parseOptions.ParsingMode) // #nosec G115 -- loop above terminates when pos >= end, so the difference is non-negative
 		if err != nil || h == nil {
 			break
 		}
-		boxEnd := h.pos + int64(h.size)
+		boxEnd := h.pos + int64(h.size) // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
 		switch string(h.name[:]) {
 		case "trak":
 			// Rust's `Moov::parse` only collects traks when reading properties,
@@ -488,7 +488,7 @@ func Mp4FileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp4
 // stops. Errors propagate like Rust's `reader.next()?`/`skip_atom?` scans;
 // an `Ok(None)`-style atom ends the walk.
 func mp4Children(reader io.ReadSeeker, h *mp4BoxHeader, mode meta.ParsingMode, fn func(c *mp4BoxHeader) bool) error {
-	end := h.pos + int64(h.size)
+	end := h.pos + int64(h.size) // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
 	if _, err := reader.Seek(h.pos, io.SeekStart); err != nil {
 		return err
 	}
@@ -497,7 +497,7 @@ func mp4Children(reader io.ReadSeeker, h *mp4BoxHeader, mode meta.ParsingMode, f
 		if pos >= end {
 			return nil
 		}
-		c, err := mp4ReadBoxBound(reader, uint64(end-pos), mode)
+		c, err := mp4ReadBoxBound(reader, uint64(end-pos), mode) // #nosec G115 -- loop above terminates when pos >= end, so the difference is non-negative
 		if err != nil {
 			return err
 		}
@@ -507,7 +507,7 @@ func mp4Children(reader io.ReadSeeker, h *mp4BoxHeader, mode meta.ParsingMode, f
 		if !fn(c) {
 			return nil
 		}
-		if _, err := reader.Seek(c.pos+int64(c.size), io.SeekStart); err != nil {
+		if _, err := reader.Seek(c.pos+int64(c.size), io.SeekStart); err != nil { // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
 			return err
 		}
 	}
@@ -565,7 +565,7 @@ func mp4ReadProperties(reader io.ReadSeeker, traks []*mp4BoxHeader, fileLen uint
 	if _, err := reader.Seek(mdhd.pos, io.SeekStart); err != nil {
 		return &Mp4ParseError{Source: err}
 	}
-	mdhdR := io.LimitReader(reader, int64(mdhd.size))
+	mdhdR := io.LimitReader(reader, int64(mdhd.size)) // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
 	var vb [4]byte
 	if _, err := io.ReadFull(mdhdR, vb[:]); err != nil {
 		return &Mp4ParseError{Source: err}
@@ -616,7 +616,7 @@ func mp4ReadProperties(reader io.ReadSeeker, traks []*mp4BoxHeader, fileLen uint
 		switch string(c.name[:]) {
 		case "stsd":
 			var aerr error
-			if stsdData, aerr = util.TryByteSlice(int(c.size)); aerr != nil {
+			if stsdData, aerr = util.TryByteSlice(int(c.size)); aerr != nil { // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions, and TryByteSlice rejects negative/oversized sizes via the allocation limit
 				cbErr = aerr
 				return false
 			}
@@ -640,7 +640,7 @@ func mp4ReadProperties(reader io.ReadSeeker, traks []*mp4BoxHeader, fileLen uint
 				cbErr = err
 				return false
 			}
-			sttsR := io.LimitReader(reader, int64(c.size))
+			sttsR := io.LimitReader(reader, int64(c.size)) // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
 			if _, err := io.ReadFull(sttsR, fb[:]); err != nil {
 				cbErr = err
 				return false
@@ -651,7 +651,7 @@ func mp4ReadProperties(reader io.ReadSeeker, traks []*mp4BoxHeader, fileLen uint
 				cbErr = io.ErrUnexpectedEOF
 				return false
 			}
-			entries, aerr := util.TryByteSlice(int(entryBytes))
+			entries, aerr := util.TryByteSlice(int(entryBytes)) // #nosec G115 -- entryBytes is validated <= c.size-8 immediately above, and TryByteSlice enforces the allocation limit
 			if aerr != nil {
 				cbErr = aerr
 				return false
@@ -691,13 +691,13 @@ func mp4ReadProperties(reader io.ReadSeeker, traks []*mp4BoxHeader, fileLen uint
 			// Accurate audio bitrate: mdat*8*timescale/duration (bps) → kbps
 			p.AudioBitrate = meta.Some(mp4AudioBitrateBps(mdat, timescale, duration) / 1000)
 		}
-		durationMs := uint64(p.Duration.Milliseconds())
+		durationMs := uint64(p.Duration.Milliseconds()) // #nosec G115 -- duration originates from the u64 mdhd duration, so Milliseconds() is non-negative
 		if durationMs == 0 {
 			return nil
 		}
-		p.OverallBitrate = meta.Some(uint32(util.SaturatingMul(fileLen, 8) / durationMs))
+		p.OverallBitrate = meta.Some(uint32(util.SaturatingMul(fileLen, 8) / durationMs)) // #nosec G115 -- mirrors Rust `overall_bitrate as u32` cast in read_properties; truncation is intentional parity
 		if v, ok := p.AudioBitrate.Get(); !ok || v == 0 {
-			p.AudioBitrate = meta.Some(uint32(util.SaturatingMul(mdat, 8) / durationMs))
+			p.AudioBitrate = meta.Some(uint32(util.SaturatingMul(mdat, 8) / durationMs)) // #nosec G115 -- mirrors Rust `(u128::from(mdat_len * 8) / duration_millis) as u32` cast in read_properties; truncation is intentional parity
 		}
 	}
 	return nil
@@ -712,7 +712,7 @@ func mp4AudioBitrateBps(mdat, timescale, duration uint64) uint32 {
 	hi += aHi * timescale // < 2^35, cannot overflow: the product is < 2^99
 	r := hi % duration
 	q0, _ := bits.Div64(r, lo, duration)
-	return uint32(q0)
+	return uint32(q0) // #nosec G115 -- mirrors Rust `(mdat*8*timescale/duration) as u32` truncating cast of the u128 bitrate quotient; see the function doc
 }
 
 var mp4SampleRates = [15]uint32{96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350, 0, 0}
@@ -748,7 +748,7 @@ func mp4ParseStsd(stsd []byte, mode meta.ParsingMode, p *Mp4Properties) error {
 	}
 	count := binary.BigEndian.Uint32(cb[:])
 	for i := uint32(0); i < count; i++ {
-		entry, err := mp4ReadBoxBound(r, uint64(r.Len()), mode)
+		entry, err := mp4ReadBoxBound(r, uint64(r.Len()), mode) // #nosec G115 -- bytes.Reader.Len() is a non-negative int
 		if err != nil || entry == nil {
 			return &Mp4ParseError{Source: err, Message: "expected sample entry atom"}
 		}
@@ -777,7 +777,7 @@ func mp4ParseStsd(stsd []byte, mode meta.ParsingMode, p *Mp4Properties) error {
 		if _, err := io.ReadFull(r, ch[:]); err != nil {
 			return &Mp4ParseError{Source: err}
 		}
-		p.Channels = meta.Some(uint8(binary.BigEndian.Uint16(ch[:])))
+		p.Channels = meta.Some(uint8(binary.BigEndian.Uint16(ch[:]))) // #nosec G115 -- mirrors Rust `reader.read_u16()? as u8` cast in read_stsd; truncation is intentional parity
 		if _, err := r.Seek(6, io.SeekCurrent); err != nil {
 			return &Mp4ParseError{Source: err}
 		}
@@ -819,12 +819,12 @@ func mp4ParseStsd(stsd []byte, mode meta.ParsingMode, p *Mp4Properties) error {
 			// `offset - atom.start` bytes from the current position, which
 			// overshoots for every real entry; seeking to the entry end is
 			// the intended behavior.)
-			if _, err := r.Seek(entry.pos+int64(entry.size), io.SeekStart); err != nil {
+			if _, err := r.Seek(entry.pos+int64(entry.size), io.SeekStart); err != nil { // #nosec G115 -- extended atoms are rejected for stsd sample entries above, so entry.size < 2^32
 				return &Mp4ParseError{Source: err}
 			}
 			continue
 		default:
-			if _, err := r.Seek(entry.pos+int64(entry.size), io.SeekStart); err != nil {
+			if _, err := r.Seek(entry.pos+int64(entry.size), io.SeekStart); err != nil { // #nosec G115 -- extended atoms are rejected for stsd sample entries above, so entry.size < 2^32
 				return &Mp4ParseError{Source: err}
 			}
 			continue
@@ -1056,7 +1056,7 @@ func mp4FlacProperties(r *bytes.Reader, p *Mp4Properties) error {
 	}
 	// Rust: `dfla.len - 12 < 18` with `len` including the 8-byte header, i.e.
 	// payload - 4 < 18. (`size` is already the payload length.)
-	if int64(dfla.size)-4 < 18 {
+	if int64(dfla.size)-4 < 18 { // #nosec G115 -- dfLa size only gates this comparison; absurd extended sizes wrap negative and take the conservative early-return branch, and reads stay inside the in-memory stsd buffer
 		return nil
 	}
 	// 4-byte FLAC metadata block header (last-block flag, type, 24-bit len)
@@ -1084,14 +1084,14 @@ func mp4WalkUdta(reader io.ReadSeeker, end int64, parseOptions meta.ParseOptions
 		if pos >= end {
 			return nil, nil
 		}
-		h, err := mp4ReadBoxBound(reader, uint64(end-pos), parseOptions.ParsingMode)
+		h, err := mp4ReadBoxBound(reader, uint64(end-pos), parseOptions.ParsingMode) // #nosec G115 -- loop above terminates when pos >= end, so the difference is non-negative
 		if err != nil {
 			return nil, err
 		}
 		if h == nil {
 			return nil, nil
 		}
-		boxEnd := h.pos + int64(h.size)
+		boxEnd := h.pos + int64(h.size) // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
 		if string(h.name[:]) == "meta" {
 			// meta is normally a fullbox (4-byte version+flags), but some
 			// encoders write it as a plain container — Rust `meta_is_full`
@@ -1110,7 +1110,7 @@ func mp4WalkUdta(reader io.ReadSeeker, end int64, parseOptions meta.ParseOptions
 				if pos >= boxEnd {
 					return nil, nil
 				}
-				mh, err := mp4ReadBoxBound(reader, uint64(boxEnd-pos), parseOptions.ParsingMode)
+				mh, err := mp4ReadBoxBound(reader, uint64(boxEnd-pos), parseOptions.ParsingMode) // #nosec G115 -- loop above terminates when pos >= end, so the difference is non-negative
 				if err != nil {
 					return nil, err
 				}
@@ -1118,9 +1118,9 @@ func mp4WalkUdta(reader io.ReadSeeker, end int64, parseOptions meta.ParseOptions
 					return nil, nil
 				}
 				if string(mh.name[:]) == "ilst" {
-					return ParseIlst(reader, mh.pos+int64(mh.size), parseOptions)
+					return ParseIlst(reader, mh.pos+int64(mh.size), parseOptions) // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
 				}
-				if _, err := reader.Seek(mh.pos+int64(mh.size), io.SeekStart); err != nil {
+				if _, err := reader.Seek(mh.pos+int64(mh.size), io.SeekStart); err != nil { // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
 					return nil, err
 				}
 			}
@@ -1188,24 +1188,24 @@ func (f *Mp4File) RemoveFromPath(path string, t meta.TagType) error {
 // Rust (which promotes to an extended-size box), a normal box that would
 // exceed u32 is an error rather than a silent truncation.
 func mp4UpdateBoxSize(file meta.FileLike, box *mp4BoxHeader, delta int64) error {
-	newTotal := int64(box.size) + delta + int64(box.hdr)
+	newTotal := int64(box.size) + delta + int64(box.hdr) // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions; hdr is 8 or 16
 	if box.hdr == 16 {
 		if _, err := file.Seek(box.pos-8, io.SeekStart); err != nil {
 			return err
 		}
 		var sz [8]byte
-		binary.BigEndian.PutUint64(sz[:], uint64(newTotal))
+		binary.BigEndian.PutUint64(sz[:], uint64(newTotal)) // #nosec G115 -- mirrors Rust write_atom_size arithmetic on the signed size difference; negative totals cannot occur for valid atom layouts
 		_, err := file.Write(sz[:])
 		return err
 	}
 	if newTotal > math.MaxUint32 {
 		return &meta.FileEncodingError{Source: &meta.TooMuchDataError{}}
 	}
-	if _, err := file.Seek(box.pos-int64(box.hdr), io.SeekStart); err != nil {
+	if _, err := file.Seek(box.pos-int64(box.hdr), io.SeekStart); err != nil { // #nosec G115 -- box.hdr is the box header length (8 or 16), a small constant
 		return err
 	}
 	var sz [4]byte
-	binary.BigEndian.PutUint32(sz[:], uint32(newTotal))
+	binary.BigEndian.PutUint32(sz[:], uint32(newTotal)) // #nosec G115 -- guarded by the newTotal > math.MaxUint32 check immediately above
 	_, err := file.Write(sz[:])
 	return err
 }
@@ -1229,7 +1229,7 @@ func mp4UpdateChunkOffsets(file meta.FileLike, moov, moof *mp4BoxHeader, shiftPo
 	}
 	if moov != nil {
 		// moov's own start always precedes the edit point; its end grew
-		moovEnd := moov.pos + int64(moov.size) + delta
+		moovEnd := moov.pos + int64(moov.size) + delta // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
 		if err := mp4WalkOffsetAtoms(file, moov.pos, moovEnd, false, shiftPos, delta); err != nil {
 			return &meta.FileEncodingError{Source: err}
 		}
@@ -1240,7 +1240,7 @@ func mp4UpdateChunkOffsets(file meta.FileLike, moov, moof *mp4BoxHeader, shiftPo
 		if moofStart >= shiftPos {
 			moofStart += delta
 		}
-		if err := mp4WalkOffsetAtoms(file, moofStart, moofStart+int64(moof.size), true, shiftPos, delta); err != nil {
+		if err := mp4WalkOffsetAtoms(file, moofStart, moofStart+int64(moof.size), true, shiftPos, delta); err != nil { // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
 			return &meta.FileEncodingError{Source: err}
 		}
 	}
@@ -1260,8 +1260,8 @@ func mp4WalkOffsetAtoms(file meta.FileLike, start, end int64, tfhdMode bool, shi
 			// unreadable child just ends the walk, it doesn't fail.
 			break
 		}
-		atomEnd := h.pos + int64(h.size)
-		if atomEnd > end || int64(h.size) < 0 {
+		atomEnd := h.pos + int64(h.size)        // #nosec G115 -- mirrors Rust's u64 atom arithmetic (start + len) in the AtomWriter tree walk, which wraps identically in release builds
+		if atomEnd > end || int64(h.size) < 0 { // #nosec G115 -- the conversion itself is the wraparound guard: negative sizes end the walk
 			break
 		}
 		name := string(h.name[:])
@@ -1296,7 +1296,7 @@ func mp4ShiftStco(file meta.FileLike, h *mp4BoxHeader, shiftPos, delta int64) er
 	}
 	maxEntries := int64(0)
 	if h.size > 8 {
-		maxEntries = (int64(h.size) - 8) / 4
+		maxEntries = (int64(h.size) - 8) / 4 // #nosec G115 -- guarded by the h.size > 8 check above, and negative sizes are filtered by the int64(h.size) < 0 guard in mp4WalkOffsetAtoms
 	}
 	if int64(count) < maxEntries {
 		maxEntries = int64(count)
@@ -1310,7 +1310,7 @@ func mp4ShiftStco(file meta.FileLike, h *mp4BoxHeader, shiftPos, delta int64) er
 		if int64(off) < shiftPos {
 			continue
 		}
-		if err := mp4WriteU32At(file, entryPos, uint32(int64(off)+delta)); err != nil {
+		if err := mp4WriteU32At(file, entryPos, uint32(int64(off)+delta)); err != nil { // #nosec G115 -- mirrors Rust `(i64::from(read_offset) + difference) as u32` cast in AtomWriterCompanion::update_offsets; truncation is intentional parity
 			return err
 		}
 	}
@@ -1325,7 +1325,7 @@ func mp4ShiftCo64(file meta.FileLike, h *mp4BoxHeader, shiftPos, delta int64) er
 	}
 	maxEntries := int64(0)
 	if h.size > 8 {
-		maxEntries = (int64(h.size) - 8) / 8
+		maxEntries = (int64(h.size) - 8) / 8 // #nosec G115 -- guarded by the h.size > 8 check above, and negative sizes are filtered by the int64(h.size) < 0 guard in mp4WalkOffsetAtoms
 	}
 	if int64(count) < maxEntries {
 		maxEntries = int64(count)
@@ -1340,10 +1340,10 @@ func mp4ShiftCo64(file meta.FileLike, h *mp4BoxHeader, shiftPos, delta int64) er
 			return err
 		}
 		off := binary.BigEndian.Uint64(b[:])
-		if int64(off) < shiftPos {
+		if int64(off) < shiftPos { // #nosec G115 -- mirrors Rust's u64 offset comparison in AtomWriterCompanion::update_offsets; the write arithmetic is the parity `as` cast
 			continue
 		}
-		binary.BigEndian.PutUint64(b[:], uint64(int64(off)+delta))
+		binary.BigEndian.PutUint64(b[:], uint64(int64(off)+delta)) // #nosec G115 -- mirrors Rust `(read_offset as i64 + difference) as u64` cast in AtomWriterCompanion::update_offsets; truncation is intentional parity
 		if _, err := file.Seek(entryPos, io.SeekStart); err != nil {
 			return err
 		}
@@ -1379,10 +1379,10 @@ func mp4ShiftTfhd(file meta.FileLike, h *mp4BoxHeader, shiftPos, delta int64) er
 		return err
 	}
 	off := binary.BigEndian.Uint64(ob[:])
-	if int64(off) < shiftPos {
+	if int64(off) < shiftPos { // #nosec G115 -- mirrors Rust's u64 offset comparison in AtomWriterCompanion::update_offsets; the write arithmetic is the parity `as` cast
 		return nil
 	}
-	binary.BigEndian.PutUint64(ob[:], uint64(int64(off)+delta))
+	binary.BigEndian.PutUint64(ob[:], uint64(int64(off)+delta)) // #nosec G115 -- mirrors Rust `(read_offset as i64 + difference) as u64` cast in AtomWriterCompanion::update_offsets; truncation is intentional parity
 	if _, err := file.Seek(entryPos, io.SeekStart); err != nil {
 		return err
 	}
@@ -1585,7 +1585,7 @@ func mp4ValidateAtoms(file meta.FileLike, end int64, mode meta.ParsingMode, cont
 			}
 			return nil
 		}
-		boxEnd := h.pos + int64(h.size)
+		boxEnd := h.pos + int64(h.size) // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
 		if boxEnd > end {
 			return &meta.SizeMismatchError{}
 		}
@@ -1619,7 +1619,7 @@ func mp4WriteIlstDataInner(file meta.FileLike, ilst *Ilst, writeOptions meta.Wri
 	// Rust `write_to` runs `verify_mp4` first — the file must start with a
 	// valid `ftyp` atom.
 	// Its errors surface as `FileParseError` (`verify_mp4(..).map_err(FileParseError::from)`).
-	first, err := mp4ReadBoxBound(file, uint64(streamEnd), mode)
+	first, err := mp4ReadBoxBound(file, uint64(streamEnd), mode) // #nosec G115 -- streamEnd is a non-negative Seek(0, SeekEnd) position
 	if err != nil {
 		return &meta.FileParseError{Source: err}
 	}
@@ -1656,7 +1656,7 @@ func mp4WriteIlstDataInner(file meta.FileLike, ilst *Ilst, writeOptions meta.Wri
 		if pos >= streamEnd {
 			break
 		}
-		h, err := mp4ReadBoxBound(file, uint64(streamEnd-pos), mode)
+		h, err := mp4ReadBoxBound(file, uint64(streamEnd-pos), mode) // #nosec G115 -- loop above terminates when pos >= end, so the difference is non-negative
 		if err != nil {
 			return &meta.FileEncodingError{Source: err}
 		}
@@ -1692,14 +1692,14 @@ func mp4WriteIlstDataInner(file meta.FileLike, ilst *Ilst, writeOptions meta.Wri
 	if _, err := file.Seek(moov.pos, io.SeekStart); err != nil {
 		return &meta.FileEncodingError{Source: err}
 	}
-	moovEnd := moov.pos + int64(moov.size)
+	moovEnd := moov.pos + int64(moov.size) // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
 	var udtaBox *mp4BoxHeader
 	for {
 		pos, _ := file.Seek(0, io.SeekCurrent)
 		if pos >= moovEnd {
 			break
 		}
-		h, err := mp4ReadBoxBound(file, uint64(moovEnd-pos), mode)
+		h, err := mp4ReadBoxBound(file, uint64(moovEnd-pos), mode) // #nosec G115 -- loop above terminates when pos >= end, so the difference is non-negative
 		if err != nil {
 			return &meta.FileEncodingError{Source: err}
 		}
@@ -1711,7 +1711,7 @@ func mp4WriteIlstDataInner(file meta.FileLike, ilst *Ilst, writeOptions meta.Wri
 			udtaBox = h
 			break
 		}
-		if _, err := file.Seek(h.pos+int64(h.size), io.SeekStart); err != nil {
+		if _, err := file.Seek(h.pos+int64(h.size), io.SeekStart); err != nil { // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
 			return &meta.FileEncodingError{Source: err}
 		}
 	}
@@ -1728,24 +1728,24 @@ func mp4WriteIlstDataInner(file meta.FileLike, ilst *Ilst, writeOptions meta.Wri
 		metaBox.Write([]byte{0, 0, 0, 0}) // fullbox header
 		metaBox.Write(mp4HdlrAtom)
 		metaBox.Write(ilstData)
-		if uint64(metaBox.Len())+4 > math.MaxUint32 {
+		if uint64(metaBox.Len())+4 > math.MaxUint32 { // #nosec G115 -- bytes.Buffer.Len() is a non-negative int; this conversion is itself the overflow guard
 			return &meta.FileEncodingError{Source: &meta.TooMuchDataError{}}
 		}
 		var metaHdr [4]byte
-		binary.BigEndian.PutUint32(metaHdr[:], uint32(metaBox.Len()+4))
+		binary.BigEndian.PutUint32(metaHdr[:], uint32(metaBox.Len()+4)) // #nosec G115 -- guarded by the math.MaxUint32 check immediately above
 		udta.Write(metaHdr[:])
 		udta.Write(metaBox.Bytes())
-		if uint64(udta.Len())+4 > math.MaxUint32 {
+		if uint64(udta.Len())+4 > math.MaxUint32 { // #nosec G115 -- bytes.Buffer.Len() is a non-negative int; this conversion is itself the overflow guard
 			return &meta.FileEncodingError{Source: &meta.TooMuchDataError{}}
 		}
 		var udtaHdr [4]byte
-		binary.BigEndian.PutUint32(udtaHdr[:], uint32(udta.Len()+4))
+		binary.BigEndian.PutUint32(udtaHdr[:], uint32(udta.Len()+4)) // #nosec G115 -- guarded by the math.MaxUint32 check immediately above
 		var out bytes.Buffer
 		out.Write(udtaHdr[:])
 		out.Write(udta.Bytes())
 		// Rust puts a created `udta` at the start of `moov` (data_start)
 		insertPos := moov.pos
-		if err := meta.Splice(file, uint64(insertPos), uint64(insertPos), out.Bytes()); err != nil {
+		if err := meta.Splice(file, uint64(insertPos), uint64(insertPos), out.Bytes()); err != nil { // #nosec G115 -- insertPos is moov.pos, a non-negative payload offset inside the staged in-memory file
 			return &meta.FileEncodingError{Source: err}
 		}
 		// Fix moov size
@@ -1759,7 +1759,7 @@ func mp4WriteIlstDataInner(file meta.FileLike, ilst *Ilst, writeOptions meta.Wri
 	if _, err := file.Seek(udtaBox.pos, io.SeekStart); err != nil {
 		return &meta.FileEncodingError{Source: err}
 	}
-	udtaEnd := udtaBox.pos + int64(udtaBox.size)
+	udtaEnd := udtaBox.pos + int64(udtaBox.size) // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
 	var metaBox, ilstBox *mp4BoxHeader
 	var metaChildren []*mp4BoxHeader
 	for {
@@ -1767,7 +1767,7 @@ func mp4WriteIlstDataInner(file meta.FileLike, ilst *Ilst, writeOptions meta.Wri
 		if pos >= udtaEnd {
 			break
 		}
-		h, err := mp4ReadBoxBound(file, uint64(udtaEnd-pos), mode)
+		h, err := mp4ReadBoxBound(file, uint64(udtaEnd-pos), mode) // #nosec G115 -- loop above terminates when pos >= end, so the difference is non-negative
 		if err != nil {
 			return &meta.FileEncodingError{Source: err}
 		}
@@ -1788,13 +1788,13 @@ func mp4WriteIlstDataInner(file meta.FileLike, ilst *Ilst, writeOptions meta.Wri
 					return &meta.FileEncodingError{Source: err}
 				}
 			}
-			metaEnd := h.pos + int64(h.size)
+			metaEnd := h.pos + int64(h.size) // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
 			for {
 				pos, _ := file.Seek(0, io.SeekCurrent)
 				if pos >= metaEnd {
 					break
 				}
-				mh, err := mp4ReadBoxBound(file, uint64(metaEnd-pos), mode)
+				mh, err := mp4ReadBoxBound(file, uint64(metaEnd-pos), mode) // #nosec G115 -- loop above terminates when pos >= end, so the difference is non-negative
 				if err != nil {
 					return &meta.FileEncodingError{Source: err}
 				}
@@ -1806,13 +1806,13 @@ func mp4WriteIlstDataInner(file meta.FileLike, ilst *Ilst, writeOptions meta.Wri
 					// Rust's atom_tree uses the first `ilst` found
 					ilstBox = mh
 				}
-				if _, err := file.Seek(mh.pos+int64(mh.size), io.SeekStart); err != nil {
+				if _, err := file.Seek(mh.pos+int64(mh.size), io.SeekStart); err != nil { // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
 					return &meta.FileEncodingError{Source: err}
 				}
 			}
 			break // Rust's `find_child_atom` uses the first `meta` found
 		}
-		if _, err := file.Seek(h.pos+int64(h.size), io.SeekStart); err != nil {
+		if _, err := file.Seek(h.pos+int64(h.size), io.SeekStart); err != nil { // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
 			return &meta.FileEncodingError{Source: err}
 		}
 	}
@@ -1827,24 +1827,24 @@ func mp4WriteIlstDataInner(file meta.FileLike, ilst *Ilst, writeOptions meta.Wri
 				break
 			}
 		}
-		rangeStart := ilstBox.pos - int64(ilstBox.hdr)
-		rangeEnd := ilstBox.pos + int64(ilstBox.size)
+		rangeStart := ilstBox.pos - int64(ilstBox.hdr) // #nosec G115 -- ilstBox.hdr is the box header length (8 or 16), a small constant
+		rangeEnd := ilstBox.pos + int64(ilstBox.size)  // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
 		// Rust only expands the range over adjacent `free` atoms when
 		// writing a tag — removal leaves the padding in place.
 		if len(ilstData) > 0 && ilstIdx >= 0 {
 			for i := ilstIdx - 1; i >= 0; i-- {
 				ch := metaChildren[i]
-				if string(ch.name[:]) != "free" || ch.pos+int64(ch.size) != rangeStart {
+				if string(ch.name[:]) != "free" || ch.pos+int64(ch.size) != rangeStart { // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
 					break
 				}
-				rangeStart = ch.pos - int64(ch.hdr)
+				rangeStart = ch.pos - int64(ch.hdr) // #nosec G115 -- ch.hdr is the box header length (8 or 16), a small constant
 			}
 			for i := ilstIdx + 1; i < len(metaChildren); i++ {
 				ch := metaChildren[i]
-				if string(ch.name[:]) != "free" || ch.pos-int64(ch.hdr) != rangeEnd {
+				if string(ch.name[:]) != "free" || ch.pos-int64(ch.hdr) != rangeEnd { // #nosec G115 -- ch.hdr is the box header length (8 or 16), a small constant
 					break
 				}
-				rangeEnd = ch.pos + int64(ch.size)
+				rangeEnd = ch.pos + int64(ch.size) // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
 			}
 		}
 
@@ -1876,7 +1876,7 @@ func mp4WriteIlstDataInner(file meta.FileLike, ilst *Ilst, writeOptions meta.Wri
 			ilstData = append(ilstData, mp4FreeAtom(pad)...)
 		}
 
-		if err := meta.Splice(file, uint64(rangeStart), uint64(rangeEnd), ilstData); err != nil {
+		if err := meta.Splice(file, uint64(rangeStart), uint64(rangeEnd), ilstData); err != nil { // #nosec G115 -- range bounds are positions of validated ilst/free atoms inside the staged in-memory file, non-negative by construction
 			return &meta.FileEncodingError{Source: err}
 		}
 		// Fix ancestor sizes
@@ -1898,8 +1898,8 @@ func mp4WriteIlstDataInner(file meta.FileLike, ilst *Ilst, writeOptions meta.Wri
 	}
 	if metaBox != nil {
 		// Insert ilst at end of meta
-		insertPos := metaBox.pos + int64(metaBox.size)
-		if err := meta.Splice(file, uint64(insertPos), uint64(insertPos), ilstData); err != nil {
+		insertPos := metaBox.pos + int64(metaBox.size)                                            // #nosec G115 -- box payload size validated <= the enclosing bound by mp4ReadBoxBound, whose avail derives from int64 stream positions
+		if err := meta.Splice(file, uint64(insertPos), uint64(insertPos), ilstData); err != nil { // #nosec G115 -- insertPos is the end offset of a validated meta box inside the staged in-memory file, non-negative by construction
 			return &meta.FileEncodingError{Source: err}
 		}
 		delta := int64(len(ilstData))
@@ -1916,17 +1916,17 @@ func mp4WriteIlstDataInner(file meta.FileLike, ilst *Ilst, writeOptions meta.Wri
 	metaOut.Write([]byte{0, 0, 0, 0}) // fullbox header
 	metaOut.Write(mp4HdlrAtom)
 	metaOut.Write(ilstData)
-	if uint64(metaOut.Len())+4 > math.MaxUint32 {
+	if uint64(metaOut.Len())+4 > math.MaxUint32 { // #nosec G115 -- bytes.Buffer.Len() is a non-negative int; this conversion is itself the overflow guard
 		return &meta.FileEncodingError{Source: &meta.TooMuchDataError{}}
 	}
 	var metaHdr [4]byte
-	binary.BigEndian.PutUint32(metaHdr[:], uint32(metaOut.Len()+4))
+	binary.BigEndian.PutUint32(metaHdr[:], uint32(metaOut.Len()+4)) // #nosec G115 -- guarded by the math.MaxUint32 check immediately above
 	var out bytes.Buffer
 	out.Write(metaHdr[:])
 	out.Write(metaOut.Bytes())
 	// Rust puts a created `meta` at the start of `udta` (data_start)
 	insertPos := udtaBox.pos
-	if err := meta.Splice(file, uint64(insertPos), uint64(insertPos), out.Bytes()); err != nil {
+	if err := meta.Splice(file, uint64(insertPos), uint64(insertPos), out.Bytes()); err != nil { // #nosec G115 -- insertPos is udtaBox.pos, a non-negative payload offset inside the staged in-memory file
 		return &meta.FileEncodingError{Source: err}
 	}
 	delta := int64(out.Len())
@@ -1966,7 +1966,7 @@ func mp4NameFromKey(key string) string {
 		case r == '©':
 			out = append(out, 0xA9)
 		case r < 0x100:
-			out = append(out, byte(r))
+			out = append(out, byte(r)) // #nosec G115 -- rune bounded to < 0x100 by the switch case guard
 		}
 	}
 	return string(out)

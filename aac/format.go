@@ -194,7 +194,7 @@ func AacFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Aac
 	if err != nil {
 		return nil, &meta.FileParseError{Source: err}
 	}
-	streamLen := uint64(streamEnd)
+	streamLen := uint64(streamEnd) // #nosec G115 -- streamEnd is a Seek end-of-stream position, always non-negative
 	if _, err := reader.Seek(pos, io.SeekStart); err != nil {
 		return nil, &meta.FileParseError{Source: err}
 	}
@@ -315,7 +315,7 @@ func AacFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Aac
 				return nil, &meta.FileParseError{Source: err}
 			}
 		}
-		avg := uint32(bitrateSum / frameCount)
+		avg := uint32(bitrateSum / frameCount) // #nosec G115 -- an average of uint32 bitrate values cannot exceed the largest individual bitrate, so it always fits in uint32
 
 		p := &file.Properties
 		p.Version = firstHeader.version

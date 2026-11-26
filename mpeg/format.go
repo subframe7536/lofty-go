@@ -430,7 +430,7 @@ func mpegReadProperties(
 	// Check for VBR headers — Rust reads 32 bytes at `data_start` and lets
 	// VbrHeader::read match Xing/Info or VBRI in that same window.
 	var vbr *vbrHeader
-	if _, err := data.Seek(int64(firstFrameOffset)+firstHeader.xingOffset(), io.SeekStart); err != nil {
+	if _, err := data.Seek(int64(firstFrameOffset)+firstHeader.xingOffset(), io.SeekStart); err != nil { // #nosec G115 -- firstFrameOffset is bounded by the stream length (an int64 seek position), so the sum cannot exceed MaxInt64
 		return nil, &meta.FileParseError{Source: err}
 	}
 	var buf [32]byte
@@ -449,8 +449,8 @@ func mpegReadProperties(
 		length := util.DivRound(uint64(firstHeader.samples)*1000*vbr.frames, uint64(firstHeader.sampleRate))
 		p.Duration = util.DurationFromMillis(length)
 		if length > 0 {
-			p.OverallBitrate = uint32(util.SaturatingMul(fileLength, 8) / length)
-			p.AudioBitrate = uint32(util.SaturatingMul(vbr.bytes, 8) / length)
+			p.OverallBitrate = uint32(util.SaturatingMul(fileLength, 8) / length) // #nosec G115 -- mirrors Rust `as u32` cast; truncation is intentional parity
+			p.AudioBitrate = uint32(util.SaturatingMul(vbr.bytes, 8) / length)    // #nosec G115 -- mirrors Rust `as u32` cast; truncation is intentional parity
 		}
 		return p, nil
 	}
@@ -503,7 +503,7 @@ func mpegReadProperties(
 	length := util.DivRound(util.SaturatingMul(streamEnd-firstFrameOffset, 8), uint64(p.AudioBitrate))
 	p.Duration = util.DurationFromMillis(length)
 	if length > 0 {
-		p.OverallBitrate = uint32(util.SaturatingMul(fileLength, 8) / length)
+		p.OverallBitrate = uint32(util.SaturatingMul(fileLength, 8) / length) // #nosec G115 -- mirrors Rust `as u32` cast; truncation is intentional parity
 	}
 	return p, nil
 }
@@ -519,7 +519,7 @@ func revSearchForFrameHeader(data io.ReadSeeker, pos uint64) (*mpegHeader, uint6
 		bounds = revFrameSearchBounds
 	}
 	start := pos - bounds
-	if _, err := data.Seek(int64(start), io.SeekStart); err != nil {
+	if _, err := data.Seek(int64(start), io.SeekStart); err != nil { // #nosec G115 -- start = pos - bounds is a non-negative file offset bounded by an int64 stream position, so it fits in int64
 		return nil, 0, false, err
 	}
 	buf := make([]byte, bounds)
@@ -538,7 +538,7 @@ func revSearchForFrameHeader(data io.ReadSeeker, pos uint64) (*mpegHeader, uint6
 			continue
 		}
 		abs := start + uint64(i-1)
-		if _, err := data.Seek(int64(abs), io.SeekStart); err != nil {
+		if _, err := data.Seek(int64(abs), io.SeekStart); err != nil { // #nosec G115 -- abs is a file offset within a small search window after pos, itself bounded by an int64 stream position
 			return nil, 0, false, err
 		}
 		return h, abs, true, nil
@@ -673,7 +673,7 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp
 		if h == nil {
 			break
 		}
-		firstFrameOffset = uint64(offset)
+		firstFrameOffset = uint64(offset) // #nosec G115 -- offset is a non-negative file position returned by findNextFrame
 		firstHeader = h
 
 		// Check for a buried ID3v2 tag
@@ -708,7 +708,7 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp
 	if err != nil {
 		return nil, &meta.FileParseError{Source: err}
 	}
-	endOffset := uint64(streamEnd)
+	endOffset := uint64(streamEnd) // #nosec G115 -- streamEnd is a Seek end-of-stream position, always non-negative
 
 	// ID3v1
 	var id3v1Tag *id3v1.Id3v1Tag
@@ -716,11 +716,11 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp
 		return nil, &meta.FileParseError{Source: &meta.TagParseError{TagType: meta.TagTypeID3v1, HasTagType: true, Source: err}}
 	} else if found {
 		id3v1Tag = t
-		if uint64(start) < endOffset {
-			endOffset = uint64(start)
+		if uint64(start) < endOffset { // #nosec G115 -- start is a non-negative file position where the ID3v1 tag begins
+			endOffset = uint64(start) // #nosec G115 -- start is a non-negative file position where the ID3v1 tag begins
 		}
 	}
-	if _, err := reader.Seek(int64(endOffset), io.SeekStart); err != nil {
+	if _, err := reader.Seek(int64(endOffset), io.SeekStart); err != nil { // #nosec G115 -- endOffset never exceeds the int64 stream-end position it was derived from, so it fits in int64
 		return nil, &meta.FileParseError{Source: err}
 	}
 
@@ -738,11 +738,11 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp
 			file.Lyrics3v2 = meta.Some(v)
 		}
 
-		if uint64(start) < endOffset {
-			endOffset = uint64(start)
+		if uint64(start) < endOffset { // #nosec G115 -- start is a non-negative file position where the Lyrics3 tag begins
+			endOffset = uint64(start) // #nosec G115 -- start is a non-negative file position where the Lyrics3 tag begins
 		}
 	}
-	if _, err := reader.Seek(int64(endOffset), io.SeekStart); err != nil {
+	if _, err := reader.Seek(int64(endOffset), io.SeekStart); err != nil { // #nosec G115 -- endOffset never exceeds the int64 stream-end position it was derived from, so it fits in int64
 		return nil, &meta.FileParseError{Source: err}
 	}
 
@@ -751,7 +751,7 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp
 	if endOffset < 32 {
 		return nil, &meta.FileParseError{Source: &meta.SizeMismatchError{}}
 	}
-	if _, err := reader.Seek(int64(endOffset)-32, io.SeekStart); err != nil {
+	if _, err := reader.Seek(int64(endOffset)-32, io.SeekStart); err != nil { // #nosec G115 -- endOffset >= 32 is checked above and it never exceeds the int64 stream-end position, so the subtraction fits in int64
 		return nil, &meta.FileParseError{Source: err}
 	}
 	if tag, apeHeader, err := ape.ReadApeTag(reader, true, parseOptions); err != nil {
@@ -771,7 +771,7 @@ func MpegFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Mp
 		if _, err := reader.Seek(int64(firstFrameOffset), io.SeekStart); err != nil {
 			return nil, &meta.FileParseError{Source: err}
 		}
-		props, err := mpegReadProperties(reader, firstHeader, firstFrameOffset, endOffset, uint64(streamEnd))
+		props, err := mpegReadProperties(reader, firstHeader, firstFrameOffset, endOffset, uint64(streamEnd)) // #nosec G115 -- streamEnd is a Seek end-of-stream position, always non-negative
 		if err != nil {
 			return nil, err
 		}

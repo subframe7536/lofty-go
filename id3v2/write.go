@@ -99,7 +99,7 @@ func createTag(flags Id3v2TagFlags, frames []Frame, writeOptions meta.WriteOptio
 		// The CRC-32 is stored as a 35 bit synchsafe integer
 		var encodedCrc [5]byte
 		for i := 0; i < 5; i++ {
-			encodedCrc[i] = uint8(crc>>((4-i)*7)) & 0x7F
+			encodedCrc[i] = uint8(crc>>((4-i)*7)) & 0x7F // #nosec G115 -- only the low 7 bits are needed and the result is explicitly masked with 0x7F
 		}
 		out[crcPos] = 5
 		copy(out[crcPos+1:crcPos+6], encodedCrc[:])
@@ -369,7 +369,7 @@ func writeFrame(w io.Writer, name string, flags FrameFlags, value []byte, writeO
 	if flags.Encryption.IsSome() {
 		return writeEncrypted(w, name, value, flags, writeOptions)
 	}
-	length := uint32(len(value))
+	length := uint32(len(value)) // #nosec G115 -- mirrors Rust `value.len() as u32` cast; truncation is intentional parity
 	isGrouping := flags.GroupingIdentity.IsSome()
 	if isGrouping {
 		length++
@@ -394,7 +394,7 @@ func writeEncrypted(w io.Writer, name string, value []byte, flags FrameFlags, wr
 			"attempted to write an encrypted frame with an invalid method symbol")
 	}
 	if dli, ok := flags.DataLengthIndicator.Get(); ok && dli > 0 {
-		if err := writeFrameHeader(w, name, uint32(len(value)+1), flags, writeOptions); err != nil {
+		if err := writeFrameHeader(w, name, uint32(len(value)+1), flags, writeOptions); err != nil { // #nosec G115 -- mirrors Rust `(value.len() + 1) as u32` cast; truncation is intentional parity
 			return err
 		}
 		if !writeOptions.UseID3v23 {

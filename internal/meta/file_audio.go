@@ -41,7 +41,7 @@ func PresentTagTypes(has func(TagType) bool, candidates ...TagType) []TagType {
 // SaveToPath opens `path` and saves every tag of `f` to it, mirroring Rust's
 // `AudioFile::save_to_path`.
 func SaveToPath(path string, f AudioFile, writeOptions WriteOptions) error {
-	osFile, err := os.OpenFile(path, os.O_RDWR, 0)
+	osFile, err := os.OpenFile(path, os.O_RDWR, 0) // #nosec G304 -- library opens caller-supplied paths by design
 	if err != nil {
 		return &FileEncodingError{Source: err}
 	}

@@ -589,12 +589,12 @@ func (p *Picture) AsFlacBytes(pictureInformation PictureInformation, encode bool
 	data = append(data, tmp[:]...)
 
 	mimeStr := p.mimeStr()
-	binary.BigEndian.PutUint32(tmp[:], uint32(len(mimeStr)))
+	binary.BigEndian.PutUint32(tmp[:], uint32(len(mimeStr))) // #nosec G115 -- mirrors Rust `mime_str.len() as u32` cast; truncation is intentional parity
 	data = append(data, tmp[:]...)
 	data = append(data, mimeStr...)
 
 	if desc, ok := p.description.Get(); ok {
-		binary.BigEndian.PutUint32(tmp[:], uint32(len(desc)))
+		binary.BigEndian.PutUint32(tmp[:], uint32(len(desc))) // #nosec G115 -- mirrors Rust `desc.len() as u32` cast; truncation is intentional parity
 		data = append(data, tmp[:]...)
 		data = append(data, desc...)
 	} else {
@@ -610,7 +610,7 @@ func (p *Picture) AsFlacBytes(pictureInformation PictureInformation, encode bool
 	binary.BigEndian.PutUint32(tmp[:], pictureInformation.NumColors)
 	data = append(data, tmp[:]...)
 
-	binary.BigEndian.PutUint32(tmp[:], uint32(len(p.data)))
+	binary.BigEndian.PutUint32(tmp[:], uint32(len(p.data))) // #nosec G115 -- mirrors Rust `pic_data.len() as u32` cast; truncation is intentional parity
 	data = append(data, tmp[:]...)
 	data = append(data, p.data...)
 

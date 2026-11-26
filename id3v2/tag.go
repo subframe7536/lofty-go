@@ -393,6 +393,25 @@ func (t *Id3v2Tag) OriginalVersion() Id3v2Version { return t.originalVersion }
 // SetOriginalVersion sets the stored original version.
 func (t *Id3v2Tag) SetOriginalVersion(v Id3v2Version) { t.originalVersion = v }
 
+func (t *Id3v2Tag) clone() *Id3v2Tag {
+	if t == nil {
+		return nil
+	}
+	flags := t.flags
+	if flags.Restrictions != nil {
+		restrictions := *flags.Restrictions
+		flags.Restrictions = &restrictions
+	}
+	frames := NewFrameList()
+	if t.Frames != nil {
+		frames = t.Frames.Clone()
+	}
+	return &Id3v2Tag{flags: flags, originalVersion: t.originalVersion, Frames: frames}
+}
+
+// CloneCompanion implements [meta.CompanionCloner].
+func (t *Id3v2Tag) CloneCompanion() any { return t.clone() }
+
 // TagType returns [meta.TagTypeID3v2].
 func (t *Id3v2Tag) TagType() meta.TagType { return meta.TagTypeID3v2 }
 
@@ -805,7 +824,7 @@ func (t *Id3v2Tag) SaveToVerified(vf *meta.VerifiedFile, writeOptions meta.Write
 	}
 	var end uint64
 	if found {
-		end = uint64(rangeEnd)
+		end = uint64(rangeEnd) // #nosec G115 -- rangeEnd is a non-negative file position where the existing tag ends
 	}
 	return meta.Splice(file, 0, end, encoded)
 }
@@ -837,7 +856,7 @@ func WriteId3v2(file meta.FileLike, tag *meta.Tag, writeOptions meta.WriteOption
 	}
 	var start, end uint64
 	if found {
-		end = uint64(rangeEnd)
+		end = uint64(rangeEnd) // #nosec G115 -- rangeEnd is a non-negative file position where the existing tag ends
 	}
 	return meta.Splice(file, start, end, encoded)
 }

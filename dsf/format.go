@@ -74,7 +74,7 @@ func DsfFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Dsf
 	if err != nil {
 		return nil, &meta.FileParseError{Source: err}
 	}
-	streamLen := uint64(streamEnd - start)
+	streamLen := uint64(streamEnd - start) // #nosec G115 -- stream end position is always >= the current in-stream position
 	if _, err := reader.Seek(start, io.SeekStart); err != nil {
 		return nil, &meta.FileParseError{Source: err}
 	}
@@ -147,7 +147,7 @@ func DsfFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Dsf
 		p.SampleRate = sampleFreq
 		p.BitDepth = uint8(bitsPerSample)
 		// Rust truncates bit_depth to u8 before the bitrate calculation
-		p.AudioBitrate = uint32(util.DivRound(uint64(channels)*uint64(sampleFreq)*uint64(p.BitDepth), 1000))
+		p.AudioBitrate = uint32(util.DivRound(uint64(channels)*uint64(sampleFreq)*uint64(p.BitDepth), 1000)) // #nosec G115 -- mirrors Rust `as u32` cast; truncation is intentional parity
 		if sampleFreq > 0 && sampleCount > 0 {
 			// Rust: (u128(sample_count) * 1000).div_round(u128(sample_rate))
 			millis := util.MulDivRound(sampleCount, 1000, uint64(sampleFreq))
@@ -155,7 +155,7 @@ func DsfFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Dsf
 			if millis > 0 {
 				// Rust uses the declared total_file_size, not the actual
 				// stream length
-				p.OverallBitrate = uint32(util.DivRound(util.SaturatingMul(totalFileSize, 8), millis))
+				p.OverallBitrate = uint32(util.DivRound(util.SaturatingMul(totalFileSize, 8), millis)) // #nosec G115 -- mirrors Rust `as u32` cast; truncation is intentional parity
 			}
 		}
 	}
@@ -163,7 +163,7 @@ func DsfFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) (*Dsf
 	// ID3v2 tag at metadata pointer (usually EOF) — Rust seeks there
 	// unconditionally and runs find_id3v2 (which scans for the "ID3" magic).
 	if parseOptions.ReadTags && metadataPtr > 0 && metadataPtr < streamLen {
-		if _, err := reader.Seek(start+int64(metadataPtr), io.SeekStart); err != nil {
+		if _, err := reader.Seek(start+int64(metadataPtr), io.SeekStart); err != nil { // #nosec G115 -- metadataPtr < streamLen is checked above and streamLen derives from an int64 position, so it fits in int64
 			return nil, &meta.FileParseError{Source: err}
 		}
 		located, err := id3v2.LocateId3v2(reader, true, parseOptions)

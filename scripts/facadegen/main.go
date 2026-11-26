@@ -331,12 +331,12 @@ func main() {
 	formatted, err := format.Source(out.Bytes())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "format error:", err)
-		if werr := os.WriteFile("facade_gen.go.bad", out.Bytes(), 0o644); werr != nil {
+		if werr := os.WriteFile("facade_gen.go.bad", out.Bytes(), 0o644); werr != nil { // #nosec G306 -- generated source file, world-readable is correct
 			fmt.Fprintln(os.Stderr, werr)
 		}
 		os.Exit(1)
 	}
-	if err := os.WriteFile("facade_gen.go", formatted, 0o644); err != nil {
+	if err := os.WriteFile("facade_gen.go", formatted, 0o644); err != nil { // #nosec G306 -- generated source file, world-readable is correct
 		panic(err)
 	}
 	fmt.Println("wrote facade_gen.go:", len(types), "types,", len(consts), "consts,", len(vars_), "vars,", len(funcs), "funcs")

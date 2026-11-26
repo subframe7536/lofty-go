@@ -254,7 +254,7 @@ func (f *ChapterTableOfContentsFrame) frameBytes(ctx *frameEncodingContext) ([]b
 	}
 	content.Write(idBytes)
 	content.WriteByte(f.TocFlags.AsU8())
-	content.WriteByte(uint8(len(f.Entries)))
+	content.WriteByte(uint8(len(f.Entries))) // #nosec G115 -- len(f.Entries) > 0xFF is rejected just above
 	for _, entry := range f.Entries {
 		entryBytes, err := util.TextEncodingLatin1.Encode(entry, true, ctx.writeOptions.LossyTextEncoding)
 		if err != nil {

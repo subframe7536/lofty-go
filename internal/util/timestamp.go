@@ -267,7 +267,7 @@ func TimestampParse(reader io.Reader, parseMode ParsingMode) (Option[Timestamp],
 		if n == 0 {
 			break
 		}
-		*s.dst = Some(uint8(v))
+		*s.dst = Some(uint8(v)) // #nosec G115 -- v is parsed from at most 2 decimal digits (timestampSegment size argument), so it is at most 99 and fits uint8
 	}
 
 	return Some(timestamp), nil

@@ -32,13 +32,13 @@ func NewVerifiedFile(file FileLike, parseOptions ParseOptions) (*VerifiedFile, e
 // `TagExt::save_to_path`). The extension is ignored; see
 // [VerifiedFileFromPathByExtension] for the extension-typed variant.
 func VerifiedFileFromPath(path string, parseOptions ParseOptions) (*VerifiedFile, *os.File, error) {
-	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	f, err := os.OpenFile(path, os.O_RDWR, 0) // #nosec G304 -- library opens caller-supplied paths by design
 	if err != nil {
 		return nil, nil, &FileParseError{Source: err}
 	}
 	vf, err := NewVerifiedFile(OSFile{File: f}, parseOptions)
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, nil, err
 	}
 	return vf, f, nil
@@ -50,13 +50,13 @@ func VerifiedFileFromPath(path string, parseOptions ParseOptions) (*VerifiedFile
 // `TagType::remove_from_path`. An unrecognized or missing extension yields an
 // [UnknownFormatError].
 func VerifiedFileFromPathByExtension(path string) (*VerifiedFile, *os.File, error) {
-	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	f, err := os.OpenFile(path, os.O_RDWR, 0) // #nosec G304 -- library opens caller-supplied paths by design
 	if err != nil {
 		return nil, nil, &FileParseError{Source: err}
 	}
 	ft, ok := FileTypeFromPath(path)
 	if !ok {
-		f.Close()
+		_ = f.Close()
 		return nil, nil, &FileParseError{Source: &UnknownFormatError{}}
 	}
 	return &VerifiedFile{format: ft, file: OSFile{File: f}}, f, nil

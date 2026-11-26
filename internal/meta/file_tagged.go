@@ -243,7 +243,7 @@ func (t *TaggedFile) Save(file FileLike, writeOptions WriteOptions) error {
 // [BoundTaggedFile] inherits this method, which, like Rust, writes to `path`
 // rather than to its bound file.
 func (t *TaggedFile) SaveToPath(path string, writeOptions WriteOptions) (err error) {
-	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	f, err := os.OpenFile(path, os.O_RDWR, 0) // #nosec G304 -- library opens caller-supplied paths by design
 	if err != nil {
 		return &FileEncodingError{Source: err}
 	}

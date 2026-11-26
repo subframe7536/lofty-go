@@ -91,13 +91,30 @@ func ParseLyrics3Tag(content []byte) (*Lyrics3Tag, error) {
 	}, nil
 }
 
-// Tag converts the tag to a generic [Tag].
+// Tag converts the tag to a generic [Tag]. It is non-destructive; use
+// [Lyrics3Tag.SplitTag] for the destructive conversion.
 func (t *Lyrics3Tag) Tag() *meta.Tag {
+	clone := *t
+	_, tag := (&clone).SplitTag()
+	return tag
+}
+
+// SplitTag destructively moves the lyrics field into a generic [Tag],
+// mirroring Rust's `SplitTag::split_tag`. Lyrics3v1 has no format-specific
+// remainder, so the receiver is left empty and returned as the empty remainder.
+func (t *Lyrics3Tag) SplitTag() (*Lyrics3Tag, *meta.Tag) {
 	tag := meta.NewTag(meta.TagTypeLyrics3)
 	if t.Lyrics != "" {
 		tag.PushUnchecked(meta.NewTagItem(meta.ItemKeyLyrics, meta.ItemValueText(t.Lyrics)))
+		t.Lyrics = ""
 	}
-	return tag
+	return t, tag
+}
+
+// MergeTag merges a generic [Tag] into a Lyrics3v1 tag. The split remainder
+// is empty, mirroring Rust's unit remainder.
+func (t *Lyrics3Tag) MergeTag(tag *meta.Tag) *Lyrics3Tag {
+	return Lyrics3TagFromTag(tag)
 }
 
 // Lyrics3TagFromTag converts a generic [Tag] to a [Lyrics3Tag].
@@ -257,7 +274,7 @@ func ParseLyrics3v2Tag(content []byte, parseOptions meta.ParseOptions) (*Lyrics3
 		return nil, &Lyrics3v2ParseError{Message: "non-numeric tag size"}
 	}
 	body = body[:len(body)-6]
-	if int(tagSize) != len(body) {
+	if int(tagSize) != len(body) { // #nosec G115 -- tagSize is parsed from at most 6 ASCII digits, so it is at most 999999
 		if parseOptions.ParsingMode == meta.ParsingModeStrict {
 			return nil, &Lyrics3v2ParseError{Source: &meta.SizeMismatchError{}}
 		}
@@ -292,7 +309,7 @@ func ParseLyrics3v2Tag(content []byte, parseOptions meta.ParseOptions) (*Lyrics3
 			return nil, &Lyrics3v2ParseError{Message: "non-numeric field size"}
 		}
 		fields = fields[8:]
-		size := int(size64)
+		size := int(size64) // #nosec G115 -- size64 is parsed from exactly 5 ASCII digits (n != 5 errors above), so it is at most 99999
 
 		switch id {
 		case "IND":
@@ -435,57 +452,98 @@ func lyrics3v2ParseTimestamp(s string) (*meta.Timestamp, error) {
 	return &meta.Timestamp{Minute: meta.Some(uint8(m)), Second: meta.Some(uint8(sec))}, nil
 }
 
+// cloneLyrics3v2Image deep-copies an image reference, including its optional
+// timestamp pointer.
+func cloneLyrics3v2Image(image Lyrics3v2Image) Lyrics3v2Image {
+	if image.Timestamp != nil {
+		timestamp := *image.Timestamp
+		image.Timestamp = &timestamp
+	}
+	return image
+}
+
+func (t *Lyrics3v2Tag) clone() *Lyrics3v2Tag {
+	if t == nil {
+		return nil
+	}
+	clone := *t
+	if t.Images != nil {
+		clone.Images = make([]Lyrics3v2Image, len(t.Images))
+		for i, image := range t.Images {
+			clone.Images[i] = cloneLyrics3v2Image(image)
+		}
+	}
+	return &clone
+}
+
+// CloneCompanion implements [meta.CompanionCloner].
+func (t *Lyrics3v2Tag) CloneCompanion() any { return t.clone() }
+
 // Tag converts the tag to a generic [Tag]. Flags and images ride the
 // companion tag when [GlobalOptions.PreserveFormatSpecificItems] is enabled.
+// It is non-destructive; use [Lyrics3v2Tag.SplitTag] for the destructive conversion.
 func (t *Lyrics3v2Tag) Tag() *meta.Tag {
-	tag := meta.NewTag(meta.TagTypeLyrics3v2)
-	take := func(opt meta.Option[string], key meta.ItemKey) {
-		if v, ok := opt.Get(); ok && v != "" {
-			tag.PushUnchecked(meta.NewTagItem(key, meta.ItemValueText(v)))
-		}
-	}
-	take(t.Lyrics, meta.ItemKeyLyrics)
-	take(t.Info, meta.ItemKeyComment)
-	take(t.Author, meta.ItemKeyLyricist)
-	take(t.ExtendedAlbumName, meta.ItemKeyAlbumTitle)
-	take(t.ExtendedArtistName, meta.ItemKeyTrackArtist)
-	take(t.ExtendedTrackTitle, meta.ItemKeyTrackTitle)
-
-	if util.GetGlobalOptions().PreserveFormatSpecificItems {
-		remainder := *t
-		remainder.Lyrics, remainder.Info, remainder.Author = meta.Option[string]{}, meta.Option[string]{}, meta.Option[string]{}
-		remainder.ExtendedAlbumName, remainder.ExtendedArtistName, remainder.ExtendedTrackTitle = meta.Option[string]{}, meta.Option[string]{}, meta.Option[string]{}
-		if !remainder.IsEmpty() {
-			tag.SetCompanionTag(&remainder)
-		}
+	remainder, tag := t.clone().SplitTag()
+	if util.GetGlobalOptions().PreserveFormatSpecificItems && !remainder.IsEmpty() {
+		tag.SetCompanionTag(remainder)
 	}
 	return tag
+}
+
+// SplitTag destructively moves representable fields into a generic [Tag],
+// leaving flags and images in the receiver, mirroring Rust's
+// `SplitTag::split_tag`. The receiver is returned as the remainder.
+func (t *Lyrics3v2Tag) SplitTag() (*Lyrics3v2Tag, *meta.Tag) {
+	tag := meta.NewTag(meta.TagTypeLyrics3v2)
+	take := func(opt *meta.Option[string], key meta.ItemKey) {
+		v, ok := opt.Get()
+		if !ok {
+			return
+		}
+		// Unlike other formats, empty fields are unlikely to have significance;
+		// they are consumed but dropped, as in Rust.
+		if v != "" {
+			tag.PushUnchecked(meta.NewTagItem(key, meta.ItemValueText(v)))
+		}
+		*opt = meta.None[string]()
+	}
+	take(&t.Lyrics, meta.ItemKeyLyrics)
+	take(&t.Info, meta.ItemKeyComment)
+	take(&t.Author, meta.ItemKeyLyricist)
+	take(&t.ExtendedAlbumName, meta.ItemKeyAlbumTitle)
+	take(&t.ExtendedArtistName, meta.ItemKeyTrackArtist)
+	take(&t.ExtendedTrackTitle, meta.ItemKeyTrackTitle)
+	return t, tag
+}
+
+// MergeTag merges a generic [Tag] into this remainder, mirroring Rust's
+// `MergeTag::merge_tag`. Generic values take precedence over any pre-existing
+// fields. The receiver is mutated and returned.
+func (t *Lyrics3v2Tag) MergeTag(tag *meta.Tag) *Lyrics3v2Tag {
+	get := func(key meta.ItemKey, dst *meta.Option[string]) {
+		if s, ok := tag.GetString(key); ok {
+			*dst = meta.Some(s)
+		}
+	}
+	get(meta.ItemKeyLyrics, &t.Lyrics)
+	get(meta.ItemKeyComment, &t.Info)
+	get(meta.ItemKeyLyricist, &t.Author)
+	get(meta.ItemKeyAlbumTitle, &t.ExtendedAlbumName)
+	get(meta.ItemKeyTrackArtist, &t.ExtendedArtistName)
+	get(meta.ItemKeyTrackTitle, &t.ExtendedTrackTitle)
+	return t
 }
 
 // Lyrics3v2TagFromTag merges a generic [Tag] into a [Lyrics3v2Tag], taking
 // format-specific data back out of the companion tag when present.
 func Lyrics3v2TagFromTag(input *meta.Tag) *Lyrics3v2Tag {
-	var merged Lyrics3v2Tag
+	base := NewLyrics3v2Tag()
 	if util.GetGlobalOptions().PreserveFormatSpecificItems {
 		if comp, ok := input.CompanionTag().(*Lyrics3v2Tag); ok && comp != nil {
-			merged = *comp
-			if len(comp.Images) > 0 {
-				merged.Images = append([]Lyrics3v2Image(nil), comp.Images...)
-			}
+			base = comp.clone()
 		}
 	}
-	get := func(key meta.ItemKey, dst *meta.Option[string]) {
-		if s, ok := input.GetString(key); ok {
-			*dst = meta.Some(s)
-		}
-	}
-	get(meta.ItemKeyLyrics, &merged.Lyrics)
-	get(meta.ItemKeyComment, &merged.Info)
-	get(meta.ItemKeyLyricist, &merged.Author)
-	get(meta.ItemKeyAlbumTitle, &merged.ExtendedAlbumName)
-	get(meta.ItemKeyTrackArtist, &merged.ExtendedArtistName)
-	get(meta.ItemKeyTrackTitle, &merged.ExtendedTrackTitle)
-	return &merged
+	return base.MergeTag(input)
 }
 
 func (t *Lyrics3v2Tag) isContentEmpty() bool {
@@ -825,7 +883,7 @@ func Lyrics3v2WriteTo(file meta.FileLike, tag *Lyrics3v2Tag, writeOptions meta.W
 	if err != nil {
 		return &meta.FileEncodingError{Source: err}
 	}
-	return meta.Splice(file, uint64(existingStart), uint64(existingEnd), encoded)
+	return meta.Splice(file, uint64(existingStart), uint64(existingEnd), encoded) // #nosec G115 -- tag positions are non-negative file offsets returned by FindLyrics3/LocateId3v1
 }
 
 // Lyrics3v1WriteTo writes a Lyrics3v1 tag into a file immediately before ID3v1.
@@ -852,7 +910,7 @@ func Lyrics3v1WriteTo(file meta.FileLike, tag *Lyrics3Tag, writeOptions meta.Wri
 	if err != nil {
 		return &meta.FileEncodingError{Source: err}
 	}
-	return meta.Splice(file, uint64(existingStart), uint64(existingEnd), encoded)
+	return meta.Splice(file, uint64(existingStart), uint64(existingEnd), encoded) // #nosec G115 -- tag positions are non-negative file offsets returned by FindLyrics3/LocateId3v1
 }
 
 func init() {

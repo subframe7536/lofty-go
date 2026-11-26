@@ -216,7 +216,7 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 	if err != nil {
 		return nil, &meta.FileParseError{Source: err}
 	}
-	streamLen := uint64(streamEnd - start)
+	streamLen := uint64(streamEnd - start) // #nosec G115 -- stream end position is always >= the current in-stream position
 	if _, err := reader.Seek(start, io.SeekStart); err != nil {
 		return nil, &meta.FileParseError{Source: err}
 	}
@@ -316,8 +316,8 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 				break
 			}
 			var capacity int64
-			if int64(size) > int64(2+sizeBytes) {
-				capacity = int64(size) - int64(2+sizeBytes)
+			if int64(size) > int64(2+sizeBytes) { // #nosec G115 -- size is a varint of at most 9 bytes x 7 bits = 63 bits, so it always fits in int64
+				capacity = int64(size) - int64(2+sizeBytes) // #nosec G115 -- size is a varint of at most 9 bytes x 7 bits = 63 bits, so it always fits in int64
 			}
 			sv8StreamLen += uint64(capacity)
 			// Rust reads packet bodies through a reader bounded by the
@@ -419,7 +419,7 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 				if p.SampleRate > 0 && totalSamples > 0 {
 					length := util.MulDivRound(totalSamples, 1000, uint64(p.SampleRate))
 					p.Duration = util.DurationFromMillis(length)
-					bitrate := uint32(util.MulDiv(util.SaturatingMul(sv8StreamLen, 8), uint64(p.SampleRate), util.SaturatingMul(totalSamples, 1000)))
+					bitrate := uint32(util.MulDiv(util.SaturatingMul(sv8StreamLen, 8), uint64(p.SampleRate), util.SaturatingMul(totalSamples, 1000))) // #nosec G115 -- mirrors Rust `as u32` cast; truncation is intentional parity
 					p.OverallBitrate = bitrate
 					p.AudioBitrate = bitrate
 				}
@@ -445,7 +445,7 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 			p.FrameCount = frameCount
 			hdrFlags := binary.LittleEndian.Uint32(rest[5:])
 			byte1 := uint8(hdrFlags >> 24)
-			byte2 := uint8(hdrFlags >> 16)
+			byte2 := uint8(hdrFlags >> 16) // #nosec G115 -- intentional extraction of bits 16-23 from a 32-bit flags word; the discarded upper bits are handled via byte1
 			p.IntensityStereo = byte1&0x80 != 0
 			p.MidSideStereo = byte1&0x40 != 0
 			p.MaxBand = byte1 & 0x3F
@@ -485,7 +485,7 @@ func MusepackFileReadFrom(reader io.ReadSeeker, parseOptions meta.ParseOptions) 
 					totalSamples = uint64(frameCount)*mpcFrameLength - mpcDecoderSynthDelay
 				}
 				if totalSamples > 0 {
-					bitrate := uint32(util.MulDiv(util.SaturatingMul(streamLen, 8), uint64(p.SampleRate), totalSamples*1000))
+					bitrate := uint32(util.MulDiv(util.SaturatingMul(streamLen, 8), uint64(p.SampleRate), totalSamples*1000)) // #nosec G115 -- mirrors Rust `as u32` cast; truncation is intentional parity
 					p.OverallBitrate = bitrate
 					p.AudioBitrate = bitrate
 				}

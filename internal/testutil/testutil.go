@@ -34,7 +34,7 @@ func Fixture(parts ...string) string {
 // t.TempDir() and returns it, mirroring the original `tempFile`.
 func TempFile(t *testing.T, assetPath string) *os.File {
 	t.Helper()
-	data, err := os.ReadFile(assetPath)
+	data, err := os.ReadFile(assetPath) // #nosec G304 -- test helper reads caller-supplied fixture paths by design
 	if err != nil {
 		if os.IsNotExist(err) {
 			t.Skipf("skipping test: fixture %s not found (missing lofty-rs)", assetPath)
@@ -45,7 +45,7 @@ func TempFile(t *testing.T, assetPath string) *os.File {
 	if err != nil {
 		t.Fatalf("failed to create temp file: %v", err)
 	}
-	t.Cleanup(func() { f.Close() })
+	t.Cleanup(func() { _ = f.Close() })
 	if _, err := f.Write(data); err != nil {
 		t.Fatalf("failed to write temp file: %v", err)
 	}

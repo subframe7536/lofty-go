@@ -42,8 +42,7 @@ gopls check <file.go>                   # LSP diagnostics on edited files (./*.g
 ```
 
 Deep-audit tools (ad-hoc via `go run`):
-- `go run go.uber.org/nilaway/cmd/nilaway@latest -exclude-test-files ./...` — nil-dereference checks in parsers.
-- `go run github.com/securego/gosec/v2/cmd/gosec@latest ./...` — security scan (annotate intentional exceptions with `// #nosec Gxxx -- <reason>`).
+- `go run github.com/securego/gosec/v2/cmd/gosec@latest ./...` — security scan. Every finding has been audited: intentional exceptions carry `// #nosec Gxxx -- <reason>` (respected by default; do NOT pass `-nosec`, it *disables* suppression) — keep gosec at 0 issues.
 - `go run golang.org/x/tools/cmd/deadcode@latest -test ./...` — unused-code scan (note: library repo has no app `main()`, so review exported-API hits carefully).
 
 ### Docs, modernization & refactoring

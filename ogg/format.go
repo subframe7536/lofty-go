@@ -352,7 +352,7 @@ func oggReadTaggedAs(reader io.ReadSeeker, parseOptions meta.ParseOptions, fType
 	if err != nil {
 		return nil, nil, headerErr(err)
 	}
-	streamLen := uint64(streamEnd - start)
+	streamLen := uint64(streamEnd - start) // #nosec G115 -- stream end position is always >= the current in-stream position
 	if _, err := reader.Seek(start, io.SeekStart); err != nil {
 		return nil, nil, headerErr(err)
 	}
@@ -411,9 +411,9 @@ func oggReadTaggedAs(reader io.ReadSeeker, parseOptions meta.ParseOptions, fType
 			props.Version = binary.LittleEndian.Uint32(ident[7:])
 			props.Channels = ident[11]
 			props.SampleRate = binary.LittleEndian.Uint32(ident[12:])
-			props.BitrateMax = int32(binary.LittleEndian.Uint32(ident[16:]))
-			props.BitrateNominal = int32(binary.LittleEndian.Uint32(ident[20:]))
-			props.BitrateMin = int32(binary.LittleEndian.Uint32(ident[24:]))
+			props.BitrateMax = int32(binary.LittleEndian.Uint32(ident[16:]))     // #nosec G115 -- bit-preserving conversion equivalent to Rust `read_i32`; mirrors upstream
+			props.BitrateNominal = int32(binary.LittleEndian.Uint32(ident[20:])) // #nosec G115 -- bit-preserving conversion equivalent to Rust `read_i32`; mirrors upstream
+			props.BitrateMin = int32(binary.LittleEndian.Uint32(ident[24:]))     // #nosec G115 -- bit-preserving conversion equivalent to Rust `read_i32`; mirrors upstream
 		case meta.FileTypeOpus:
 			// OpusHead: version(1) channels(1) preskip(2) rate(4) gain(2) mapping(1)
 			// Rust reads these fields through a byte reader — a truncated
@@ -425,7 +425,7 @@ func oggReadTaggedAs(reader io.ReadSeeker, parseOptions meta.ParseOptions, fType
 			props.Channels = ident[9]
 			preSkip = uint64(binary.LittleEndian.Uint16(ident[10:]))
 			props.InputSampleRate = binary.LittleEndian.Uint32(ident[12:])
-			props.OutputGainDb = float32(int16(binary.LittleEndian.Uint16(ident[16:]))) / 256
+			props.OutputGainDb = float32(int16(binary.LittleEndian.Uint16(ident[16:]))) / 256 // #nosec G115 -- bit-preserving conversion equivalent to Rust `read_i16`; mirrors upstream
 			family := ident[18]
 			if family > 1 {
 				return nil, nil, &meta.FileParseError{Source: &OggParseError{Message: "invalid channel mapping family"}}
@@ -458,7 +458,7 @@ func oggReadTaggedAs(reader io.ReadSeeker, parseOptions meta.ParseOptions, fType
 			} else {
 				props.Channels = uint8(channels)
 			}
-			props.BitrateNominal = int32(binary.LittleEndian.Uint32(ident[52:]))
+			props.BitrateNominal = int32(binary.LittleEndian.Uint32(ident[52:])) // #nosec G115 -- bit-preserving conversion equivalent to Rust `read_i32`; mirrors upstream
 			props.Vbr = binary.LittleEndian.Uint32(ident[60:]) == 1
 		}
 	}
@@ -510,27 +510,27 @@ func oggReadTaggedAs(reader io.ReadSeeker, parseOptions meta.ParseOptions, fType
 		switch fType {
 		case meta.FileTypeVorbis:
 			if lengthMs > 0 { // Rust: checked_div
-				props.OverallBitrate = uint32(util.SaturatingMul(streamLen, 8) / lengthMs)
+				props.OverallBitrate = uint32(util.SaturatingMul(streamLen, 8) / lengthMs) // #nosec G115 -- mirrors Rust `as u32` cast; truncation is intentional parity
 			}
 			if props.BitrateNominal > 0 {
-				props.AudioBitrate = uint32(uint64(props.BitrateNominal) / 1000)
+				props.AudioBitrate = uint32(uint64(props.BitrateNominal) / 1000) // #nosec G115 -- mirrors Rust `(nominal_bitrate as u64 / 1000) as u32`; truncation is intentional parity
 			}
 		case meta.FileTypeOpus:
 			if gotTotal && lengthMs > 0 {
-				props.OverallBitrate = uint32(util.SaturatingMul(streamLen, 8) / lengthMs)
-				props.AudioBitrate = uint32(util.SaturatingMul(dataLen, 8) / lengthMs)
+				props.OverallBitrate = uint32(util.SaturatingMul(streamLen, 8) / lengthMs) // #nosec G115 -- mirrors Rust `as u32` cast; truncation is intentional parity
+				props.AudioBitrate = uint32(util.SaturatingMul(dataLen, 8) / lengthMs)     // #nosec G115 -- mirrors Rust `as u32` cast; truncation is intentional parity
 			}
 		case meta.FileTypeSpeex:
 			if props.BitrateNominal > 0 {
 				if lengthMs > 0 {
-					props.OverallBitrate = uint32(util.SaturatingMul(streamLen, 8) / lengthMs)
+					props.OverallBitrate = uint32(util.SaturatingMul(streamLen, 8) / lengthMs) // #nosec G115 -- mirrors Rust `as u32` cast; truncation is intentional parity
 				}
-				props.AudioBitrate = uint32(uint64(props.BitrateNominal) / 1000)
+				props.AudioBitrate = uint32(uint64(props.BitrateNominal) / 1000) // #nosec G115 -- mirrors Rust `(nominal_bitrate as u64 / 1000) as u32`; truncation is intentional parity
 			} else if lengthMs > 0 {
 				// `DivRound(SaturatingMul(x, 8), n)` would wrap at the
 				// saturation point; the 128-bit form saturates cleanly.
-				props.OverallBitrate = uint32(util.MulDivRound(streamLen, 8, lengthMs))
-				props.AudioBitrate = uint32(util.MulDivRound(dataLen, 8, lengthMs))
+				props.OverallBitrate = uint32(util.MulDivRound(streamLen, 8, lengthMs)) // #nosec G115 -- mirrors Rust `as u32` cast; truncation is intentional parity
+				props.AudioBitrate = uint32(util.MulDivRound(dataLen, 8, lengthMs))     // #nosec G115 -- mirrors Rust `as u32` cast; truncation is intentional parity
 			}
 		}
 	}
@@ -573,7 +573,7 @@ func oggSerializePage(p *OggPage) []byte {
 	binary.LittleEndian.PutUint64(hdr[6:], p.granulePos)
 	binary.LittleEndian.PutUint32(hdr[14:], p.serial)
 	binary.LittleEndian.PutUint32(hdr[18:], p.sequence)
-	hdr[26] = byte(len(p.segments))
+	hdr[26] = byte(len(p.segments)) // #nosec G115 -- segment count is at most 255 (parsed from a single count byte) or 32 (pagination cap)
 	out = append(out, hdr[:]...)
 	out = append(out, p.segments...)
 	out = append(out, p.data...)
@@ -588,11 +588,17 @@ const oggMaxWrittenSegmentCount = 32
 // the packets and a synthetic remainder page when the last packet ends mid-page
 // (mirroring ogg_pager::Packets::read_count).
 func OggReadCountPackets(reader io.ReadSeeker, count int) ([][]byte, *OggPage, uint32, error) {
+	// ogg_pager: zero and values below -1 are an empty successful read.
+	if count == 0 || count < -1 {
+		return nil, nil, 0, nil
+	}
+	unlimited := count == -1
+
 	var packets [][]byte
 	var current []byte
 	var remainder *OggPage
 	var serial uint32
-	for len(packets) < count {
+	for unlimited || len(packets) < count {
 		page, err := readOggPage(reader)
 		if err != nil {
 			// ogg_pager's `Packets::read_count` loops `while let Ok(header)`:
@@ -615,7 +621,7 @@ func OggReadCountPackets(reader io.ReadSeeker, count int) ([][]byte, *OggPage, u
 			}
 			packets = append(packets, current)
 			current = nil
-			if len(packets) == count {
+			if !unlimited && len(packets) == count {
 				remSegs := page.segments[segIdx+1:]
 				if len(remSegs) > 0 {
 					granule := ^uint64(0) // no packet finishes on this page
@@ -636,6 +642,9 @@ func OggReadCountPackets(reader io.ReadSeeker, count int) ([][]byte, *OggPage, u
 				return packets, remainder, serial, nil
 			}
 		}
+	}
+	if !unlimited && len(packets) != count {
+		return nil, nil, 0, &OggParseError{Source: util.ErrNotEnoughData}
 	}
 	return packets, remainder, serial, nil
 }
@@ -804,7 +813,7 @@ func oggWriteVorbisCommentsImpl(file meta.FileLike, ft meta.FileType, writeOptio
 		return &meta.FileEncodingError{Source: &OggParseError{Source: io.ErrUnexpectedEOF}}
 	}
 	vlen := binary.LittleEndian.Uint32(comment[off:])
-	if uint64(vlen) > uint64(len(comment)-off-4) {
+	if uint64(vlen) > uint64(len(comment)-off-4) { // #nosec G115 -- len(comment) >= off+4 is guaranteed by the truncation check above, so the subtraction is non-negative
 		return &meta.FileEncodingError{Source: &OggParseError{Source: io.ErrUnexpectedEOF}}
 	}
 	var vendor string
@@ -864,7 +873,7 @@ func oggWriteVorbisCommentsImpl(file meta.FileLike, ft meta.FileType, writeOptio
 	if err != nil {
 		return &meta.FileEncodingError{Source: err}
 	}
-	return meta.Splice(file, 0, uint64(end), out.Bytes())
+	return meta.Splice(file, 0, uint64(end), out.Bytes()) // #nosec G115 -- end is a Seek end-of-stream position, always non-negative
 }
 
 func (f *OggVorbisFile) FileType() meta.FileType { return meta.FileTypeVorbis }

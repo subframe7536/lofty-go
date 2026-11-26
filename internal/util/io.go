@@ -68,14 +68,14 @@ func replaceRange(file FileLike, fileLen, rangeStart, rangeEnd uint64, replaceme
 
 	// Fast path for edits at the end of a file
 	if rangeEnd == fileLen {
-		if _, err := file.Seek(int64(rangeStart), io.SeekStart); err != nil {
+		if _, err := file.Seek(int64(rangeStart), io.SeekStart); err != nil { // #nosec G115 -- rangeStart <= end <= fileLen, and fileLen originates from a non-negative int64 file length
 			return err
 		}
 		if _, err := file.Write(replacement); err != nil {
 			return err
 		}
 		if replacementLen < oldLen {
-			return file.Truncate(int64(rangeStart + replacementLen))
+			return file.Truncate(int64(rangeStart + replacementLen)) // #nosec G115 -- rangeStart is within the int64 file length and replacementLen is an in-memory slice length; the Write above would fail before the sum could approach int64 overflow
 		}
 		return nil
 	}
@@ -107,12 +107,12 @@ func replaceRange(file FileLike, fileLen, rangeStart, rangeEnd uint64, replaceme
 		if err := shiftLeft(file, rangeEnd, fileLen, difference, buffer); err != nil {
 			return err
 		}
-		if err := file.Truncate(int64(fileLen - difference)); err != nil {
+		if err := file.Truncate(int64(fileLen - difference)); err != nil { // #nosec G115 -- difference < fileLen, so the truncation size stays within the non-negative int64 file length
 			return err
 		}
 	}
 
-	if _, err := file.Seek(int64(rangeStart), io.SeekStart); err != nil {
+	if _, err := file.Seek(int64(rangeStart), io.SeekStart); err != nil { // #nosec G115 -- rangeStart <= end <= fileLen, and fileLen originates from a non-negative int64 file length
 		return err
 	}
 	_, err := file.Write(replacement)
@@ -145,13 +145,13 @@ func shiftRight(file FileLike, start, end, amount uint64, buffer []byte) error {
 		chunkLen := min(cursor-start, uint64(len(buffer)))
 		source := cursor - chunkLen
 
-		if _, err := file.Seek(int64(source), io.SeekStart); err != nil {
+		if _, err := file.Seek(int64(source), io.SeekStart); err != nil { // #nosec G115 -- source is bounded by fileLen, which originates from a non-negative int64 file length
 			return err
 		}
 		if _, err := io.ReadFull(file, buffer[:chunkLen]); err != nil {
 			return err
 		}
-		if _, err := file.Seek(int64(source+amount), io.SeekStart); err != nil {
+		if _, err := file.Seek(int64(source+amount), io.SeekStart); err != nil { // #nosec G115 -- source+amount stays within fileLen+difference of a non-negative int64 file length
 			return err
 		}
 		if _, err := file.Write(buffer[:chunkLen]); err != nil {
@@ -167,13 +167,13 @@ func shiftLeft(file FileLike, start, end, amount uint64, buffer []byte) error {
 	for cursor < end {
 		chunkLen := min(end-cursor, uint64(len(buffer)))
 
-		if _, err := file.Seek(int64(cursor), io.SeekStart); err != nil {
+		if _, err := file.Seek(int64(cursor), io.SeekStart); err != nil { // #nosec G115 -- cursor is bounded by fileLen, which originates from a non-negative int64 file length
 			return err
 		}
 		if _, err := io.ReadFull(file, buffer[:chunkLen]); err != nil {
 			return err
 		}
-		if _, err := file.Seek(int64(cursor-amount), io.SeekStart); err != nil {
+		if _, err := file.Seek(int64(cursor-amount), io.SeekStart); err != nil { // #nosec G115 -- cursor/amount are bounded by fileLen, which originates from a non-negative int64 file length
 			return err
 		}
 		if _, err := file.Write(buffer[:chunkLen]); err != nil {
@@ -303,7 +303,7 @@ func StreamLen(rs io.Seeker) (uint64, error) {
 	if _, err := rs.Seek(currentPos, io.SeekStart); err != nil {
 		return 0, err
 	}
-	return uint64(end), nil
+	return uint64(end), nil // #nosec G115 -- end is the non-negative end-of-stream position returned by Seek
 }
 
 // readF80 reads a big-endian 80-bit extended precision float.
@@ -341,8 +341,8 @@ func (f F80) AsF64() float64 {
 	}
 
 	fraction := f.fraction & 0x7FFF_FFFF_FFFF_FFFF
-	exponent := int16(f.exponent) - 16383 + 1023
-	bits := (sign << 63) | (uint64(exponent) << 52) | (fraction >> 11)
+	exponent := int16(f.exponent) - 16383 + 1023                       // #nosec G115 -- exponent <= 32766 after the 32767 early-return above, so it always fits int16
+	bits := (sign << 63) | (uint64(exponent) << 52) | (fraction >> 11) // #nosec G115 -- mirrors Rust `(exponent as u64) << 52` cast; sign extension of negative exponents is intentional parity
 	return floatFromBits(bits)
 }
 
@@ -436,9 +436,9 @@ func (r *RevPatternSearcher) Search() (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		startPos = uint64(end64)
+		startPos = uint64(end64) // #nosec G115 -- end64 is the non-negative end-of-stream position returned by Seek
 	} else {
-		startPos = uint64(originalPos)
+		startPos = uint64(originalPos) // #nosec G115 -- originalPos is a non-negative stream position returned by Seek
 	}
 
 	var endPos uint64
@@ -446,7 +446,7 @@ func (r *RevPatternSearcher) Search() (bool, error) {
 	case 0:
 		endPos = 0
 	case 1:
-		endPos = uint64(originalPos)
+		endPos = uint64(originalPos) // #nosec G115 -- originalPos is a non-negative stream position returned by Seek
 	default:
 		endPos = r.end.pos
 	}
@@ -470,7 +470,7 @@ func (r *RevPatternSearcher) Search() (bool, error) {
 		readSize := min(r.bufferSize, windowSize)
 
 		readStart := currentPos - readSize
-		if _, err := r.reader.Seek(int64(readStart), io.SeekStart); err != nil {
+		if _, err := r.reader.Seek(int64(readStart), io.SeekStart); err != nil { // #nosec G115 -- readStart derives from non-negative int64 stream positions (Seek results), re-conversion is lossless
 			return false, err
 		}
 
@@ -481,7 +481,7 @@ func (r *RevPatternSearcher) Search() (bool, error) {
 
 		// find last occurrence of pattern in window
 		if matchOffset := bytes.LastIndex(window, r.pattern); matchOffset >= 0 {
-			if _, err := r.reader.Seek(int64(readStart)+int64(matchOffset), io.SeekStart); err != nil {
+			if _, err := r.reader.Seek(int64(readStart)+int64(matchOffset), io.SeekStart); err != nil { // #nosec G115 -- readStart derives from non-negative int64 stream positions; matchOffset is an int index into a <=1KiB window
 				return false, err
 			}
 			return true, nil
